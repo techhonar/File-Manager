@@ -27,7 +27,6 @@ import uniffi.filemanager_core.formatSize
 import uniffi.filemanager_core.largestFiles
 import uniffi.filemanager_core.listDir
 import uniffi.filemanager_core.recentFiles
-import uniffi.filemanager_core.search
 import uniffi.filemanager_core.storageSummary
 import uniffi.filemanager_core.trashEmpty
 import uniffi.filemanager_core.trashList
@@ -142,13 +141,24 @@ class FileRepository(
 
     // --- Search --------------------------------------------------------------
 
+    /**
+     * Note the fully qualified call.
+     *
+     * This method and the generated binding share the name `search` and the
+     * same signature, and a member always wins over an imported top-level
+     * function - so an unqualified `search(...)` here calls itself and
+     * recurses until the stack blows. It compiles perfectly cleanly, so
+     * nothing catches it until the app crashes on the first search.
+     */
     suspend fun search(
         roots: List<String>,
         filter: SearchFilter,
         sort: SortOptions,
         progress: ProgressListener? = null,
         cancel: CancelToken? = null,
-    ): List<FileEntry> = withContext(io) { search(roots, filter, sort, progress, cancel) }
+    ): List<FileEntry> = withContext(io) {
+        uniffi.filemanager_core.search(roots, filter, sort, progress, cancel)
+    }
 
     // --- Storage analysis ----------------------------------------------------
 

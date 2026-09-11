@@ -42,7 +42,7 @@ pub fn filesystem_stats(path: String) -> Result<FilesystemStats> {
     use std::ffi::CString;
 
     let c_path = CString::new(path.as_str())
-        .map_err(|_| FileError::Io { message: "path contains a null byte".into() })?;
+        .map_err(|_| FileError::Io { detail: "path contains a null byte".into() })?;
 
     // SAFETY: c_path is a valid NUL-terminated string that outlives the call,
     // and statvfs only writes into the zeroed struct we hand it.
