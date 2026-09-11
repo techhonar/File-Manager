@@ -15,6 +15,12 @@ val keystoreKeyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
 val buildVersionName = providers.environmentVariable("VERSION_NAME").orNull ?: "0.1.0"
 val buildVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull() ?: 1
 
+// Where the Rust build drops its output. Declared up here because both the
+// android source sets and the cargo tasks below need them.
+val rustDir = rootProject.layout.projectDirectory.dir("rust-core")
+val jniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
+val bindingsDir = layout.buildDirectory.dir("generated/uniffi")
+
 android {
     namespace = "com.filemanager.app"
     compileSdk = 35
@@ -77,9 +83,13 @@ android {
     }
 
     sourceSets["main"].apply {
-        // The generated UniFFI Kotlin lands here, and the Rust .so files here.
-        java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
-        jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+        // The Rust .so files. This one is enough on its own - the native libs
+        // are packaged, not compiled.
+        jniLibs.srcDir(jniLibsDir)
+        // The generated bindings are Kotlin, so registering them here is NOT
+        // enough; see the `kotlin { }` block below. Kept so any generated Java
+        // would still be picked up.
+        java.srcDir(bindingsDir)
     }
 }
 
@@ -117,10 +127,6 @@ dependencies {
 // automatically. You never run cargo by hand.
 // ---------------------------------------------------------------------------
 
-val rustDir = rootProject.layout.projectDirectory.dir("rust-core")
-val jniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
-val bindingsDir = layout.buildDirectory.dir("generated/uniffi")
-
 /** Rust ABI triple -> the Android ABI directory name it must be packaged under. */
 val abiTargets = mapOf(
     "aarch64-linux-android" to "arm64-v8a",
@@ -143,9 +149,9 @@ val cargoBuild by tasks.registering(Exec::class) {
     args += listOf("-o", jniLibsDir.get().asFile.absolutePath, "build", "--$profile")
     commandLine(args)
 
-    doFirst {
-        jniLibsDir.get().asFile.mkdirs()
-    }
+    // No doFirst here: a lambda in this script captures a reference to the
+    // build script object, which the configuration cache cannot serialize.
+    // cargo-ndk creates the -o directory itself, so nothing is needed anyway.
 }
 
 val generateUniffiBindings by tasks.registering(Exec::class) {
@@ -163,7 +169,7 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
         .resolve("arm64-v8a/libfilemanager_core.so").absolutePath
 
     commandLine(
-        "cargo", "run", "--quiet", "--bin", "uniffi-bindgen", "--",
+        "cargo", "run", "--bin", "uniffi-bindgen", "--",
         "generate", "--library", soPath,
         "--language", "kotlin",
         "--out-dir", bindingsDir.get().asFile.absolutePath,
@@ -171,6 +177,20 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
 }
 
 tasks.named("preBuild") {
+    dependsOn(generateUniffiBindings)
+}
+
+// The generated bindings are Kotlin, and with Kotlin 2.x the Kotlin compile
+// task reads the *Kotlin* source set. Adding them only to android's java
+// source set leaves them invisible to it - which is how the first CI build
+// failed, with "Unresolved reference 'uniffi'" on every import.
+kotlin {
+    sourceSets.getByName("main").kotlin.srcDir(bindingsDir)
+}
+
+// preBuild alone does not guarantee ordering against the Kotlin compile
+// task's input snapshot, so state the dependency directly.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     dependsOn(generateUniffiBindings)
 }
 

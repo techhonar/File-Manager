@@ -61,7 +61,10 @@ jobs:
             NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
           fi
           echo "Using NDK at $NDK"
+          # Set both: cargo-ndk warns loudly when the two disagree, and the
+          # runner presets ANDROID_NDK_ROOT to a different version.
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
         env:
           NDK_VERSION: '27.2.12479018'
 
@@ -126,6 +129,23 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleRelease --no-daemon --stacktrace
+
+      # Runs even when the build fails, so a bindings problem is visible in
+      # the log instead of having to be inferred from Kotlin errors.
+      - name: Show generated Rust output
+        if: always()
+        run: |
+          echo "--- native libs ---"
+          find app/build/generated/jniLibs -name '*.so' 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+          echo "--- generated Kotlin bindings ---"
+          find app/build/generated/uniffi -name '*.kt' 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+          BINDINGS=$(find app/build/generated/uniffi -name '*.kt' 2>/dev/null | head -1)
+          if [ -n "$BINDINGS" ]; then
+            echo "--- first lines of $BINDINGS ---"
+            head -5 "$BINDINGS"
+          else
+            echo "::warning::No Kotlin bindings were generated"
+          fi
 
       - name: Collect the APK
         id: apk
