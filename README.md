@@ -87,13 +87,16 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<version>"   # fill in the version
 
 ### 5. Gradle wrapper
 
-The wrapper JAR is not in this repo (it is a binary). Generate it once:
+The wrapper JAR is not in this repo (it is a binary, and generating it needs a
+JDK). Generate it once locally:
 
 ```bash
 gradle wrapper --gradle-version 8.11.1
 ```
 
-Or just open the project in Android Studio, which creates it for you.
+Or just open the project in Android Studio, which creates it for you. CI does
+not need it - the release workflow installs Gradle 8.11.1 directly and calls
+`gradle` rather than `./gradlew`. Keep the two versions in step.
 
 ## Building
 
@@ -112,6 +115,57 @@ cd rust-core && cargo test     # runs natively on Linux, no emulator needed
 
 This is the fastest loop by a wide margin. All the filesystem logic is
 testable on the host, so most bugs never reach a phone.
+
+## Releases
+
+Tagging `v*` runs `.github/workflows/release.yml`, which builds the Rust core
+for both Android ABIs, runs its test suite, builds a signed APK and publishes
+it as a GitHub Release.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+A manual run (Actions tab, *Run workflow*) builds the APK and leaves it as a
+build artifact without publishing a release - useful for testing the pipeline.
+
+### One-time signing setup
+
+Without a keystore the workflow still succeeds, but produces an **unsigned**
+APK that will not install on a phone. To get installable builds, create a key
+once and store it in the repository secrets.
+
+Creating the key needs `keytool`, which comes with the JDK:
+
+```bash
+keytool -genkeypair -v \
+  -keystore release.jks \
+  -alias filemanager \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Keep `release.jks` somewhere safe and **never commit it**. Losing it means you
+can never ship an update to anyone who installed an earlier APK - Android
+refuses to upgrade an app signed with a different key.
+
+Then add four repository secrets under
+*Settings -> Secrets and variables -> Actions*:
+
+| Secret | Value |
+| --- | --- |
+| `KEYSTORE_BASE64` | `base64 -w0 release.jks` |
+| `KEYSTORE_PASSWORD` | the keystore password you chose |
+| `KEY_ALIAS` | `filemanager` |
+| `KEY_PASSWORD` | the key password you chose |
+
+### Versioning
+
+`versionName` comes from the tag (`v1.2.3` builds `1.2.3`). `versionCode` uses
+the workflow run number, so it always increases - Android rejects an update
+whose `versionCode` is not higher than the installed one.
+
+Local builds fall back to `0.1.0` / `1`.
 
 ## Permissions
 
