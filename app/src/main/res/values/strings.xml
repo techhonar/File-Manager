@@ -1,0 +1,50 @@
+<resources>
+    <string name="app_name">File Manager</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_browse">Browse</string>
+    <string name="nav_search">Search</string>
+    <string name="nav_storage">Storage</string>
+
+    <!-- Categories -->
+    <string name="category_images">Images</string>
+    <string name="category_videos">Videos</string>
+    <string name="category_audio">Audio</string>
+    <string name="category_documents">Documents</string>
+    <string name="category_downloads">Downloads</string>
+    <string name="category_apk">Installation files</string>
+    <string name="category_archives">Archives</string>
+    <string name="recent_files">Recent files</string>
+
+    <!-- Permission -->
+    <string name="permission_title">All files access needed</string>
+    <string name="permission_body">File Manager needs permission to manage all files on this device so it can browse, search and organise your storage.</string>
+    <string name="permission_grant">Grant access</string>
+
+    <!-- Actions -->
+    <string name="action_copy">Copy</string>
+    <string name="action_move">Move</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_share">Share</string>
+    <string name="action_compress">Compress</string>
+    <string name="action_extract">Extract</string>
+    <string name="action_details">Details</string>
+    <string name="action_select_all">Select all</string>
+    <string name="action_new_folder">New folder</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_cancel">Cancel</string>
+
+    <!-- Trash -->
+    <string name="trash_title">Trash</string>
+    <string name="trash_empty">Empty trash</string>
+    <string name="trash_restore">Restore</string>
+    <string name="trash_delete_forever">Delete permanently</string>
+    <string name="trash_retention">Items are deleted permanently after 30 days.</string>
+
+    <!-- Storage -->
+    <string name="storage_analysis">Storage analysis</string>
+    <string name="storage_largest">Largest files</string>
+    <string name="storage_duplicates">Duplicate files</string>
+</resources>

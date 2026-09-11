@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Share anything on shared storage, plus our own trash directory. -->
+    <external-path name="external_storage" path="." />
+    <external-files-path name="app_files" path="." />
+    <cache-path name="cache" path="." />
+</paths>

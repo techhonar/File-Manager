@@ -1,0 +1,230 @@
+package com.filemanager.app.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.FileRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import uniffi.filemanager_core.FileEntry
+import uniffi.filemanager_core.SortKey
+import uniffi.filemanager_core.SortOptions
+import java.io.File
+
+/** What the browser screen renders. */
+data class BrowserState(
+    val path: String = "",
+    val entries: List<FileEntry> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val showHidden: Boolean = false,
+    val sort: SortOptions = SortOptions(SortKey.NAME, descending = false, dirsFirst = true),
+    val gridView: Boolean = false,
+    /** Paths the user has ticked. Empty means normal (non-selection) mode. */
+    val selected: Set<String> = emptySet(),
+) {
+    val inSelectionMode: Boolean get() = selected.isNotEmpty()
+
+    /** Path split into (label, path) pairs for the breadcrumb bar. */
+    val breadcrumbs: List<Pair<String, String>>
+        get() {
+            if (path.isEmpty()) return emptyList()
+            val parts = path.trim('/').split('/')
+            var accumulated = ""
+            return parts.map { part ->
+                accumulated += "/$part"
+                part to accumulated
+            }
+        }
+}
+
+/** A pending copy/move waiting for the user to hit Paste. */
+data class Clipboard(val paths: List<String>, val isMove: Boolean)
+
+class BrowserViewModel(
+    private val repository: FileRepository,
+    startPath: String,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(BrowserState(path = startPath))
+    val state: StateFlow<BrowserState> = _state.asStateFlow()
+
+    private val _clipboard = MutableStateFlow<Clipboard?>(null)
+    val clipboard: StateFlow<Clipboard?> = _clipboard.asStateFlow()
+
+    /** One-off messages for the snackbar (errors, "3 items moved to trash"). */
+    private val _messages = MutableStateFlow<String?>(null)
+    val messages: StateFlow<String?> = _messages.asStateFlow()
+
+    init {
+        load(startPath)
+    }
+
+    fun load(path: String) {
+        _state.update { it.copy(path = path, isLoading = true, error = null, selected = emptySet()) }
+        viewModelScope.launch {
+            runCatching {
+                repository.list(path, _state.value.showHidden, _state.value.sort)
+            }.onSuccess { entries ->
+                _state.update { it.copy(entries = entries, isLoading = false) }
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(isLoading = false, error = error.message ?: "Could not open folder")
+                }
+            }
+        }
+    }
+
+    fun refresh() = load(_state.value.path)
+
+    /** Navigate up one level, stopping at the volume root. */
+    fun navigateUp(): Boolean {
+        val parent = File(_state.value.path).parentFile ?: return false
+        if (!parent.canRead()) return false
+        load(parent.absolutePath)
+        return true
+    }
+
+    fun setSort(sort: SortOptions) {
+        _state.update { it.copy(sort = sort) }
+        refresh()
+    }
+
+    fun toggleHidden() {
+        _state.update { it.copy(showHidden = !it.showHidden) }
+        refresh()
+    }
+
+    fun toggleGrid() = _state.update { it.copy(gridView = !it.gridView) }
+
+    // --- Selection ----------------------------------------------------------
+
+    fun toggleSelection(path: String) = _state.update { current ->
+        val next = current.selected.toMutableSet()
+        if (!next.add(path)) next.remove(path)
+        current.copy(selected = next)
+    }
+
+    fun selectAll() = _state.update { current ->
+        current.copy(selected = current.entries.map { it.path }.toSet())
+    }
+
+    fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
+
+    // --- Operations ---------------------------------------------------------
+
+    fun cut() {
+        _clipboard.value = Clipboard(_state.value.selected.toList(), isMove = true)
+        clearSelection()
+    }
+
+    fun copy() {
+        _clipboard.value = Clipboard(_state.value.selected.toList(), isMove = false)
+        clearSelection()
+    }
+
+    fun paste() {
+        val pending = _clipboard.value ?: return
+        val destination = _state.value.path
+
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+            runCatching {
+                if (pending.isMove) {
+                    repository.move(pending.paths, destination)
+                } else {
+                    repository.copy(pending.paths, destination)
+                }
+            }.onSuccess { count ->
+                _clipboard.value = null
+                _messages.value =
+                    "$count ${if (pending.isMove) "moved" else "copied"}"
+                refresh()
+            }.onFailure { error ->
+                _state.update { it.copy(isLoading = false) }
+                _messages.value = error.message ?: "Operation failed"
+            }
+        }
+    }
+
+    /** Delete goes through the trash, so it is always undoable. */
+    fun deleteSelected() {
+        val paths = _state.value.selected.toList()
+        if (paths.isEmpty()) return
+
+        viewModelScope.launch {
+            runCatching { repository.moveToTrash(paths) }
+                .onSuccess {
+                    _messages.value = "${paths.size} moved to trash"
+                    refresh()
+                }
+                .onFailure { _messages.value = it.message ?: "Could not delete" }
+        }
+    }
+
+    fun rename(path: String, newName: String) {
+        viewModelScope.launch {
+            val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
+            _messages.value = if (ok) null else "A file named \"$newName\" already exists"
+            if (ok) refresh()
+        }
+    }
+
+    fun createFolder(name: String) {
+        viewModelScope.launch {
+            val ok = runCatching { repository.createFolder(_state.value.path, name) }
+                .getOrDefault(false)
+            _messages.value = if (ok) null else "Could not create folder"
+            if (ok) refresh()
+        }
+    }
+
+    fun compressSelected() {
+        val paths = _state.value.selected.toList()
+        if (paths.isEmpty()) return
+
+        // Name the zip after the first item, the way most file managers do.
+        val base = File(paths.first()).nameWithoutExtension
+        val destination = File(_state.value.path, "$base.zip").absolutePath
+
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+            runCatching { repository.compress(paths, destination) }
+                .onSuccess {
+                    _messages.value = "Compressed $it files"
+                    clearSelection()
+                    refresh()
+                }
+                .onFailure {
+                    _state.update { s -> s.copy(isLoading = false) }
+                    _messages.value = it.message ?: "Could not compress"
+                }
+        }
+    }
+
+    fun extract(archivePath: String) {
+        val destination = File(
+            File(archivePath).parentFile,
+            File(archivePath).nameWithoutExtension,
+        ).absolutePath
+
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+            runCatching { repository.extract(archivePath, destination) }
+                .onSuccess {
+                    _messages.value = "Extracted $it files"
+                    refresh()
+                }
+                .onFailure {
+                    _state.update { s -> s.copy(isLoading = false) }
+                    _messages.value = it.message ?: "Could not extract"
+                }
+        }
+    }
+
+    fun consumeMessage() {
+        _messages.value = null
+    }
+}
