@@ -1,0 +1,22 @@
+# Android / Gradle
+*.iml
+.gradle/
+build/
+local.properties
+.idea/
+.cxx/
+captures/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# Rust
+rust-core/target/
+
+# Generated at build time - never committed
+app/build/generated/uniffi/
+app/src/main/jniLibs/
+
+# OS
+.DS_Store
