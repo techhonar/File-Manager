@@ -4,6 +4,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Read through `providers` rather than System.getenv() so Gradle's
+// configuration cache tracks these as inputs instead of warning about them.
+val keystoreFile = providers.environmentVariable("KEYSTORE_FILE").orNull?.takeIf { it.isNotBlank() }
+val keystorePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
+val keystoreAlias = providers.environmentVariable("KEY_ALIAS").orNull
+val keystoreKeyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
+
+// CI injects these from the tag and the run number; local builds fall back.
+val buildVersionName = providers.environmentVariable("VERSION_NAME").orNull ?: "0.1.0"
+val buildVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.filemanager.app"
     compileSdk = 35
@@ -12,14 +23,28 @@ android {
         applicationId = "com.filemanager.app"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             // Only the ABIs we actually build in Rust. arm64 covers every
             // real phone made in the last decade; x86_64 is for the emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        // Only declared when CI supplied a keystore. Without it the release
+        // build produces app-release-unsigned.apk, which is deliberate: a
+        // fork with no secrets should still build.
+        if (keystoreFile != null) {
+            create("release") {
+                storeFile = file(keystoreFile)
+                storePassword = keystorePassword
+                keyAlias = keystoreAlias
+                keyPassword = keystoreKeyPassword
+            }
         }
     }
 
@@ -31,6 +56,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
