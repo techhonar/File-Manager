@@ -20,14 +20,18 @@ pub enum FileError {
     #[error("already exists: {path}")]
     AlreadyExists { path: String },
 
-    #[error("archive error: {message}")]
-    Archive { message: String },
+    // NB: the field is `detail`, not `message`. UniFFI maps each variant to a
+    // Kotlin class extending Exception and emits its own `override val
+    // message`, so a variant field called `message` collides with it and the
+    // generated Kotlin does not compile.
+    #[error("archive error: {detail}")]
+    Archive { detail: String },
 
     #[error("operation cancelled")]
     Cancelled,
 
-    #[error("io error: {message}")]
-    Io { message: String },
+    #[error("io error: {detail}")]
+    Io { detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, FileError>;
@@ -42,19 +46,19 @@ impl FileError {
             io::ErrorKind::NotFound => FileError::NotFound { path: p },
             io::ErrorKind::PermissionDenied => FileError::PermissionDenied { path: p },
             io::ErrorKind::AlreadyExists => FileError::AlreadyExists { path: p },
-            _ => FileError::Io { message: format!("{p}: {err}") },
+            _ => FileError::Io { detail: format!("{p}: {err}") },
         }
     }
 }
 
 impl From<io::Error> for FileError {
     fn from(err: io::Error) -> Self {
-        FileError::Io { message: err.to_string() }
+        FileError::Io { detail: err.to_string() }
     }
 }
 
 impl From<zip::result::ZipError> for FileError {
     fn from(err: zip::result::ZipError) -> Self {
-        FileError::Archive { message: err.to_string() }
+        FileError::Archive { detail: err.to_string() }
     }
 }

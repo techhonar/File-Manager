@@ -73,7 +73,7 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
         is_dir: meta.is_dir(),
     };
     let json = serde_json::to_string_pretty(&record)
-        .map_err(|e| FileError::Io { message: e.to_string() })?;
+        .map_err(|e| FileError::Io { detail: e.to_string() })?;
     let meta_path = meta_dir.join(format!("{id}.json"));
     std::fs::write(&meta_path, json).map_err(|e| FileError::from_io(e, &meta_path))?;
 
@@ -119,7 +119,7 @@ pub fn trash_restore(trash_dir: String, id: String) -> Result<String> {
     let text = std::fs::read_to_string(&meta_path)
         .map_err(|e| FileError::from_io(e, &meta_path))?;
     let meta: TrashMeta = serde_json::from_str(&text)
-        .map_err(|e| FileError::Io { message: e.to_string() })?;
+        .map_err(|e| FileError::Io { detail: e.to_string() })?;
 
     let dest = PathBuf::from(&meta.original_path);
     if dest.exists() {

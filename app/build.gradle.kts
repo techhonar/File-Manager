@@ -86,9 +86,10 @@ android {
         // The Rust .so files. This one is enough on its own - the native libs
         // are packaged, not compiled.
         jniLibs.srcDir(jniLibsDir)
-        // The generated bindings are Kotlin, so registering them here is NOT
-        // enough; see the `kotlin { }` block below. Kept so any generated Java
-        // would still be picked up.
+        // The generated bindings. Registered here AND on the Kotlin source
+        // set below: the Kotlin Android plugin normally folds android's java
+        // srcDirs into the Kotlin compilation, but doing both is free (Gradle
+        // dedupes the directory) and removes the question entirely.
         java.srcDir(bindingsDir)
     }
 }
@@ -164,15 +165,28 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
     outputs.dir(bindingsDir)
 
     // Any ABI works as the bindgen input -- the interface is identical, and
-    // bindgen reads the embedded metadata rather than the machine code.
+    // bindgen reads the UNIFFI_META_* symbols rather than the machine code.
     val soPath = jniLibsDir.get().asFile
         .resolve("arm64-v8a/libfilemanager_core.so").absolutePath
+    val outPath = bindingsDir.get().asFile.absolutePath
 
+    // Run through bash so the output can be checked: uniffi-bindgen exits 0
+    // even when it finds no metadata and writes nothing at all. Trusting its
+    // exit code means the build carries on and fails much later, in the Kotlin
+    // compiler, with "Unresolved reference 'uniffi'" on every import - which
+    // points at the wrong thing entirely. Fail here instead, where the cause
+    // is obvious.
     commandLine(
-        "cargo", "run", "--bin", "uniffi-bindgen", "--",
-        "generate", "--library", soPath,
-        "--language", "kotlin",
-        "--out-dir", bindingsDir.get().asFile.absolutePath,
+        "bash", "-c",
+        "set -e\n" +
+            "cargo run --bin uniffi-bindgen -- generate " +
+            "--library '" + soPath + "' --language kotlin --out-dir '" + outPath + "'\n" +
+            "find '" + outPath + "' -name '*.kt' | grep -q . || {\n" +
+            "  echo 'ERROR: uniffi-bindgen produced no Kotlin bindings.' >&2\n" +
+            "  echo 'The .so has no UNIFFI_META_* symbols - check that' >&2\n" +
+            "  echo '[profile.release] in rust-core/Cargo.toml does not strip them.' >&2\n" +
+            "  exit 1\n" +
+            "}\n",
     )
 }
 
@@ -180,10 +194,9 @@ tasks.named("preBuild") {
     dependsOn(generateUniffiBindings)
 }
 
-// The generated bindings are Kotlin, and with Kotlin 2.x the Kotlin compile
-// task reads the *Kotlin* source set. Adding them only to android's java
-// source set leaves them invisible to it - which is how the first CI build
-// failed, with "Unresolved reference 'uniffi'" on every import.
+// Also register the generated .kt with the Kotlin source set, so the Kotlin
+// compile task sees them regardless of how the plugin treats android's java
+// srcDirs.
 kotlin {
     sourceSets.getByName("main").kotlin.srcDir(bindingsDir)
 }
