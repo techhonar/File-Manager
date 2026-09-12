@@ -113,6 +113,17 @@ jobs:
             echo "kind=release" >> "$GITHUB_OUTPUT"
             echo "Signing with the release key from secrets."
           else
+            # A tag means "publish this". Publishing something signed with a
+            # key that changes every run is worse than not publishing, and
+            # skipping the release quietly just leaves an empty Releases page
+            # with no explanation - so refuse here, where the reason is clear.
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Cannot publish a release: KEYSTORE_BASE64 is not set."
+              echo "::error::Add KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and"
+              echo "::error::KEY_PASSWORD under Settings -> Secrets and variables ->"
+              echo "::error::Actions, then delete and re-push this tag."
+              exit 1
+            fi
             echo "::warning::KEYSTORE_BASE64 is not set - signing with a throwaway key. \
           The APK installs for testing, but the key differs every run, so each \
           install must uninstall the previous one first. Not for distribution."
