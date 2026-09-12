@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,19 +23,24 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.filemanager.app.ui.components.OneUiGroup
+import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.OneUiSectionHeader
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.StorageBar
 import com.filemanager.app.ui.components.StorageLegend
+import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.StorageViewModel
 import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.formatSize
 
 /**
- * Storage analysis: the usage breakdown, the biggest files, and an on-demand
- * duplicate scan.
+ * Storage analysis: the usage breakdown, an on-demand duplicate scan, then
+ * the biggest files.
  */
 @Composable
 fun StorageScreen(
@@ -48,19 +51,32 @@ fun StorageScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
-    if (state.isLoading && state.summary == null) {
-        Box(modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-        return
-    }
+    OneUiScreen(title = "Storage", modifier = modifier) { padding ->
+        if (state.isLoading && state.summary == null) {
+            Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            return@OneUiScreen
+        }
 
-    LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = contentPadding) {
-        state.summary?.let { summary ->
-            item {
-                Card(Modifier.fillMaxWidth().padding(16.dp)) {
-                    Column(Modifier.padding(20.dp)) {
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
+            state.summary?.let { summary ->
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = OneUi.ScreenPadding)
+                            .clip(OneUi.CardShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(24.dp),
+                    ) {
                         Text(
                             text = formatSize(summary.totalBytes - summary.freeBytes),
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
                             text = "used of ${formatSize(summary.totalBytes)}  ·  " +
@@ -68,36 +84,37 @@ fun StorageScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(16.dp))
-                        StorageBar(
-                            usage = summary.byCategory,
-                            totalBytes = summary.totalBytes,
-                        )
                         Spacer(Modifier.height(20.dp))
+                        StorageBar(usage = summary.byCategory, totalBytes = summary.totalBytes)
+                        Spacer(Modifier.height(24.dp))
                         StorageLegend(summary.byCategory)
                     }
                 }
             }
-        }
 
-        item { SectionHeader("Duplicate files") }
-        item {
-            DuplicateSection(
-                isScanning = state.isScanningDuplicates,
-                progress = state.duplicateProgress,
-                groups = state.duplicates,
-                reclaimable = state.reclaimable,
-                onScan = viewModel::scanDuplicates,
-                onCancel = viewModel::cancelScan,
-                onClean = viewModel::deleteDuplicates,
-            )
-        }
-
-        if (state.largest.isNotEmpty()) {
-            item { SectionHeader("Largest files") }
-            items(state.largest, key = { it.path }) { entry ->
-                SearchResultRow(entry = entry, onClick = { onOpenFile(entry) })
+            item { OneUiSectionHeader("Duplicate files") }
+            item {
+                OneUiGroup {
+                    DuplicateSection(
+                        isScanning = state.isScanningDuplicates,
+                        progress = state.duplicateProgress,
+                        groups = state.duplicates,
+                        reclaimable = state.reclaimable,
+                        onScan = viewModel::scanDuplicates,
+                        onCancel = viewModel::cancelScan,
+                        onClean = viewModel::deleteDuplicates,
+                    )
+                }
             }
+
+            if (state.largest.isNotEmpty()) {
+                item { OneUiSectionHeader("Largest files") }
+                items(state.largest, key = { it.path }) { entry ->
+                    SearchResultRow(entry = entry, onClick = { onOpenFile(entry) })
+                }
+            }
+
+            item { Spacer(Modifier.height(OneUi.SectionGap)) }
         }
     }
 }
@@ -112,18 +129,17 @@ private fun DuplicateSection(
     onCancel: () -> Unit,
     onClean: (DuplicateGroup) -> Unit,
 ) {
-    Column(Modifier.padding(horizontal = 16.dp)) {
+    Column(Modifier.padding(20.dp)) {
         when {
-            isScanning -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.height(20.dp))
-                    Text(
-                        text = progress.ifEmpty { "Scanning…" },
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(start = 16.dp).weight(1f),
-                    )
-                    TextButton(onClick = onCancel) { Text("Stop") }
-                }
+            isScanning -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.height(20.dp))
+                Text(
+                    text = progress.ifEmpty { "Scanning…" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp).weight(1f),
+                )
+                TextButton(onClick = onCancel) { Text("Stop") }
             }
 
             groups.isEmpty() -> {
@@ -133,22 +149,31 @@ private fun DuplicateSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onScan) { Text("Scan for duplicates") }
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onScan, shape = OneUi.PillShape) {
+                    Text("Scan for duplicates")
+                }
             }
 
             else -> {
                 Text(
-                    text = "${groups.size} duplicate sets  ·  ${formatSize(reclaimable)} reclaimable",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "${groups.size} duplicate sets",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
-                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "${formatSize(reclaimable)} reclaimable",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(16.dp))
 
                 groups.take(20).forEach { group ->
-                    Column(Modifier.padding(vertical = 8.dp)) {
+                    Column(Modifier.padding(vertical = 10.dp)) {
                         Text(
                             text = group.files.first().name,
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -157,24 +182,15 @@ private fun DuplicateSection(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onClean(group) }) {
+                            Button(onClick = { onClean(group) }, shape = OneUi.PillShape) {
                                 Text("Keep one, trash ${group.files.size - 1}")
                             }
                         }
                     }
-                    HorizontalDivider()
                 }
             }
         }
     }
-}
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 8.dp),
-    )
 }

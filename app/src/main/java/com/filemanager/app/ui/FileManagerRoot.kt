@@ -11,8 +11,10 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -35,6 +38,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.data.StorageVolumes
+import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.screens.BrowserScreen
 import com.filemanager.app.ui.screens.HomeScreen
 import com.filemanager.app.ui.screens.PermissionScreen
@@ -112,15 +116,18 @@ fun FileManagerRoot(
                 val vm: HomeViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsState()
 
-                HomeScreen(
-                    state = state,
-                    onCategoryClick = { category ->
-                        navController.navigate(Routes.search(category))
-                    },
-                    onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
-                    onTrashClick = { navController.navigate(Routes.TRASH) },
-                    onFileClick = openFile,
-                )
+                OneUiScreen(title = "My Files") { padding ->
+                    HomeScreen(
+                        state = state,
+                        onCategoryClick = { category ->
+                            navController.navigate(Routes.search(category))
+                        },
+                        onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
+                        onTrashClick = { navController.navigate(Routes.TRASH) },
+                        onFileClick = openFile,
+                        modifier = Modifier.padding(padding),
+                    )
+                }
             }
 
             composable(Routes.BROWSE_PATTERN) { entry ->
@@ -198,11 +205,21 @@ private fun BottomBar(navController: NavHostController) {
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination
 
-    NavigationBar {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+    ) {
         tabs.forEach { tab ->
             NavigationBarItem(
                 icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label) },
+                label = { Text(tab.label, style = MaterialTheme.typography.labelSmall) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
                 // Compare against the registered pattern, not the concrete
                 // route -- "browse/%2Fstorage%2F..." never equals
                 // "browse/{path}", so matching on the target would leave the

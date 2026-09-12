@@ -4,26 +4,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -35,11 +35,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.TrashViewModel
 import uniffi.filemanager_core.TrashItem
 import uniffi.filemanager_core.formatSize
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrashScreen(
     viewModel: TrashViewModel,
@@ -58,23 +59,19 @@ fun TrashScreen(
         }
     }
 
-    Scaffold(
+    OneUiScreen(
+        title = "Trash",
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("Trash") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                },
-                actions = {
-                    if (state.items.isNotEmpty()) {
-                        TextButton(onClick = { confirmEmpty = true }) { Text("Empty") }
-                    }
-                },
-            )
+        navigationIcon = {
+            IconButton(onClick = onNavigateBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+            }
+        },
+        actions = {
+            if (state.items.isNotEmpty()) {
+                TextButton(onClick = { confirmEmpty = true }) { Text("Empty") }
+            }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
@@ -83,9 +80,11 @@ fun TrashScreen(
                     if (state.totalBytes > 0uL) "  ·  ${formatSize(state.totalBytes)}" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(
+                    horizontal = OneUi.ScreenPadding,
+                    vertical = 8.dp,
+                ),
             )
-            HorizontalDivider()
 
             when {
                 state.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -93,7 +92,11 @@ fun TrashScreen(
                 }
 
                 state.items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("Trash is empty", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Trash is empty",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 else -> LazyColumn(contentPadding = contentPadding) {
@@ -108,11 +111,17 @@ fun TrashScreen(
     if (confirmEmpty) {
         AlertDialog(
             onDismissRequest = { confirmEmpty = false },
+            shape = OneUi.CardShape,
             title = { Text("Empty trash?") },
-            text = { Text("${state.items.size} items will be deleted permanently. This cannot be undone.") },
+            text = {
+                Text(
+                    "${state.items.size} items will be deleted permanently. " +
+                        "This cannot be undone."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { viewModel.emptyTrash(); confirmEmpty = false }) {
-                    Text("Delete all")
+                    Text("Delete all", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
@@ -125,13 +134,17 @@ fun TrashScreen(
 @Composable
 private fun TrashRow(item: TrashItem, onRestore: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = OneUi.RowHeight)
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = item.name,
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -144,12 +157,14 @@ private fun TrashRow(item: TrashItem, onRestore: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = "${formatSize(item.size)}  ·  ${item.daysRemaining} days left",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
-        TextButton(onClick = onRestore) { Text("Restore") }
+        Spacer(Modifier.width(12.dp))
+        TextButton(onClick = onRestore, shape = OneUi.PillShape) { Text("Restore") }
     }
 }
