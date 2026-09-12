@@ -157,19 +157,27 @@ val cargoBuild by tasks.registering(Exec::class) {
 
 val generateUniffiBindings by tasks.registering(Exec::class) {
     group = "rust"
-    description = "Generate the Kotlin bindings from the compiled Rust library"
+    description = "Generate the Kotlin bindings from a host build of the Rust core"
     dependsOn(cargoBuild)
 
     workingDir = rustDir.asFile
-    inputs.dir(jniLibsDir)
+    inputs.dir(rustDir.dir("src"))
+    inputs.file(rustDir.file("Cargo.toml"))
     outputs.dir(bindingsDir)
 
-    // Any ABI works as the bindgen input -- the interface is identical, and
-    // bindgen reads the UNIFFI_META_* symbols rather than the machine code.
-    val soPath = jniLibsDir.get().asFile
-        .resolve("arm64-v8a/libfilemanager_core.so").absolutePath
     val outPath = bindingsDir.get().asFile.absolutePath
 
+    // The bindings are generated from a HOST build of the crate, not from the
+    // Android .so, even though the Android one is right there.
+    //
+    // uniffi-bindgen's --library mode discovers the interface by reading the
+    // UNIFFI_META_* symbols out of a compiled library, and cargo-ndk runs
+    // llvm-strip over every library it copies (src/cli.rs: `if !args.no_strip`)
+    // - so the Android artifact never has them, whatever the cargo profile
+    // says. Passing --no-strip would work but ships unstripped .so files in the
+    // APK. The interface is platform-independent, so building the same crate
+    // for the host gives identical bindings and keeps the APK small.
+    //
     // Run through bash so the output can be checked: uniffi-bindgen exits 0
     // even when it finds no metadata and writes nothing at all. Trusting its
     // exit code means the build carries on and fails much later, in the Kotlin
@@ -179,12 +187,14 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
     commandLine(
         "bash", "-c",
         "set -e\n" +
+            "cargo build --lib\n" +
             "cargo run --bin uniffi-bindgen -- generate " +
-            "--library '" + soPath + "' --language kotlin --out-dir '" + outPath + "'\n" +
+            "--library target/debug/libfilemanager_core.so " +
+            "--language kotlin --out-dir '" + outPath + "'\n" +
             "find '" + outPath + "' -name '*.kt' | grep -q . || {\n" +
             "  echo 'ERROR: uniffi-bindgen produced no Kotlin bindings.' >&2\n" +
-            "  echo 'The .so has no UNIFFI_META_* symbols - check that' >&2\n" +
-            "  echo '[profile.release] in rust-core/Cargo.toml does not strip them.' >&2\n" +
+            "  echo 'The host library has no UNIFFI_META_* symbols. Check that' >&2\n" +
+            "  echo 'nothing strips rust-core/target/debug/libfilemanager_core.so.' >&2\n" +
             "  exit 1\n" +
             "}\n",
     )

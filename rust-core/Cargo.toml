@@ -34,12 +34,12 @@ codegen-units = 1
 # Deliberately NOT set here:
 #
 #   strip = "symbols"
-#     uniffi-bindgen's --library mode reads the UNIFFI_META_* symbols out of
-#     the compiled .so to discover the interface. Stripping removes .symtab
-#     (.dynsym survives, since linking needs it) and the bindgen then finds no
-#     components, writes no Kotlin, and still exits 0 - so the build fails far
-#     downstream with "Unresolved reference 'uniffi'". AGP strips the .so when
-#     it packages the APK anyway, so nothing is gained by stripping here.
+#     Stripping removes .symtab (.dynsym survives, since linking needs it),
+#     which is where uniffi-bindgen's --library mode reads the UNIFFI_META_*
+#     symbols that describe the interface. Kept off so a host build of this
+#     crate can always serve as bindgen input - see generateUniffiBindings in
+#     app/build.gradle.kts. Nothing is lost: cargo-ndk strips the libraries it
+#     copies into the APK regardless of this setting.
 #
 #   panic = "abort"
 #     uniffi catches Rust panics at the FFI boundary and turns them into a
