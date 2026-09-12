@@ -84,10 +84,18 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust-core/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # Restored from cache on most runs; cargo exits 0 when it is already
-      # present, so this is safe to run unconditionally.
+      # ~/.cargo/bin is restored by the cache above, so cargo-ndk is usually
+      # already there - and `cargo install` exits 101 ("binary already exists
+      # in destination") rather than succeeding, which kills the job before it
+      # reaches any real work. Check first, and --force only when a binary of
+      # the wrong major version is in the way.
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked --version ^3
+        run: |
+          if cargo-ndk --version 2>/dev/null | grep -qE '^cargo-ndk 3\.'; then
+            echo "Using cached $(cargo-ndk --version)"
+          else
+            cargo install cargo-ndk --locked --version '^3' --force
+          fi
 
       # ---- Verify the Rust core before shipping it -----------------------
       - name: Test Rust core
