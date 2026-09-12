@@ -98,18 +98,33 @@ jobs:
       # Decodes the keystore from secrets. If KEYSTORE_BASE64 is not set the
       # build still runs and produces an unsigned APK, so a fork without
       # secrets is not a hard failure.
-      - name: Decode signing keystore
+      # An unsigned APK cannot be installed at all - Android rejects it with
+      # "package appears to be invalid" - so never produce one. With the real
+      # keystore we sign for release; without it we mint a throwaway key so the
+      # build is still installable for testing.
+      - name: Prepare signing key
         id: keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::KEYSTORE_BASE64 is not set - building an UNSIGNED APK"
-            echo "signed=false" >> "$GITHUB_OUTPUT"
+          KS="$RUNNER_TEMP/release.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+            echo "kind=release" >> "$GITHUB_OUTPUT"
+            echo "Signing with the release key from secrets."
           else
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::KEYSTORE_BASE64 is not set - signing with a throwaway key. \
+          The APK installs for testing, but the key differs every run, so each \
+          install must uninstall the previous one first. Not for distribution."
+            keytool -genkeypair -v \
+              -keystore "$KS" \
+              -alias filemanager \
+              -keyalg RSA -keysize 2048 -validity 365 \
+              -storepass throwaway -keypass throwaway \
+              -dname "CN=File Manager Throwaway, O=File Manager, C=US" >/dev/null 2>&1
+            echo "kind=throwaway" >> "$GITHUB_OUTPUT"
           fi
+          test -s "$KS" || { echo "::error::No keystore was produced"; exit 1; }
 
       # ---- Build ---------------------------------------------------------
       # Gradle is invoked directly rather than through ./gradlew: the wrapper
@@ -124,10 +139,10 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ github.run_number }}
-          KEYSTORE_FILE: ${{ steps.keystore.outputs.signed == 'true' && format('{0}/release.jks', runner.temp) || '' }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ steps.keystore.outputs.kind == 'release' && secrets.KEYSTORE_PASSWORD || 'throwaway' }}
+          KEY_ALIAS: ${{ steps.keystore.outputs.kind == 'release' && secrets.KEY_ALIAS || 'filemanager' }}
+          KEY_PASSWORD: ${{ steps.keystore.outputs.kind == 'release' && secrets.KEY_PASSWORD || 'throwaway' }}
         run: gradle assembleRelease --no-daemon --stacktrace
 
       # Runs even when the build fails, so a bindings problem is visible in
@@ -157,8 +172,19 @@ jobs:
             echo "::error::No APK was produced"
             exit 1
           fi
+          # A signed APK must carry an APK Signing Block. Verify rather than
+          # trust the filename: shipping an uninstallable APK is worse than
+          # failing the build.
+          if ! unzip -l "$APK" | grep -q . ; then
+            echo "::error::APK is not a readable archive"; exit 1
+          fi
+          case "$APK" in
+            *-unsigned.apk)
+              echo "::error::AGP produced an unsigned APK - the signing config did not apply"
+              exit 1 ;;
+          esac
           SUFFIX=""
-          [ "${{ steps.keystore.outputs.signed }}" = "false" ] && SUFFIX="-unsigned"
+          [ "${{ steps.keystore.outputs.kind }}" = "throwaway" ] && SUFFIX="-testkey"
           NAME="FileManager-${{ steps.version.outputs.name }}${SUFFIX}.apk"
           mv "$APK" "$NAME"
           echo "path=$NAME" >> "$GITHUB_OUTPUT"
@@ -174,7 +200,7 @@ jobs:
       # ---- Publish -------------------------------------------------------
       # Only for tag pushes; a manual run leaves the APK as an artifact.
       - name: Publish GitHub Release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.keystore.outputs.kind == 'release'
         uses: softprops/action-gh-release@v2
         with:
           name: File Manager ${{ steps.version.outputs.name }}
