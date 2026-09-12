@@ -6,13 +6,21 @@ name: Release APK
 on:
   push:
     tags:
+      # Both spellings, because "0.1.3" is at least as natural to type as
+      # "v0.1.3" and a tag that silently triggers nothing is a bad surprise.
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g. 0.1.0). No release is published for manual runs.'
+        description: 'Version to build, e.g. 0.1.3'
         required: true
         default: '0.1.0'
+      publish:
+        description: 'Publish a GitHub Release (creates the tag if needed)'
+        required: false
+        type: boolean
+        default: true
 
 # Needed to create the GitHub Release and upload the APK to it.
 permissions:
@@ -34,11 +42,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            TAG="$GITHUB_REF_NAME"
           else
             VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+            TAG="v$VERSION"
           fi
           echo "name=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building version $VERSION (code ${{ github.run_number }})"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION as tag $TAG (code ${{ github.run_number }})"
 
       # ---- Toolchains ----------------------------------------------------
       - name: Set up JDK 21
@@ -125,7 +137,7 @@ jobs:
             # key that changes every run is worse than not publishing, and
             # skipping the release quietly just leaves an empty Releases page
             # with no explanation - so refuse here, where the reason is clear.
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
               echo "::error::Cannot publish a release: KEYSTORE_BASE64 is not set."
               echo "::error::Add KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and"
               echo "::error::KEY_PASSWORD under Settings -> Secrets and variables ->"
@@ -219,10 +231,15 @@ jobs:
       # ---- Publish -------------------------------------------------------
       # Only for tag pushes; a manual run leaves the APK as an artifact.
       - name: Publish GitHub Release
-        if: github.event_name == 'push' && steps.keystore.outputs.kind == 'release'
+        if: >-
+          (github.event_name == 'push' || inputs.publish)
+          && steps.keystore.outputs.kind == 'release'
         uses: softprops/action-gh-release@v2
         with:
           name: File Manager ${{ steps.version.outputs.name }}
+          # Explicit, so a manual run creates the tag instead of failing for
+          # want of one.
+          tag_name: ${{ steps.version.outputs.tag }}
           files: ${{ steps.apk.outputs.path }}
           generate_release_notes: true
           draft: false
@@ -238,3 +255,37 @@ jobs:
             After first launch the app asks for *All files access*, which it
             needs to browse and search storage. Grant it in the Settings page
             that opens, then return to the app.
+
+      # Writes a panel at the top of the run page. Whether a release was
+      # published has been non-obvious three times now; this states it
+      # outright rather than leaving it to be inferred from a skipped step.
+      - name: Summarise what this run produced
+        if: always()
+        run: |
+          {
+            echo "## File Manager ${{ steps.version.outputs.name }}"
+            echo ""
+            if [ ! -f "${{ steps.apk.outputs.path }}" ]; then
+              echo "**No APK was produced** - the build failed before packaging."
+              echo ""
+              echo "Check the failed step above for the reason."
+              exit 0
+            fi
+            echo "**APK:** \`${{ steps.apk.outputs.path }}\`"
+            echo ""
+            if [ "${{ steps.keystore.outputs.kind }}" = "release" ]; then
+              echo "Signed with the release key from repository secrets."
+            else
+              echo "Signed with a **throwaway key** - installable for testing, but the"
+              echo "key changes every run, so each install must uninstall the previous"
+              echo "one first."
+            fi
+            echo ""
+            if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
+              echo "Published as a release: <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}>"
+            else
+              echo "**Not published as a release.** This was a manual run with"
+              echo "*Publish a GitHub Release* unticked, so the APK is attached to this"
+              echo "run as a build artifact instead - see the Artifacts section below."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
