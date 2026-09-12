@@ -5,11 +5,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,8 +25,8 @@ import uniffi.filemanager_core.CategoryUsage
 import uniffi.filemanager_core.formatSize
 
 /**
- * The stacked usage bar from the storage screen: one segment per category,
- * widest first, with the unaccounted remainder in grey.
+ * The stacked usage bar: one segment per category, widest first, with the
+ * unaccounted remainder left as track colour.
  */
 @Composable
 fun StorageBar(
@@ -33,56 +36,60 @@ fun StorageBar(
 ) {
     if (totalBytes == 0uL) return
 
-    Column(modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(14.dp)
-                .clip(RoundedCornerShape(7.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            usage.filter { it.bytes > 0uL }.forEach { slice ->
-                // Compose weights must be > 0, so a category rounding to zero
-                // width is skipped rather than crashing the layout.
-                val fraction = slice.bytes.toDouble() / totalBytes.toDouble()
-                if (fraction > 0.001) {
-                    Box(
-                        Modifier
-                            .weight(fraction.toFloat())
-                            .fillMaxSize()
-                            .background(slice.category.color()),
-                    )
-                }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(12.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        usage.filter { it.bytes > 0uL }.forEach { slice ->
+            // Compose rejects a zero weight, so a category rounding to no
+            // width is skipped rather than crashing the layout.
+            val fraction = slice.bytes.toDouble() / totalBytes.toDouble()
+            if (fraction > 0.001) {
+                Box(
+                    Modifier
+                        .weight(fraction.toFloat())
+                        .fillMaxSize()
+                        .background(slice.category.color()),
+                )
             }
-            // Remaining free space fills whatever is left.
-            val used = usage.sumOf { it.bytes.toDouble() }
-            val free = (totalBytes.toDouble() - used).coerceAtLeast(0.0) / totalBytes.toDouble()
-            if (free > 0.001) {
-                Box(Modifier.weight(free.toFloat()).fillMaxSize())
-            }
+        }
+        val used = usage.sumOf { it.bytes.toDouble() }
+        val free = ((totalBytes.toDouble() - used) / totalBytes.toDouble()).coerceAtLeast(0.0)
+        if (free > 0.001) {
+            Box(Modifier.weight(free.toFloat()).fillMaxSize())
         }
     }
 }
 
-/** The colour key under the bar. */
+/** The colour key under the bar: a filled dot, the name, then the figures. */
 @Composable
 fun StorageLegend(usage: List<CategoryUsage>, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         usage.filter { it.bytes > 0uL }.forEach { slice ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
-                        .size(12.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .size(10.dp)
+                        .clip(CircleShape)
                         .background(slice.category.color()),
                 )
                 Text(
                     text = slice.category.label(),
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(start = 12.dp).weight(1f),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 14.dp).weight(1f),
                 )
                 Text(
-                    text = "${formatSize(slice.bytes)}  ·  ${slice.fileCount} files",
+                    text = formatSize(slice.bytes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${slice.fileCount}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

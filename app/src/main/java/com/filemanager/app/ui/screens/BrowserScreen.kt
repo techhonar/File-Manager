@@ -7,14 +7,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
@@ -36,30 +41,39 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.FileRow
+import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.TextInputDialog
+import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.BrowserViewModel
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SortKey
 import uniffi.filemanager_core.SortOptions
-import androidx.compose.runtime.collectAsState
 
 /**
- * The folder browser: breadcrumbs, a file list, and a contextual action bar
- * that replaces the toolbar while items are selected.
+ * The folder browser.
+ *
+ * Two chrome states: normally a collapsing One UI title with the folder name;
+ * in selection mode the title bar becomes a count and the actions move to a
+ * bar along the bottom, which is where One UI puts them so they stay in thumb
+ * reach on a tall phone.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,102 +99,78 @@ fun BrowserScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier,
-        snackbarHost = { SnackbarHost(snackbarState) },
-        topBar = {
-            if (state.inSelectionMode) {
-                SelectionBar(
-                    count = state.selected.size,
-                    onClose = viewModel::clearSelection,
-                    onSelectAll = viewModel::selectAll,
-                    onCopy = viewModel::copy,
-                    onCut = viewModel::cut,
-                    onDelete = viewModel::deleteSelected,
-                    onCompress = viewModel::compressSelected,
-                    // Renaming two files at once is meaningless, so the action
-                    // only appears for a single selection.
-                    onRename = state.selected.singleOrNull()?.let { path ->
-                        { renameTarget = state.entries.firstOrNull { it.path == path } }
-                    },
-                )
-            } else {
+    val folderName = state.path.substringAfterLast('/').ifEmpty { "Storage" }
+
+    if (state.inSelectionMode) {
+        // Selection mode gets a plain compact bar plus a bottom action bar.
+        Scaffold(
+            modifier = modifier,
+            containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { SnackbarHost(snackbarState) },
+            topBar = {
                 TopAppBar(
-                    title = {
-                        Text(
-                            text = state.path.substringAfterLast('/').ifEmpty { "Storage" },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
+                    title = { Text("${state.selected.size} selected") },
                     navigationIcon = {
-                        IconButton(onClick = { if (!viewModel.navigateUp()) onNavigateBack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Up")
+                        IconButton(onClick = viewModel::clearSelection) {
+                            Icon(Icons.Default.Close, "Cancel selection")
                         }
                     },
                     actions = {
-                        if (clipboard != null) {
-                            IconButton(onClick = viewModel::paste) {
-                                Icon(Icons.Default.ContentPaste, "Paste")
-                            }
+                        IconButton(onClick = viewModel::selectAll) {
+                            Icon(Icons.Default.SelectAll, "Select all")
                         }
-                        IconButton(onClick = { showNewFolderDialog = true }) {
-                            Icon(Icons.Default.CreateNewFolder, "New folder")
-                        }
-                        SortMenu(current = state.sort, onSelect = viewModel::setSort)
-                        OverflowMenu(
-                            showHidden = state.showHidden,
-                            onToggleHidden = viewModel::toggleHidden,
-                            onToggleGrid = viewModel::toggleGrid,
-                        )
                     },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
                 )
-            }
-        },
-    ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            Breadcrumbs(crumbs = state.breadcrumbs, onNavigate = viewModel::load)
-            HorizontalDivider()
-
-            when {
-                state.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
+            },
+            bottomBar = {
+                SelectionActionBar(
+                    canRename = state.selected.size == 1,
+                    onCopy = viewModel::copy,
+                    onMove = viewModel::cut,
+                    onRename = {
+                        val path = state.selected.singleOrNull()
+                        renameTarget = state.entries.firstOrNull { it.path == path }
+                    },
+                    onCompress = viewModel::compressSelected,
+                    onDelete = viewModel::deleteSelected,
+                )
+            },
+        ) { padding ->
+            FileList(state, viewModel, onOpenFile, padding, contentPadding)
+        }
+    } else {
+        OneUiScreen(
+            title = folderName,
+            modifier = modifier,
+            snackbarHost = { SnackbarHost(snackbarState) },
+            navigationIcon = {
+                IconButton(onClick = { if (!viewModel.navigateUp()) onNavigateBack() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Up")
                 }
-
-                state.error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        text = state.error!!,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(32.dp),
-                    )
-                }
-
-                state.entries.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("This folder is empty", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-
-                else -> LazyColumn(contentPadding = contentPadding) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        FileRow(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = {
-                                when {
-                                    state.inSelectionMode -> viewModel.toggleSelection(entry.path)
-                                    entry.isDir -> viewModel.load(entry.path)
-                                    // Tapping a zip extracts it in place --
-                                    // the one file type this app opens itself.
-                                    entry.category == FileCategory.ARCHIVE ->
-                                        viewModel.extract(entry.path)
-                                    else -> onOpenFile(entry)
-                                }
-                            },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                        )
+            },
+            actions = {
+                if (clipboard != null) {
+                    IconButton(onClick = viewModel::paste) {
+                        Icon(Icons.Default.ContentPaste, "Paste")
                     }
                 }
+                IconButton(onClick = { showNewFolderDialog = true }) {
+                    Icon(Icons.Default.CreateNewFolder, "New folder")
+                }
+                SortMenu(current = state.sort, onSelect = viewModel::setSort)
+                OverflowMenu(
+                    showHidden = state.showHidden,
+                    onToggleHidden = viewModel::toggleHidden,
+                    onToggleGrid = viewModel::toggleGrid,
+                )
+            },
+        ) { padding ->
+            Column(Modifier.padding(padding).fillMaxSize()) {
+                Breadcrumbs(crumbs = state.breadcrumbs, onNavigate = viewModel::load)
+                FileList(state, viewModel, onOpenFile, PaddingValues(0.dp), contentPadding)
             }
         }
     }
@@ -215,6 +205,128 @@ fun BrowserScreen(
     }
 }
 
+@Composable
+private fun FileList(
+    state: com.filemanager.app.viewmodel.BrowserState,
+    viewModel: BrowserViewModel,
+    onOpenFile: (FileEntry) -> Unit,
+    scaffoldPadding: PaddingValues,
+    contentPadding: PaddingValues,
+) {
+    when {
+        state.isLoading -> Box(
+            Modifier.padding(scaffoldPadding).fillMaxSize(),
+            Alignment.Center,
+        ) { CircularProgressIndicator() }
+
+        state.error != null -> Box(
+            Modifier.padding(scaffoldPadding).fillMaxSize(),
+            Alignment.Center,
+        ) {
+            Text(
+                text = state.error!!,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(32.dp),
+            )
+        }
+
+        state.entries.isEmpty() -> Box(
+            Modifier.padding(scaffoldPadding).fillMaxSize(),
+            Alignment.Center,
+        ) {
+            Text(
+                "This folder is empty",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        else -> LazyColumn(
+            modifier = Modifier.padding(scaffoldPadding).fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
+            items(state.entries, key = { it.path }) { entry ->
+                FileRow(
+                    entry = entry,
+                    isSelected = entry.path in state.selected,
+                    selectionMode = state.inSelectionMode,
+                    onClick = {
+                        when {
+                            state.inSelectionMode -> viewModel.toggleSelection(entry.path)
+                            entry.isDir -> viewModel.load(entry.path)
+                            // Tapping a zip extracts it in place - the one
+                            // file type this app opens itself.
+                            entry.category == FileCategory.ARCHIVE ->
+                                viewModel.extract(entry.path)
+                            else -> onOpenFile(entry)
+                        }
+                    },
+                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The One UI selection bar: icon above label, spread across the bottom edge,
+ * sitting above the navigation bar inset.
+ */
+@Composable
+private fun SelectionActionBar(
+    canRename: Boolean,
+    onCopy: () -> Unit,
+    onMove: () -> Unit,
+    onRename: () -> Unit,
+    onCompress: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+    ) {
+        Column {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                ActionItem(Icons.Default.ContentCopy, "Copy", onCopy)
+                ActionItem(Icons.Default.ContentCut, "Move", onMove)
+                ActionItem(Icons.Default.DriveFileRenameOutline, "Rename", onRename, canRename)
+                ActionItem(Icons.Default.FolderZip, "Zip", onCompress)
+                ActionItem(Icons.Default.Delete, "Delete", onDelete)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val tint = if (enabled) MaterialTheme.colorScheme.onSurface
+    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+
+    Column(
+        modifier = Modifier
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
 /** Horizontally scrolling path, each segment tappable. */
 @Composable
 private fun Breadcrumbs(crumbs: List<Pair<String, String>>, onNavigate: (String) -> Unit) {
@@ -222,58 +334,29 @@ private fun Breadcrumbs(crumbs: List<Pair<String, String>>, onNavigate: (String)
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         crumbs.forEachIndexed { index, (label, path) ->
             if (index > 0) {
-                Text("/", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (index == crumbs.lastIndex) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.primary
-                },
-                modifier = Modifier.clickable { onNavigate(path) }.padding(4.dp),
+                color = if (index == crumbs.lastIndex) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { onNavigate(path) }.padding(6.dp),
             )
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SelectionBar(
-    count: Int,
-    onClose: () -> Unit,
-    onSelectAll: () -> Unit,
-    onCopy: () -> Unit,
-    onCut: () -> Unit,
-    onDelete: () -> Unit,
-    onCompress: () -> Unit,
-    onRename: (() -> Unit)?,
-) {
-    TopAppBar(
-        title = { Text("$count selected") },
-        navigationIcon = {
-            IconButton(onClick = onClose) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Cancel selection")
-            }
-        },
-        actions = {
-            IconButton(onClick = onSelectAll) { Icon(Icons.Default.SelectAll, "Select all") }
-            onRename?.let { rename ->
-                IconButton(onClick = rename) { Icon(Icons.Default.DriveFileRenameOutline, "Rename") }
-            }
-            IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, "Copy") }
-            IconButton(onClick = onCut) { Icon(Icons.Default.ContentCut, "Move") }
-            IconButton(onClick = onCompress) { Icon(Icons.Default.FolderZip, "Compress") }
-            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete") }
-        },
-    )
 }
 
 @Composable
@@ -290,8 +373,8 @@ private fun SortMenu(current: SortOptions, onSelect: (SortOptions) -> Unit) {
         ).forEach { (key, label) ->
             DropdownMenuItem(
                 text = {
-                    // Tapping the active key flips direction, which is the
-                    // convention users expect from a sort menu.
+                    // Tapping the active key flips direction, the convention
+                    // users expect from a sort menu.
                     val arrow = if (current.key == key) {
                         if (current.descending) " ↓" else " ↑"
                     } else {

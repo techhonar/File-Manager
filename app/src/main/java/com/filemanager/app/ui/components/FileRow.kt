@@ -3,16 +3,16 @@ package com.filemanager.app.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.formatSize
@@ -35,8 +36,9 @@ import java.util.Locale
 /**
  * One row in a file list.
  *
- * Long-press starts selection mode, which is the gesture every Android file
- * manager uses -- including Samsung's.
+ * Long-press starts selection mode, the gesture every Android file manager
+ * uses. Rows are deliberately tall - One UI favours large touch targets over
+ * fitting more on screen.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -55,12 +57,13 @@ fun FileRow(
                 if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .defaultMinSize(minHeight = OneUi.RowHeight)
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {
             Checkbox(checked = isSelected, onCheckedChange = { onClick() })
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(8.dp))
         }
 
         FileThumbnail(entry)
@@ -70,6 +73,7 @@ fun FileRow(
             Text(
                 text = entry.name,
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -85,50 +89,55 @@ fun FileRow(
 }
 
 /**
- * Real thumbnail for images and video, category icon for everything else.
+ * Real thumbnail for images and video, a filled category circle otherwise.
  *
- * Coil reads the file directly from its path and caches decoded bitmaps, so
+ * Coil reads the file straight from its path and caches decoded bitmaps, so
  * scrolling a folder of 2,000 photos does not decode them all.
  */
 @Composable
-private fun FileThumbnail(entry: FileEntry, size: Int = 44) {
+private fun FileThumbnail(entry: FileEntry, size: Int = 46) {
     val showsPreview = entry.category == FileCategory.IMAGE || entry.category == FileCategory.VIDEO
 
-    Box(
-        modifier = Modifier
-            .size(size.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (showsPreview) Color.Transparent
-                else entry.category.color().copy(alpha = 0.12f)
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (showsPreview) {
+    if (showsPreview) {
+        Box(
+            modifier = Modifier
+                .size(size.dp)
+                .clip(OneUi.ThumbShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
             AsyncImage(
                 model = entry.path,
                 contentDescription = null,
-                modifier = Modifier.size(size.dp).clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier.size(size.dp).clip(OneUi.ThumbShape),
             )
-        } else {
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .size(size.dp)
+                .clip(CircleShape)
+                .background(entry.category.color()),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
                 imageVector = entry.category.icon(),
                 contentDescription = null,
-                tint = entry.category.color(),
-                modifier = Modifier.size((size * 0.55).dp),
+                tint = Color.White,
+                modifier = Modifier.size((size * 0.5).dp),
             )
         }
     }
 }
 
-/** "12 Sep 2026  ·  4.2 MB", or just the date for a folder. */
+/** "12 Sep 2026 · 4.2 MB", or just the date for a folder. */
 private fun FileEntry.subtitle(): String {
     val date = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
         .format(Date(modifiedMs.toLong()))
     return if (isDir) date else "$date  ·  ${formatSize(size)}"
 }
 
-/** A compact row used by search results, which also shows the parent folder. */
+/** Row used by search results and Recent files, which also shows the folder. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SearchResultRow(
@@ -140,17 +149,18 @@ fun SearchResultRow(
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .defaultMinSize(minHeight = OneUi.RowHeight)
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Start,
     ) {
-        FileThumbnail(entry, size = 40)
+        FileThumbnail(entry, size = 44)
         Spacer(Modifier.width(16.dp))
 
         Column(Modifier.weight(1f)) {
             Text(
                 text = entry.name,
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -163,6 +173,7 @@ fun SearchResultRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Spacer(Modifier.width(12.dp))
         Text(
             text = formatSize(entry.size),
             style = MaterialTheme.typography.bodySmall,
