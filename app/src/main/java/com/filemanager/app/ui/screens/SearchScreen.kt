@@ -20,6 +20,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.filemanager.app.ui.components.SelectionActionBar
+import com.filemanager.app.ui.components.TextInputDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,8 +65,47 @@ fun SearchScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val state by viewModel.state.collectAsState()
+    val snackbarState = remember { SnackbarHostState() }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
 
-    OneUiScreen(title = "Search", modifier = modifier) { padding ->
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbarState.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
+
+    OneUiScreen(
+        title = if (state.inSelectionMode) "${state.selected.size} selected" else "Search",
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarState) },
+        navigationIcon = {
+            if (state.inSelectionMode) {
+                IconButton(onClick = viewModel::clearSelection) {
+                    Icon(Icons.Default.Close, "Cancel selection")
+                }
+            }
+        },
+        actions = {
+            if (state.inSelectionMode) {
+                IconButton(onClick = viewModel::selectAll) {
+                    Icon(Icons.Default.SelectAll, "Select all")
+                }
+            }
+        },
+        bottomBar = {
+            if (state.inSelectionMode) {
+                SelectionActionBar(
+                    onCopy = viewModel::copySelection,
+                    onMove = viewModel::cutSelection,
+                    onDelete = viewModel::deleteSelection,
+                    onRename = state.selected.singleOrNull()?.let { path ->
+                        { renameTarget = state.results.firstOrNull { it.path == path } }
+                    },
+                )
+            }
+        },
+    ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             SearchField(
                 query = state.query,
@@ -100,7 +149,16 @@ fun SearchScreen(
                         )
                     }
                     items(state.results, key = { it.path }) { entry ->
-                        SearchResultRow(entry = entry, onClick = { onOpenFile(entry) })
+                        SearchResultRow(
+                            entry = entry,
+                            isSelected = entry.path in state.selected,
+                            selectionMode = state.inSelectionMode,
+                            onClick = {
+                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                else onOpenFile(entry)
+                            },
+                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                        )
                     }
                 }
 
@@ -110,6 +168,15 @@ fun SearchScreen(
             }
         }
     }
+
+    RenameDialogHost(
+        target = renameTarget,
+        onConfirm = { path, name ->
+            viewModel.rename(path, name)
+            renameTarget = null
+        },
+        onDismiss = { renameTarget = null },
+    )
 }
 
 /** One UI search boxes are full pills with no visible outline. */
@@ -188,6 +255,24 @@ private fun EmptyMessage(text: String) {
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun RenameDialogHost(
+    target: FileEntry?,
+    onConfirm: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    target?.let {
+        TextInputDialog(
+            title = "Rename",
+            label = "New name",
+            initial = it.name,
+            confirmLabel = "Rename",
+            onConfirm = { name -> onConfirm(it.path, name) },
+            onDismiss = onDismiss,
         )
     }
 }

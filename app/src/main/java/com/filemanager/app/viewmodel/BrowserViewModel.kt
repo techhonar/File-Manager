@@ -2,6 +2,7 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,19 +41,18 @@ data class BrowserState(
         }
 }
 
-/** A pending copy/move waiting for the user to hit Paste. */
-data class Clipboard(val paths: List<String>, val isMove: Boolean)
-
 class BrowserViewModel(
     private val repository: FileRepository,
+    private val clipboard: FileClipboard,
     startPath: String,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
     val state: StateFlow<BrowserState> = _state.asStateFlow()
 
-    private val _clipboard = MutableStateFlow<Clipboard?>(null)
-    val clipboard: StateFlow<Clipboard?> = _clipboard.asStateFlow()
+    /** Exposed straight from the app-scoped clipboard, so a copy made in
+     *  another folder - or in the search results - is still there. */
+    val clipboardContents = clipboard.contents
 
     /** One-off messages for the snackbar (errors, "3 items moved to trash"). */
     private val _messages = MutableStateFlow<String?>(null)
@@ -116,17 +116,17 @@ class BrowserViewModel(
     // --- Operations ---------------------------------------------------------
 
     fun cut() {
-        _clipboard.value = Clipboard(_state.value.selected.toList(), isMove = true)
+        clipboard.cut(_state.value.selected.toList())
         clearSelection()
     }
 
     fun copy() {
-        _clipboard.value = Clipboard(_state.value.selected.toList(), isMove = false)
+        clipboard.copy(_state.value.selected.toList())
         clearSelection()
     }
 
     fun paste() {
-        val pending = _clipboard.value ?: return
+        val pending = clipboard.contents.value ?: return
         val destination = _state.value.path
 
         viewModelScope.launch {
@@ -138,7 +138,7 @@ class BrowserViewModel(
                     repository.copy(pending.paths, destination)
                 }
             }.onSuccess { count ->
-                _clipboard.value = null
+                clipboard.clear()
                 _messages.value =
                     "$count ${if (pending.isMove) "moved" else "copied"}"
                 refresh()
@@ -177,6 +177,15 @@ class BrowserViewModel(
             val ok = runCatching { repository.createFolder(_state.value.path, name) }
                 .getOrDefault(false)
             _messages.value = if (ok) null else "Could not create folder"
+            if (ok) refresh()
+        }
+    }
+
+    fun createFile(name: String) {
+        viewModelScope.launch {
+            val ok = runCatching { repository.createFile(_state.value.path, name) }
+                .getOrDefault(false)
+            _messages.value = if (ok) null else "A file named \"$name\" already exists"
             if (ok) refresh()
         }
     }

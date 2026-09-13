@@ -137,6 +137,18 @@ class FileRepository(
     suspend fun createFolder(parent: String, name: String): Boolean =
         withContext(io) { File(parent, name).mkdirs() }
 
+    /**
+     * Create an empty file. Returns false if something of that name is already
+     * there, rather than silently truncating it.
+     */
+    suspend fun createFile(parent: String, name: String): Boolean = withContext(io) {
+        val target = File(parent, name)
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.createNewFile()
+        }.getOrDefault(false)
+    }
+
     // --- Category home screen ------------------------------------------------
 
     suspend fun byCategory(

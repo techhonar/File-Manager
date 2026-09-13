@@ -2,6 +2,7 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,7 +24,12 @@ data class SearchState(
     val results: List<FileEntry> = emptyList(),
     val isSearching: Boolean = false,
     val hasSearched: Boolean = false,
-)
+    /** Paths the user has ticked. Empty means normal (non-selection) mode. */
+    val selected: Set<String> = emptySet(),
+    val message: String? = null,
+) {
+    val inSelectionMode: Boolean get() = selected.isNotEmpty()
+}
 
 /**
  * Results of a completed walk, kept so that extending the query can be
@@ -37,6 +43,7 @@ private data class SearchCache(
 
 class SearchViewModel(
     private val repository: FileRepository,
+    private val clipboard: FileClipboard,
     private val roots: List<String>,
 ) : ViewModel() {
 
@@ -134,7 +141,6 @@ class SearchViewModel(
 
         val filtered = cached.entries
             .filter { it.name.contains(query, ignoreCase = true) }
-            .take(DISPLAY_LIMIT)
 
         _state.update {
             it.copy(results = filtered, isSearching = false, hasSearched = true)
@@ -170,13 +176,14 @@ class SearchViewModel(
                 override fun onBatch(entries: List<FileEntry>) {
                     if (generation.get() != mine) return
 
+                    // Appended in arrival order, not re-sorted on every
+                    // batch: sorting the whole list each time is O(n log n)
+                    // per batch, and it makes rows the user is reading jump
+                    // around. New results simply arrive at the bottom, and
+                    // the list is ordered once the walk finishes.
                     val snapshot = synchronized(accumulatedLock) {
                         accumulated += entries
-                        // Newest first. The walk is parallel, so batches turn
-                        // up in no useful order and an unsorted list would
-                        // visibly reshuffle while the user is reading it.
-                        accumulated.sortedByDescending { it.modifiedMs }
-                            .take(DISPLAY_LIMIT)
+                        accumulated.toList()
                     }
                     _state.update { it.copy(results = snapshot, hasSearched = true) }
                 }
@@ -185,7 +192,14 @@ class SearchViewModel(
 
                 override fun onFinished(matched: ULong, cancelled: Boolean) {
                     if (generation.get() != mine) return
-                    _state.update { it.copy(isSearching = false, hasSearched = true) }
+
+                    val ordered = synchronized(accumulatedLock) {
+                        accumulated.sortByDescending { it.modifiedMs }
+                        accumulated.toList()
+                    }
+                    _state.update {
+                        it.copy(results = ordered, isSearching = false, hasSearched = true)
+                    }
 
                     // Only a walk that ran to completion, and was not cut off
                     // by the cap, holds every match - anything else would make
@@ -234,17 +248,92 @@ class SearchViewModel(
         super.onCleared()
     }
 
+    // --- Selection and file operations --------------------------------------
+
+    fun toggleSelection(path: String) = _state.update { current ->
+        val next = current.selected.toMutableSet()
+        if (!next.add(path)) next.remove(path)
+        current.copy(selected = next)
+    }
+
+    fun selectAll() = _state.update { current ->
+        current.copy(selected = current.results.map { it.path }.toSet())
+    }
+
+    fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
+
+    /** Copy into the shared clipboard, to be pasted from any folder. */
+    fun copySelection() {
+        clipboard.copy(_state.value.selected.toList())
+        _state.update { it.copy(selected = emptySet(), message = "Copied. Paste in any folder.") }
+    }
+
+    fun cutSelection() {
+        clipboard.cut(_state.value.selected.toList())
+        _state.update { it.copy(selected = emptySet(), message = "Cut. Paste in any folder.") }
+    }
+
+    /** Delete goes through the trash, so it is always undoable. */
+    fun deleteSelection() {
+        val paths = _state.value.selected.toList()
+        if (paths.isEmpty()) return
+
+        viewModelScope.launch {
+            runCatching { repository.moveToTrash(paths) }
+                .onSuccess { removeFromResults(paths, "${paths.size} moved to trash") }
+                .onFailure { e ->
+                    _state.update { it.copy(message = e.message ?: "Could not delete") }
+                }
+        }
+    }
+
+    fun rename(path: String, newName: String) {
+        viewModelScope.launch {
+            val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
+            if (ok) {
+                // The renamed file no longer matches what was searched for, so
+                // drop it rather than leaving a row with a stale name.
+                removeFromResults(listOf(path), null)
+            } else {
+                _state.update {
+                    it.copy(message = "A file named \"$newName\" already exists")
+                }
+            }
+        }
+    }
+
+    /**
+     * Drop paths from the visible results and from the cache.
+     *
+     * Without clearing them from the cache too, narrowing the query would
+     * bring deleted files back.
+     */
+    private fun removeFromResults(paths: List<String>, message: String?) {
+        val gone = paths.toSet()
+        synchronized(accumulatedLock) { accumulated.removeAll { it.path in gone } }
+        cache = cache?.let { c -> c.copy(entries = c.entries.filterNot { it.path in gone }) }
+        _state.update { current ->
+            current.copy(
+                results = current.results.filterNot { it.path in gone },
+                selected = emptySet(),
+                message = message,
+            )
+        }
+    }
+
+    fun consumeMessage() = _state.update { it.copy(message = null) }
+
     private companion object {
         /** Only before a disk walk. Narrowing from the cache never waits. */
         const val WALK_DEBOUNCE_MS = 220L
 
-        /** How many results the list shows. */
-        const val DISPLAY_LIMIT = 500
-
         /**
-         * How many a walk collects. Higher than the display limit so that a
-         * common letter still produces a cache worth narrowing from, and
-         * bounded so a device-wide match cannot grow without limit.
+         * How many matches a walk collects.
+         *
+         * All of them are displayed - the list is lazy, so rows cost nothing
+         * until scrolled to. The cap exists only so a query matching a whole
+         * device cannot grow without bound, and it doubles as the point beyond
+         * which the cache is considered incomplete.
          */
         const val CACHE_LIMIT: UInt = 20000u
     }

@@ -102,7 +102,7 @@ fun FileManagerRoot(
     val navController = rememberNavController()
 
     val factory = remember(volumes) {
-        ViewModelFactory(app.repository, volumes, primaryPath)
+        ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath)
     }
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
@@ -183,7 +183,7 @@ fun FileManagerRoot(
                 // than reusing the previous folder's state.
                 val vm: BrowserViewModel = viewModel(
                     key = path,
-                    factory = ViewModelFactory(app.repository, volumes, primaryPath, path),
+                    factory = ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath, path),
                 )
                 BrowserScreen(
                     viewModel = vm,
