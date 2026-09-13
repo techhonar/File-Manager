@@ -40,6 +40,7 @@ import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.data.StorageVolumes
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.screens.AboutScreen
 import com.filemanager.app.ui.screens.BrowserScreen
 import com.filemanager.app.ui.screens.HomeScreen
 import com.filemanager.app.ui.screens.PermissionScreen
@@ -73,6 +74,7 @@ private object Routes {
     const val STORAGE = "storage"
     const val TRASH = "trash"
     const val RECENT = "recent"
+    const val ABOUT = "about"
 
     /** Paths contain slashes, so they must be encoded into the route. */
     fun browse(path: String): String =
@@ -212,12 +214,22 @@ fun FileManagerRoot(
                         ?.let { name -> FileCategory.entries.firstOrNull { it.name == name } }
                         ?.let(vm::applyCategory)
                 }
-                SearchScreen(viewModel = vm, onOpenFile = openFile)
+                SearchScreen(
+                    viewModel = vm,
+                    onOpenFile = openFile,
+                    // Arriving from a category tile means the user wants to see
+                    // that category, not to type - so no keyboard.
+                    autoFocus = categoryName == null,
+                )
             }
 
             composable(Routes.STORAGE) {
                 val vm: StorageViewModel = viewModel(factory = factory)
                 StorageScreen(viewModel = vm, onOpenFile = openFile)
+            }
+
+            composable(Routes.ABOUT) {
+                AboutScreen(onNavigateBack = { navController.popBackStack() })
             }
 
             composable(Routes.TRASH) {
@@ -233,6 +245,7 @@ fun FileManagerRoot(
 private fun HomeOverflowMenu(
     onManageStorage: () -> Unit,
     onTrash: () -> Unit,
+    onAbout: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -247,6 +260,10 @@ private fun HomeOverflowMenu(
         DropdownMenuItem(
             text = { Text("Trash") },
             onClick = { onTrash(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("About") },
+            onClick = { onAbout(); expanded = false },
         )
     }
 }
