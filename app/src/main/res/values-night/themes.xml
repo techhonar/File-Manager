@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      The real theming happens in Compose (ui/theme/Theme.kt). This exists so
-      the splash window before Compose starts matches the app instead of
-      flashing white, and so the manifest has a theme to point at.
+      The dark parent matters as much as the background colour: inheriting the
+      Light theme leaves the framework drawing light-coloured decorations
+      behind a black app.
     -->
-    <style name="Theme.FileManager" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.FileManager" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@color/window_background</item>

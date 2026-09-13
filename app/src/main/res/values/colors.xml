@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#1565C0</color>
+    <!--
+      Painted behind the app before Compose draws, and visible through the
+      brief crossfade between screens. It must track the Compose background or
+      it flashes: this was pure white, so every navigation in dark mode showed
+      a white flicker.
+    -->
+    <color name="window_background">#F4F4F7</color>
 </resources>

@@ -78,24 +78,18 @@ class HomeViewModel(
 
         viewModelScope.launch {
             runCatching {
-                // The summary walks the tree once and returns per-category
-                // totals, so the tiles cost a single scan rather than one
-                // per category.
-                val summary = repository.summary(primaryPath, token)
+                // Deliberately no category summary here. It walked the entire
+                // device on every launch to fill `tiles`, and the home screen
+                // shows fixed tiles with no per-category figures - so the work
+                // was paid for and then thrown away. The storage screen still
+                // computes it, on demand, where it is actually displayed.
                 val recent = repository.recent(primaryPath, days = 7u, limit = 20u, cancel = token)
                 val trash = repository.trashBytes()
-                Triple(summary, recent, trash)
-            }.onSuccess { (summary, recent, trash) ->
-                val tiles = TILE_ORDER.mapNotNull { category ->
-                    summary.byCategory.firstOrNull { it.category == category }
-                        ?.let { CategoryTile(category, it.fileCount, it.bytes) }
-                }
+                recent to trash
+            }.onSuccess { (recent, trash) ->
                 _state.update {
                     it.copy(
-                        tiles = tiles,
                         recent = recent,
-                        usedBytes = summary.totalBytes - summary.freeBytes,
-                        totalBytes = summary.totalBytes,
                         trashBytes = trash,
                         isLoading = false,
                     )

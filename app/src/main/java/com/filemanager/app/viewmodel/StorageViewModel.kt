@@ -21,6 +21,8 @@ data class StorageState(
     val isLoading: Boolean = true,
     val isScanningDuplicates: Boolean = false,
     val duplicateProgress: String = "",
+    /** Live count while the storage walk runs, shown under the spinner. */
+    val scanProgress: String = "",
 ) {
     /** Bytes recoverable by removing every duplicate but one. */
     val reclaimable: ULong get() = duplicates.fold(0uL) { sum, group -> sum + group.wastedBytes }
@@ -45,15 +47,37 @@ class StorageViewModel(
         val token = CancelToken()
         scan = token
 
-        _state.update { it.copy(isLoading = true) }
+        _state.update { it.copy(isLoading = true, scanProgress = "") }
         viewModelScope.launch {
-            runCatching {
-                repository.summary(rootPath, token) to repository.largest(rootPath, 50u, token)
-            }.onSuccess { (summary, largest) ->
-                _state.update { it.copy(summary = summary, largest = largest, isLoading = false) }
-            }.onFailure {
-                _state.update { it.copy(isLoading = false) }
+            // A whole-device walk takes real time, so report progress rather
+            // than showing a spinner that says nothing for a minute.
+            val progress = object : ProgressListener {
+                override fun onProgress(done: ULong, total: ULong, currentPath: String) {
+                    _state.update { it.copy(scanProgress = "Scanned $done files") }
+                }
             }
+
+            runCatching { repository.analyze(rootPath, 50u, progress, token) }
+                .onSuccess { analysis ->
+                    _state.update {
+                        it.copy(
+                            summary = StorageSummary(
+                                totalBytes = analysis.totalBytes,
+                                freeBytes = analysis.freeBytes,
+                                scannedBytes = analysis.scannedBytes,
+                                byCategory = analysis.byCategory,
+                            ),
+                            largest = analysis.largest,
+                            isLoading = false,
+                            scanProgress = "",
+                        )
+                    }
+                }
+                .onFailure {
+                    // A cancelled scan lands here too, which is the expected
+                    // path when the user leaves the screen.
+                    _state.update { s -> s.copy(isLoading = false, scanProgress = "") }
+                }
         }
     }
 

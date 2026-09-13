@@ -10,6 +10,12 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -101,105 +107,123 @@ fun FileManagerRoot(
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.HOME,
+    // Surface, not a bare NavHost: during the transition between destinations
+    // both screens are briefly semi-transparent, and with nothing painted
+    // behind them the window background shows through as a flash.
+    Surface(
         modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
     ) {
-        composable(Routes.HOME) {
-            val vm: HomeViewModel = viewModel(factory = factory)
-            val state by vm.state.collectAsState()
+        NavHost(
+            navController = navController,
+            startDestination = Routes.HOME,
+            modifier = Modifier.fillMaxSize(),
+            // One UI slides laterally rather than cross-fading, which also
+            // avoids the transparent midpoint a fade goes through.
+            enterTransition = {
+                slideInHorizontally(initialOffsetX = { it / 6 }) + fadeIn(tween(220))
+            },
+            exitTransition = { fadeOut(tween(120)) },
+            popEnterTransition = { fadeIn(tween(180)) },
+            popExitTransition = {
+                slideOutHorizontally(targetOffsetX = { it / 6 }) + fadeOut(tween(160))
+            },
+        ) {
+            composable(Routes.HOME) {
+                val vm: HomeViewModel = viewModel(factory = factory)
+                val state by vm.state.collectAsState()
 
-            OneUiScreen(
-                title = "My Files",
-                actions = {
-                    IconButton(onClick = { navController.navigate(Routes.search()) }) {
-                        Icon(Icons.Default.Search, "Search")
-                    }
-                    HomeOverflowMenu(
-                        onManageStorage = { navController.navigate(Routes.STORAGE) },
-                        onTrash = { navController.navigate(Routes.TRASH) },
+                OneUiScreen(
+                    title = "My Files",
+                    actions = {
+                        IconButton(onClick = { navController.navigate(Routes.search()) }) {
+                            Icon(Icons.Default.Search, "Search")
+                        }
+                        HomeOverflowMenu(
+                            onManageStorage = { navController.navigate(Routes.STORAGE) },
+                            onTrash = { navController.navigate(Routes.TRASH) },
+                        )
+                    },
+                ) { padding ->
+                    HomeScreen(
+                        state = state,
+                        onCategoryClick = { category ->
+                            navController.navigate(Routes.search(category))
+                        },
+                        onDownloadsClick = {
+                            navController.navigate(Routes.browse(StorageVolumes.downloadsPath()))
+                        },
+                        onRecentClick = { navController.navigate(Routes.RECENT) },
+                        onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
+                        onTrashClick = { navController.navigate(Routes.TRASH) },
+                        onManageStorageClick = { navController.navigate(Routes.STORAGE) },
+                        onFileClick = openFile,
+                        modifier = Modifier.padding(padding),
                     )
-                },
-            ) { padding ->
-                HomeScreen(
-                    state = state,
-                    onCategoryClick = { category ->
-                        navController.navigate(Routes.search(category))
-                    },
-                    onDownloadsClick = {
-                        navController.navigate(Routes.browse(StorageVolumes.downloadsPath()))
-                    },
-                    onRecentClick = { navController.navigate(Routes.RECENT) },
-                    onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
-                    onTrashClick = { navController.navigate(Routes.TRASH) },
-                    onManageStorageClick = { navController.navigate(Routes.STORAGE) },
-                    onFileClick = openFile,
-                    modifier = Modifier.padding(padding),
+                }
+            }
+
+            composable(Routes.RECENT) {
+                val vm: HomeViewModel = viewModel(factory = factory)
+                val state by vm.state.collectAsState()
+
+                RecentScreen(
+                    entries = state.recent,
+                    isLoading = state.isLoading,
+                    onOpenFile = openFile,
+                    onNavigateBack = { navController.popBackStack() },
                 )
             }
-        }
 
-        composable(Routes.RECENT) {
-            val vm: HomeViewModel = viewModel(factory = factory)
-            val state by vm.state.collectAsState()
+            composable(Routes.BROWSE_PATTERN) { entry ->
+                val encoded = entry.arguments?.getString("path").orEmpty()
+                val path = URLDecoder.decode(encoded, Charsets.UTF_8.name())
 
-            RecentScreen(
-                entries = state.recent,
-                isLoading = state.isLoading,
-                onOpenFile = openFile,
-                onNavigateBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(Routes.BROWSE_PATTERN) { entry ->
-            val encoded = entry.arguments?.getString("path").orEmpty()
-            val path = URLDecoder.decode(encoded, Charsets.UTF_8.name())
-
-            // Keyed by path so each folder gets its own ViewModel rather
-            // than reusing the previous folder's state.
-            val vm: BrowserViewModel = viewModel(
-                key = path,
-                factory = ViewModelFactory(app.repository, volumes, primaryPath, path),
-            )
-            BrowserScreen(
-                viewModel = vm,
-                onOpenFile = openFile,
-                onNavigateBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(
-            route = Routes.SEARCH_PATTERN,
-            arguments = listOf(
-                navArgument("category") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-            ),
-        ) { entry ->
-            val vm: SearchViewModel = viewModel(factory = factory)
-            val categoryName = entry.arguments?.getString("category")
-
-            // Applied once per arrival, so re-tapping the same tile does
-            // not stack filters and the user can still clear it by hand.
-            LaunchedEffect(categoryName) {
-                categoryName
-                    ?.let { name -> FileCategory.entries.firstOrNull { it.name == name } }
-                    ?.let(vm::applyCategory)
+                // Keyed by path so each folder gets its own ViewModel rather
+                // than reusing the previous folder's state.
+                val vm: BrowserViewModel = viewModel(
+                    key = path,
+                    factory = ViewModelFactory(app.repository, volumes, primaryPath, path),
+                )
+                BrowserScreen(
+                    viewModel = vm,
+                    onOpenFile = openFile,
+                    onNavigateBack = { navController.popBackStack() },
+                )
             }
-            SearchScreen(viewModel = vm, onOpenFile = openFile)
-        }
 
-        composable(Routes.STORAGE) {
-            val vm: StorageViewModel = viewModel(factory = factory)
-            StorageScreen(viewModel = vm, onOpenFile = openFile)
-        }
+            composable(
+                route = Routes.SEARCH_PATTERN,
+                arguments = listOf(
+                    navArgument("category") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { entry ->
+                val vm: SearchViewModel = viewModel(factory = factory)
+                val categoryName = entry.arguments?.getString("category")
 
-        composable(Routes.TRASH) {
-            val vm: TrashViewModel = viewModel(factory = factory)
-            TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() })
+                // Applied once per arrival, so re-tapping the same tile does
+                // not stack filters and the user can still clear it by hand.
+                LaunchedEffect(categoryName) {
+                    categoryName
+                        ?.let { name -> FileCategory.entries.firstOrNull { it.name == name } }
+                        ?.let(vm::applyCategory)
+                }
+                SearchScreen(viewModel = vm, onOpenFile = openFile)
+            }
+
+            composable(Routes.STORAGE) {
+                val vm: StorageViewModel = viewModel(factory = factory)
+                StorageScreen(viewModel = vm, onOpenFile = openFile)
+            }
+
+            composable(Routes.TRASH) {
+                val vm: TrashViewModel = viewModel(factory = factory)
+                TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() })
+            }
         }
     }
 }

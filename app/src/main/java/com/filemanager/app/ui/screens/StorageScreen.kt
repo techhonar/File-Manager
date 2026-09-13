@@ -54,7 +54,22 @@ fun StorageScreen(
     OneUiScreen(title = "Storage", modifier = modifier) { padding ->
         if (state.isLoading && state.summary == null) {
             Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator()
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        text = "Measuring storage…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    // A whole-device walk takes real time; a count that keeps
+                    // moving is the difference between "working" and "hung".
+                    Text(
+                        text = state.scanProgress.ifEmpty { "Starting…" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             return@OneUiScreen
         }
