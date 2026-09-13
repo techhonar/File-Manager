@@ -1,6 +1,7 @@
 package com.filemanager.app
 
 import android.app.Application
+import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,10 @@ import kotlinx.coroutines.launch
 class FileManagerApp : Application() {
 
     val repository: FileRepository by lazy { FileRepository(this) }
+
+    /** Shared by every screen: see FileClipboard for why it cannot live in a
+     *  per-folder ViewModel. */
+    val clipboard: FileClipboard by lazy { FileClipboard() }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

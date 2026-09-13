@@ -144,15 +144,25 @@ fun SearchResultRow(
     entry: FileEntry,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isSelected: Boolean = false,
+    selectionMode: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick)
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .defaultMinSize(minHeight = OneUi.RowHeight)
             .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selectionMode) {
+            Checkbox(checked = isSelected, onCheckedChange = { onClick() })
+            Spacer(Modifier.width(8.dp))
+        }
         FileThumbnail(entry, size = 44)
         Spacer(Modifier.width(16.dp))
 

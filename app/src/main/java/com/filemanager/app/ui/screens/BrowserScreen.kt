@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
@@ -59,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.BrowserViewModel
@@ -85,11 +88,12 @@ fun BrowserScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val state by viewModel.state.collectAsState()
-    val clipboard by viewModel.clipboard.collectAsState()
+    val clipboard by viewModel.clipboardContents.collectAsState()
     val message by viewModel.messages.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
 
     var showNewFolderDialog by remember { mutableStateOf(false) }
+    var showNewFileDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
 
     LaunchedEffect(message) {
@@ -127,15 +131,13 @@ fun BrowserScreen(
             },
             bottomBar = {
                 SelectionActionBar(
-                    canRename = state.selected.size == 1,
                     onCopy = viewModel::copy,
                     onMove = viewModel::cut,
-                    onRename = {
-                        val path = state.selected.singleOrNull()
-                        renameTarget = state.entries.firstOrNull { it.path == path }
+                    onDelete = viewModel::deleteSelected,
+                    onRename = state.selected.singleOrNull()?.let { path ->
+                        { renameTarget = state.entries.firstOrNull { it.path == path } }
                     },
                     onCompress = viewModel::compressSelected,
-                    onDelete = viewModel::deleteSelected,
                 )
             },
         ) { padding ->
@@ -157,9 +159,10 @@ fun BrowserScreen(
                         Icon(Icons.Default.ContentPaste, "Paste")
                     }
                 }
-                IconButton(onClick = { showNewFolderDialog = true }) {
-                    Icon(Icons.Default.CreateNewFolder, "New folder")
-                }
+                CreateMenu(
+                    onNewFolder = { showNewFolderDialog = true },
+                    onNewFile = { showNewFileDialog = true },
+                )
                 SortMenu(current = state.sort, onSelect = viewModel::setSort)
                 OverflowMenu(
                     showHidden = state.showHidden,
@@ -186,6 +189,20 @@ fun BrowserScreen(
                 showNewFolderDialog = false
             },
             onDismiss = { showNewFolderDialog = false },
+        )
+    }
+
+    if (showNewFileDialog) {
+        TextInputDialog(
+            title = "New file",
+            label = "File name",
+            initial = "",
+            confirmLabel = "Create",
+            onConfirm = { name ->
+                viewModel.createFile(name)
+                showNewFileDialog = false
+            },
+            onDismiss = { showNewFileDialog = false },
         )
     }
 
@@ -269,63 +286,6 @@ private fun FileList(
     }
 }
 
-/**
- * The One UI selection bar: icon above label, spread across the bottom edge,
- * sitting above the navigation bar inset.
- */
-@Composable
-private fun SelectionActionBar(
-    canRename: Boolean,
-    onCopy: () -> Unit,
-    onMove: () -> Unit,
-    onRename: () -> Unit,
-    onCompress: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
-    ) {
-        Column {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                ActionItem(Icons.Default.ContentCopy, "Copy", onCopy)
-                ActionItem(Icons.Default.ContentCut, "Move", onMove)
-                ActionItem(Icons.Default.DriveFileRenameOutline, "Rename", onRename, canRename)
-                ActionItem(Icons.Default.FolderZip, "Zip", onCompress)
-                ActionItem(Icons.Default.Delete, "Delete", onDelete)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActionItem(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-) {
-    val tint = if (enabled) MaterialTheme.colorScheme.onSurface
-    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-
-    Column(
-        modifier = Modifier
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
-    }
-}
 
 /** Horizontally scrolling path, each segment tappable. */
 @Composable
@@ -356,6 +316,31 @@ private fun Breadcrumbs(crumbs: List<Pair<String, String>>, onNavigate: (String)
                 modifier = Modifier.clickable { onNavigate(path) }.padding(6.dp),
             )
         }
+    }
+}
+
+/** The "+" action: a folder or an empty file. */
+@Composable
+private fun CreateMenu(
+    onNewFolder: () -> Unit,
+    onNewFile: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }) {
+        Icon(Icons.Default.Add, "Create")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text("New folder") },
+            leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
+            onClick = { onNewFolder(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("New file") },
+            leadingIcon = { Icon(Icons.Default.NoteAdd, null) },
+            onClick = { onNewFile(); expanded = false },
+        )
     }
 }
 
