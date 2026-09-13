@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
 import androidx.compose.material3.Icon
@@ -101,8 +102,13 @@ fun SearchScreen(
         },
         actions = {
             if (state.inSelectionMode) {
-                IconButton(onClick = viewModel::selectAll) {
-                    Icon(Icons.Default.SelectAll, "Select all")
+                SelectAllToggle(
+                    allSelected = state.allSelected,
+                    onToggle = viewModel::toggleSelectAll,
+                )
+            } else if (state.results.isNotEmpty()) {
+                IconButton(onClick = viewModel::enterSelectionMode) {
+                    Icon(Icons.Default.SelectAll, "Select items")
                 }
             }
         },
