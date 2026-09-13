@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,12 +19,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.SdStorage
-import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -29,37 +36,42 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.filemanager.app.data.StorageVolume
-import com.filemanager.app.ui.components.CategoryCircle
-import com.filemanager.app.ui.components.OneUiGroup
-import com.filemanager.app.ui.components.OneUiRow
-import com.filemanager.app.ui.components.OneUiRowDivider
-import com.filemanager.app.ui.components.OneUiSectionHeader
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.color
 import com.filemanager.app.ui.components.icon
 import com.filemanager.app.ui.components.label
+import com.filemanager.app.ui.theme.CategoryColors
 import com.filemanager.app.ui.theme.OneUi
-import com.filemanager.app.viewmodel.CategoryTile
 import com.filemanager.app.viewmodel.HomeState
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.formatSize
 
 /**
- * The landing page, laid out the way One UI's My Files is: a storage summary
- * card, a grid of category circles, then rounded groups for volumes and
- * recent files.
+ * The landing page: Recent files, a category grid, per-volume storage gauges,
+ * then utilities.
+ *
+ * Deliberately plain rows on the page background rather than rounded grouped
+ * cards - only the category tiles get a raised surface. Section headings are
+ * large and white, which is what separates the sections visually.
  */
 @Composable
 fun HomeScreen(
     state: HomeState,
     onCategoryClick: (FileCategory) -> Unit,
+    onDownloadsClick: () -> Unit,
+    onRecentClick: () -> Unit,
     onVolumeClick: (StorageVolume) -> Unit,
     onTrashClick: () -> Unit,
+    onManageStorageClick: () -> Unit,
     onFileClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -68,182 +80,325 @@ fun HomeScreen(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
-        item { StorageSummaryCard(state) }
-
         item {
-            // Two rows of three circles. Built by hand rather than with a
-            // nested LazyVerticalGrid, which would need a fixed height and
-            // gains nothing for six fixed tiles.
-            Spacer(Modifier.height(8.dp))
+            HomeRow(
+                icon = Icons.Outlined.Schedule,
+                title = "Recent files",
+                onClick = onRecentClick,
+            )
+            InsetDivider()
+        }
+
+        item { SectionHeading("Categories") }
+        item {
             Column(
                 modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                state.tiles.chunked(3).forEach { row ->
-                    Row(Modifier.fillMaxWidth()) {
+                HOME_TILES.chunked(3).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         row.forEach { tile ->
-                            CategoryTileItem(
+                            CategoryTileCard(
                                 tile = tile,
-                                onClick = { onCategoryClick(tile.category) },
                                 modifier = Modifier.weight(1f),
+                                onClick = {
+                                    when (tile) {
+                                        is HomeTile.Category -> onCategoryClick(tile.category)
+                                        HomeTile.Downloads -> onDownloadsClick()
+                                    }
+                                },
                             )
                         }
-                        // Pad a short final row so the tiles keep their width
-                        // instead of stretching.
+                        // Pad a short final row so tiles keep their width
+                        // instead of stretching to fill it.
                         repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
         }
 
-        item { OneUiSectionHeader("Storage") }
+        item { SectionHeading("Storage") }
         item {
-            OneUiGroup {
-                state.volumes.forEachIndexed { index, volume ->
-                    OneUiRow(
-                        title = volume.name,
-                        subtitle = volume.path,
-                        icon = if (volume.isRemovable) Icons.Default.SdStorage
-                        else Icons.Default.Smartphone,
-                        onClick = { onVolumeClick(volume) },
-                        trailing = { ChevronIcon() },
-                    )
-                    if (index < state.volumes.lastIndex) OneUiRowDivider()
-                }
-                if (state.volumes.isNotEmpty()) OneUiRowDivider()
-                OneUiRow(
-                    title = "Trash",
-                    subtitle = if (state.trashBytes > 0uL) formatSize(state.trashBytes) else "Empty",
-                    icon = Icons.Default.Delete,
-                    iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    onClick = onTrashClick,
-                    trailing = { ChevronIcon() },
+            state.volumes.forEachIndexed { index, volume ->
+                val usage = state.volumeUsage[volume.path]
+                HomeRow(
+                    icon = if (volume.isRemovable) Icons.Outlined.SdCard
+                    else Icons.Outlined.Smartphone,
+                    title = volume.name,
+                    onClick = { onVolumeClick(volume) },
+                    trailing = {
+                        if (usage != null && usage.totalBytes > 0uL) {
+                            StorageGauge(usage.usedBytes, usage.totalBytes)
+                        }
+                    },
+                )
+                if (index < state.volumes.lastIndex) InsetDivider()
+            }
+            // One UI always shows the SD card slot, saying so when empty,
+            // rather than hiding the row and leaving the user to wonder.
+            if (state.volumes.none { it.isRemovable }) {
+                InsetDivider()
+                HomeRow(
+                    icon = Icons.Outlined.SdCard,
+                    title = "SD card",
+                    enabled = false,
+                    trailing = { StatusPill("Not inserted") },
                 )
             }
         }
 
+        item { SectionHeading("Utilities") }
+        item {
+            HomeRow(
+                icon = Icons.Outlined.Delete,
+                title = "Trash",
+                onClick = onTrashClick,
+                trailing = {
+                    if (state.trashBytes > 0uL) {
+                        Text(
+                            text = formatSize(state.trashBytes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+            )
+            InsetDivider()
+            HomeRow(
+                icon = Icons.Outlined.PieChart,
+                title = "Manage storage",
+                onClick = onManageStorageClick,
+            )
+        }
+
         if (state.recent.isNotEmpty()) {
-            item { OneUiSectionHeader("Recent files") }
-            items(state.recent, key = { it.path }) { entry ->
+            item { SectionHeading("Recent") }
+            items(state.recent.take(10), key = { it.path }) { entry ->
                 SearchResultRow(entry = entry, onClick = { onFileClick(entry) })
             }
         }
 
-        item { Spacer(Modifier.height(OneUi.SectionGap)) }
+        item { Spacer(Modifier.height(32.dp)) }
+    }
+}
+
+/** What a tile on the category grid can point at. */
+private sealed interface HomeTile {
+    data class Category(val category: FileCategory) : HomeTile
+    data object Downloads : HomeTile
+}
+
+/**
+ * Downloads sits among the file-type tiles even though it is a folder, not a
+ * type - it is the one location people reach for often enough to earn a tile.
+ */
+private val HOME_TILES = listOf(
+    HomeTile.Category(FileCategory.IMAGE),
+    HomeTile.Category(FileCategory.VIDEO),
+    HomeTile.Category(FileCategory.AUDIO),
+    HomeTile.Category(FileCategory.DOCUMENT),
+    HomeTile.Downloads,
+    HomeTile.Category(FileCategory.APK),
+)
+
+/**
+ * A grid tile: a coloured outline glyph over a caption, on a lifted card.
+ *
+ * Installation files show the letters "APK" rather than a glyph, which is how
+ * the real thing renders them and reads more clearly than an Android head.
+ */
+@Composable
+private fun CategoryTileCard(
+    tile: HomeTile,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val accent = when (tile) {
+        is HomeTile.Category -> tile.category.color()
+        HomeTile.Downloads -> CategoryColors.Downloads
+    }
+    val caption = when (tile) {
+        is HomeTile.Category -> tile.category.label()
+        HomeTile.Downloads -> "Downloads"
+    }
+
+    Box(
+        modifier = modifier
+            .aspectRatio(1.28f)
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (tile is HomeTile.Category && tile.category == FileCategory.APK) {
+                Text(
+                    text = "APK",
+                    color = accent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                )
+            } else {
+                val glyph: ImageVector = when (tile) {
+                    is HomeTile.Category -> tile.category.icon()
+                    HomeTile.Downloads -> Icons.Outlined.Download
+                }
+                Icon(
+                    imageVector = glyph,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = caption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 6.dp),
+            )
+        }
     }
 }
 
 /**
- * The storage card. One UI leads with the used figure in large type, then a
- * segmented bar, rather than a bare percentage.
+ * The capacity gauge on a storage row: a pill whose fill shows the used
+ * fraction, with the figures written across it.
  */
 @Composable
-private fun StorageSummaryCard(state: HomeState) {
-    Column(
+private fun StorageGauge(usedBytes: ULong, totalBytes: ULong) {
+    val fraction = (usedBytes.toDouble() / totalBytes.toDouble())
+        .coerceIn(0.0, 1.0)
+        .toFloat()
+
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = OneUi.ScreenPadding)
-            .clip(OneUi.CardShape)
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(24.dp),
+            .height(40.dp)
+            .defaultMinSize(minWidth = 150.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                text = formatSize(state.usedBytes),
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "of ${formatSize(state.totalBytes)} used",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // A single rounded track with one segment per category, sized by
-        // share of total capacity. Anything left over stays as track colour.
+        Box(
+            Modifier
+                .fillMaxWidth(fraction)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.primary),
+        )
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(10.dp)
-                .clip(RoundedCornerShape(5.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.Center,
         ) {
-            val total = state.totalBytes
-            if (total > 0uL) {
-                state.tiles.forEach { tile ->
-                    val fraction = tile.bytes.toDouble() / total.toDouble()
-                    // Compose rejects a zero weight, so skip slivers.
-                    if (fraction > 0.001) {
-                        Box(
-                            Modifier
-                                .weight(fraction.toFloat())
-                                .fillMaxSize()
-                                .background(tile.category.color()),
-                        )
-                    }
-                }
-                val used = state.tiles.sumOf { it.bytes.toDouble() }
-                val free = ((total.toDouble() - used) / total.toDouble()).coerceAtLeast(0.0)
-                if (free > 0.001) Box(Modifier.weight(free.toFloat()).fillMaxSize())
-            }
-        }
-
-        if (state.isLoading) {
-            Spacer(Modifier.height(12.dp))
             Text(
-                text = "Scanning…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = formatSize(usedBytes),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+            )
+            Text(
+                text = " / ${formatSize(totalBytes)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.75f),
             )
         }
     }
 }
 
-/** One category: filled circle, name, then size in small grey type. */
+/** Pill used where there are no figures to show, such as an empty SD slot. */
 @Composable
-private fun CategoryTileItem(
-    tile: CategoryTile,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun StatusPill(text: String) {
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .defaultMinSize(minWidth = 150.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
     ) {
-        CategoryCircle(
-            icon = tile.category.icon(),
-            tint = tile.category.color(),
-        )
-        Spacer(Modifier.height(10.dp))
         Text(
-            text = tile.category.label(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = formatSize(tile.bytes),
-            style = MaterialTheme.typography.labelSmall,
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
         )
     }
 }
 
+/** Large white section heading. */
 @Composable
-private fun ChevronIcon() {
-    Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(22.dp),
+private fun SectionHeading(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        fontSize = 21.sp,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(
+            start = OneUi.ScreenPadding,
+            end = OneUi.ScreenPadding,
+            top = 28.dp,
+            bottom = 16.dp,
+        ),
+    )
+}
+
+/** A plain row on the page: outline glyph, title, optional trailing slot. */
+@Composable
+private fun HomeRow(
+    icon: ImageVector,
+    title: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    val tint = if (enabled) MaterialTheme.colorScheme.onBackground
+    else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null && enabled) Modifier.clickable(onClick = onClick)
+                else Modifier
+            )
+            .defaultMinSize(minHeight = 72.dp)
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(26.dp),
+        )
+        Spacer(Modifier.width(24.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = tint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(12.dp))
+            trailing()
+        }
+    }
+}
+
+/** Divider inset to line up with the row text rather than the icon. */
+@Composable
+private fun InsetDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = OneUi.ScreenPadding + 50.dp, end = OneUi.ScreenPadding),
+        thickness = 1.dp,
+        color = MaterialTheme.colorScheme.outlineVariant,
     )
 }

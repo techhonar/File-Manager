@@ -20,10 +20,15 @@ data class CategoryTile(
     val bytes: ULong,
 )
 
+/** Capacity figures for one mounted volume, keyed by its path. */
+data class VolumeUsage(val usedBytes: ULong, val totalBytes: ULong)
+
 data class HomeState(
     val volumes: List<StorageVolume> = emptyList(),
     val tiles: List<CategoryTile> = emptyList(),
     val recent: List<FileEntry> = emptyList(),
+    /** Per-volume capacity, so each storage row can show its own gauge. */
+    val volumeUsage: Map<String, VolumeUsage> = emptyMap(),
     val usedBytes: ULong = 0uL,
     val totalBytes: ULong = 0uL,
     val trashBytes: ULong = 0uL,
@@ -55,6 +60,22 @@ class HomeViewModel(
         scan = token
 
         _state.update { it.copy(isLoading = true) }
+
+        // statvfs per volume is near-instant, so publish the storage gauges
+        // straight away rather than making them wait on the category scan.
+        viewModelScope.launch {
+            val usage = volumes.mapNotNull { volume ->
+                runCatching { repository.volumeStats(volume.path) }.getOrNull()
+                    ?.let { stats ->
+                        volume.path to VolumeUsage(
+                            usedBytes = stats.totalBytes - stats.freeBytes,
+                            totalBytes = stats.totalBytes,
+                        )
+                    }
+            }.toMap()
+            _state.update { it.copy(volumeUsage = usage) }
+        }
+
         viewModelScope.launch {
             runCatching {
                 // The summary walks the tree once and returns per-category
