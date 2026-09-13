@@ -3,7 +3,7 @@
 use std::cmp::Reverse;
 use crate::cancel::CancelToken;
 use crate::errors::Result;
-use crate::types::{FileCategory, FileEntry};
+use crate::types::{is_hidden_dir, FileCategory, FileEntry};
 use std::sync::Arc;
 use walkdir::WalkDir;
 
@@ -67,7 +67,12 @@ pub fn files_in_category(
 ) -> Result<Vec<FileEntry>> {
     let mut out = Vec::new();
 
-    for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+    let walk = WalkDir::new(&root)
+        .into_iter()
+        .filter_entry(|e| !is_hidden_dir(e))
+        .filter_map(|e| e.ok());
+
+    for entry in walk {
         if let Some(ref token) = cancel {
             token.check()?;
         }
@@ -100,7 +105,14 @@ pub fn recent_files(
         .saturating_sub(days as u64 * 24 * 60 * 60 * 1000);
     let mut out = Vec::new();
 
-    for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+    // Hidden directories are pruned, so the trash and thumbnail caches do not
+    // turn up among a user's recent files.
+    let walk = WalkDir::new(&root)
+        .into_iter()
+        .filter_entry(|e| !is_hidden_dir(e))
+        .filter_map(|e| e.ok());
+
+    for entry in walk {
         if let Some(ref token) = cancel {
             token.check()?;
         }
