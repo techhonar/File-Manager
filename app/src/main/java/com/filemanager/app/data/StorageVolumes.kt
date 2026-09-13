@@ -49,6 +49,17 @@ object StorageVolumes {
     fun primaryPath(): String = Environment.getExternalStorageDirectory().absolutePath
 
     /**
+     * The public Downloads folder, which the home screen gives its own tile.
+     *
+     * Falls back to the storage root if the device somehow lacks it, so the
+     * tile always opens somewhere rather than failing.
+     */
+    fun downloadsPath(): String {
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        return if (dir != null && dir.exists()) dir.absolutePath else primaryPath()
+    }
+
+    /**
      * Well-known folders shown as shortcuts, skipping any the device lacks.
      */
     fun standardFolders(): List<Pair<String, File>> = listOf(

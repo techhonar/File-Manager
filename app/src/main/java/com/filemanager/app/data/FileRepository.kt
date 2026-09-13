@@ -9,6 +9,7 @@ import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
+import uniffi.filemanager_core.FilesystemStats
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SortOptions
@@ -22,6 +23,7 @@ import uniffi.filemanager_core.copyPaths
 import uniffi.filemanager_core.deletePaths
 import uniffi.filemanager_core.dirSize
 import uniffi.filemanager_core.filesInCategory
+import uniffi.filemanager_core.filesystemStats
 import uniffi.filemanager_core.findDuplicates
 import uniffi.filemanager_core.formatSize
 import uniffi.filemanager_core.largestFiles
@@ -68,6 +70,15 @@ class FileRepository(
 
     suspend fun directorySize(path: String, cancel: CancelToken? = null): ULong =
         withContext(io) { dirSize(path, cancel) }
+
+    /**
+     * Capacity and free space of the filesystem holding [path].
+     *
+     * One statvfs call, unlike [summary] which walks the whole tree - cheap
+     * enough to run for every mounted volume when the home screen opens.
+     */
+    suspend fun volumeStats(path: String): FilesystemStats =
+        withContext(io) { filesystemStats(path) }
 
     suspend fun stats(paths: List<String>, cancel: CancelToken? = null): TreeStats =
         withContext(io) { treeStats(paths, cancel) }

@@ -20,29 +20,34 @@ val OneUiLightPrimaryContainer = Color(0xFFDCEAFB)
 val OneUiLightError = Color(0xFFD03A3A)
 
 // --- Dark ------------------------------------------------------------------
+// True black page with cards only slightly lifted off it, which is what the
+// dark One UI home screen looks like on an AMOLED panel.
 val OneUiDarkBackground = Color(0xFF000000)
-val OneUiDarkSurface = Color(0xFF1B1B1E)
-val OneUiDarkSurfaceVariant = Color(0xFF2A2B2F)
-val OneUiDarkOnSurface = Color(0xFFF2F2F4)
-val OneUiDarkOnSurfaceVariant = Color(0xFF9EA1A9)
-val OneUiDarkOutline = Color(0xFF303136)
-val OneUiDarkPrimary = Color(0xFF6BB0FF)
-val OneUiDarkPrimaryContainer = Color(0xFF123B66)
+val OneUiDarkSurface = Color(0xFF161618)
+val OneUiDarkSurfaceVariant = Color(0xFF232326)
+val OneUiDarkOnSurface = Color(0xFFFFFFFF)
+val OneUiDarkOnSurfaceVariant = Color(0xFF9C9CA1)
+val OneUiDarkOutline = Color(0xFF2B2B2E)
+val OneUiDarkPrimary = Color(0xFF3A82F7)
+val OneUiDarkPrimaryContainer = Color(0xFF14243D)
 val OneUiDarkError = Color(0xFFFF8A80)
 
 /**
- * One accent per file category, used everywhere that category appears: the
- * home tiles, list icons, the storage bar and the search filter chips. Kept
- * saturated because One UI shows them as solid filled circles rather than
- * tinted outlines.
+ * One accent per category, used everywhere that category appears: the home
+ * tiles, list icons, the storage bar and the search filter chips.
+ *
+ * These are drawn as coloured *outline* glyphs on a neutral card, not as
+ * white glyphs on a filled circle - which is what the category grid actually
+ * looks like.
  */
 object CategoryColors {
-    val Image = Color(0xFF21A366)
-    val Video = Color(0xFFE8453C)
-    val Audio = Color(0xFFF29200)
-    val Document = Color(0xFF2E7CF6)
-    val Archive = Color(0xFF9B51E0)
-    val Apk = Color(0xFF00A9B7)
-    val Directory = Color(0xFF5B6B7C)
-    val Other = Color(0xFF8A8F98)
+    val Image = Color(0xFFF25C7F)
+    val Video = Color(0xFFA855F7)
+    val Audio = Color(0xFF6D7FF0)
+    val Document = Color(0xFFF0A63C)
+    val Downloads = Color(0xFF2ECFB4)
+    val Apk = Color(0xFFA8E05F)
+    val Archive = Color(0xFF7C9BF5)
+    val Directory = Color(0xFF9C9CA1)
+    val Other = Color(0xFF9C9CA1)
 }
