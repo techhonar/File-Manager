@@ -144,6 +144,7 @@ fun FileManagerRoot(
                         HomeOverflowMenu(
                             onManageStorage = { navController.navigate(Routes.STORAGE) },
                             onTrash = { navController.navigate(Routes.TRASH) },
+                            onAbout = { navController.navigate(Routes.ABOUT) },
                         )
                     },
                 ) { padding ->
