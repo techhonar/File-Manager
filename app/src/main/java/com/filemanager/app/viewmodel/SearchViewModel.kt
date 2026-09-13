@@ -27,8 +27,21 @@ data class SearchState(
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     val message: String? = null,
+    /**
+     * Set when selection is entered deliberately rather than by long-press.
+     *
+     * Without it, selection mode could only be derived from something already
+     * being selected - so "select all" was unreachable until the user had
+     * first long-pressed a file, which is the wrong way round.
+     */
+    val selectionActive: Boolean = false,
 ) {
-    val inSelectionMode: Boolean get() = selected.isNotEmpty()
+    val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
+
+    /** True when every visible item is ticked, so the control can offer the
+     *  opposite action. */
+    val allSelected: Boolean
+        get() = results.isNotEmpty() && selected.size == results.size
 }
 
 /**
@@ -256,11 +269,20 @@ class SearchViewModel(
         current.copy(selected = next)
     }
 
-    fun selectAll() = _state.update { current ->
-        current.copy(selected = current.results.map { it.path }.toSet())
+    /** Enter selection mode with nothing ticked, from the overflow menu. */
+    fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
+
+    /** Select everything, or clear it if everything is already selected. */
+    fun toggleSelectAll() = _state.update { current ->
+        if (current.allSelected) {
+            current.copy(selected = emptySet())
+        } else {
+            current.copy(selected = current.results.map { it.path }.toSet())
+        }
     }
 
-    fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
+    fun clearSelection() =
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
     /** Copy into the shared clipboard, to be pasted from any folder. */
     fun copySelection() {

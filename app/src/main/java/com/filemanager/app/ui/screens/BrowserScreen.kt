@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
 import com.filemanager.app.ui.theme.OneUi
@@ -120,9 +121,10 @@ fun BrowserScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = viewModel::selectAll) {
-                            Icon(Icons.Default.SelectAll, "Select all")
-                        }
+                        SelectAllToggle(
+                            allSelected = state.allSelected,
+                            onToggle = viewModel::toggleSelectAll,
+                        )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -168,6 +170,7 @@ fun BrowserScreen(
                     showHidden = state.showHidden,
                     onToggleHidden = viewModel::toggleHidden,
                     onToggleGrid = viewModel::toggleGrid,
+                    onSelectItems = viewModel::enterSelectionMode,
                 )
             },
         ) { padding ->
@@ -382,11 +385,19 @@ private fun OverflowMenu(
     showHidden: Boolean,
     onToggleHidden: () -> Unit,
     onToggleGrid: () -> Unit,
+    onSelectItems: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, "More") }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        // Selection could previously only be reached by long-pressing a file,
+        // which left no way to simply select everything.
+        DropdownMenuItem(
+            text = { Text("Select items") },
+            leadingIcon = { Icon(Icons.Default.SelectAll, null) },
+            onClick = { onSelectItems(); expanded = false },
+        )
         DropdownMenuItem(
             text = { Text(if (showHidden) "Hide hidden files" else "Show hidden files") },
             onClick = { onToggleHidden(); expanded = false },
