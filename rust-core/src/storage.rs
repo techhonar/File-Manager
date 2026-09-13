@@ -1,10 +1,13 @@
 //! Storage analysis: the usage breakdown and largest-files screens.
 
 use std::cmp::Reverse;
-use crate::cancel::CancelToken;
+use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::{FileError, Result};
 use crate::types::{FileCategory, FileEntry};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::path::PathBuf;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -161,4 +164,185 @@ pub fn largest_files(
         top.truncate(limit);
     }
     Ok(top)
+}
+
+/// Everything the storage screen needs, from one walk.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct StorageAnalysis {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub scanned_bytes: u64,
+    pub file_count: u64,
+    pub by_category: Vec<CategoryUsage>,
+    pub largest: Vec<FileEntry>,
+}
+
+/// The per-category totals plus the biggest files, gathered in a single
+/// parallel pass.
+///
+/// This replaces calling `storage_summary` and `largest_files` one after the
+/// other. Those walk the entire device once each, single threaded, so the
+/// screen paid for two full traversals back to back - on a full 128 GB phone
+/// that is the difference between a wait and a very long wait. Here every
+/// top-level directory is walked on its own rayon thread, each keeping its own
+/// counters and its own bounded top-N list, and the partials are merged at the
+/// end.
+#[uniffi::export]
+pub fn analyze_storage(
+    root: String,
+    largest_limit: u32,
+    listener: Option<Arc<dyn ProgressListener>>,
+    cancel: Option<Arc<CancelToken>>,
+) -> Result<StorageAnalysis> {
+    let fs_stats = filesystem_stats(root.clone())?;
+    let limit = largest_limit.max(1) as usize;
+
+    let children: Vec<PathBuf> = match std::fs::read_dir(&root) {
+        Ok(read) => read.flatten().map(|e| e.path()).collect(),
+        Err(e) => return Err(FileError::from_io(e, std::path::Path::new(&root))),
+    };
+
+    let scanned = AtomicU64::new(0);
+
+    // One partial per top-level directory, merged below.
+    let partials: Vec<Partial> = children
+        .par_iter()
+        .map(|child| {
+            let mut partial = Partial::new(limit);
+            if cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
+                return partial;
+            }
+
+            // WalkDir always follows its ROOT entry, even with
+            // follow_links(false) - that flag only governs links found during
+            // the walk. Handing it a symlinked directory would therefore
+            // descend into the target and count it twice: on this machine
+            // /usr/lib64 -> lib alone added 136,270 duplicate entries. The
+            // sequential walk never does that, because there the symlink is an
+            // entry inside the walk rather than its root, so match it by
+            // counting the link itself and not descending.
+            let Ok(link_meta) = std::fs::symlink_metadata(child) else {
+                return partial;
+            };
+            if link_meta.is_symlink() {
+                partial.add(child, &link_meta, limit);
+                return partial;
+            }
+
+            for entry in WalkDir::new(child).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+                if cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
+                    break;
+                }
+                let Ok(meta) = entry.metadata() else { continue };
+                if meta.is_dir() {
+                    continue;
+                }
+
+                // Report every 4096 files. Often enough that the screen looks
+                // alive, rare enough that the hop into the JVM is not itself
+                // a cost.
+                let n = scanned.fetch_add(1, Ordering::Relaxed);
+                if n % 4096 == 0 {
+                    if let Some(ref l) = listener {
+                        l.on_progress(n, 0, entry.path().to_string_lossy().into_owned());
+                    }
+                }
+
+                partial.add(entry.path(), &meta, limit);
+            }
+            partial
+        })
+        .collect();
+
+    if let Some(token) = cancel {
+        token.check()?;
+    }
+
+    let mut merged = Partial::new(limit);
+    for partial in partials {
+        merged.merge(partial, limit);
+    }
+
+    let mut by_category: Vec<CategoryUsage> = CATEGORY_ORDER
+        .iter()
+        .enumerate()
+        .map(|(i, category)| CategoryUsage {
+            category: *category,
+            bytes: merged.bytes[i],
+            file_count: merged.counts[i],
+        })
+        .collect();
+    by_category.sort_by_key(|c| Reverse(c.bytes));
+
+    Ok(StorageAnalysis {
+        total_bytes: fs_stats.total_bytes,
+        free_bytes: fs_stats.free_bytes,
+        scanned_bytes: merged.scanned_bytes,
+        file_count: merged.counts.iter().sum(),
+        by_category,
+        largest: merged.largest,
+    })
+}
+
+/// Categories in a fixed order, so the walk can index arrays instead of
+/// allocating or hashing per file.
+const CATEGORY_ORDER: [FileCategory; 7] = [
+    FileCategory::Image,
+    FileCategory::Video,
+    FileCategory::Audio,
+    FileCategory::Document,
+    FileCategory::Archive,
+    FileCategory::Apk,
+    FileCategory::Other,
+];
+
+/// One thread's share of the results.
+struct Partial {
+    bytes: [u64; 7],
+    counts: [u64; 7],
+    scanned_bytes: u64,
+    /// Biggest first, never longer than the caller's limit.
+    largest: Vec<FileEntry>,
+}
+
+impl Partial {
+    fn new(limit: usize) -> Self {
+        Partial {
+            bytes: [0; 7],
+            counts: [0; 7],
+            scanned_bytes: 0,
+            largest: Vec::with_capacity(limit + 1),
+        }
+    }
+
+    fn add(&mut self, path: &std::path::Path, meta: &std::fs::Metadata, limit: usize) {
+        let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        let category = crate::categories::categorize(name.as_ref());
+        if let Some(i) = CATEGORY_ORDER.iter().position(|c| *c == category) {
+            self.bytes[i] += meta.len();
+            self.counts[i] += 1;
+        }
+        self.scanned_bytes += meta.len();
+
+        // Skip anything that cannot beat the current cut-off, so the common
+        // case costs one comparison rather than building a FileEntry.
+        if self.largest.len() == limit && meta.len() <= self.largest[limit - 1].size {
+            return;
+        }
+        let item = FileEntry::from_metadata(path, meta);
+        let pos = self.largest.partition_point(|e| e.size > item.size);
+        self.largest.insert(pos, item);
+        self.largest.truncate(limit);
+    }
+
+    fn merge(&mut self, other: Partial, limit: usize) {
+        for i in 0..7 {
+            self.bytes[i] += other.bytes[i];
+            self.counts[i] += other.counts[i];
+        }
+        self.scanned_bytes += other.scanned_bytes;
+        self.largest.extend(other.largest);
+        self.largest.sort_by_key(|e| Reverse(e.size));
+        self.largest.truncate(limit);
+    }
 }

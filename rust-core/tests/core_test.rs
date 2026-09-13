@@ -7,7 +7,7 @@ use filemanager_core::categories::{categorize, files_in_category};
 use filemanager_core::dedup::find_duplicates;
 use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tree_stats};
 use filemanager_core::search::{search, SearchFilter};
-use filemanager_core::storage::{largest_files, storage_summary};
+use filemanager_core::storage::{analyze_storage, largest_files, storage_summary};
 use filemanager_core::trash::{trash_list, trash_move, trash_restore, trash_purge_expired};
 use filemanager_core::types::{FileCategory, SortKey, SortOptions};
 use filemanager_core::format_size;
@@ -319,4 +319,81 @@ fn formats_sizes_for_display() {
 fn missing_directory_is_a_typed_error() {
     let err = list_dir("/definitely/not/here".into(), false, sort_by_name()).unwrap_err();
     assert!(matches!(err, filemanager_core::errors::FileError::NotFound { .. }));
+}
+
+#[test]
+fn single_pass_analysis_agrees_with_the_two_separate_walks() {
+    // analyze_storage exists to replace storage_summary + largest_files with
+    // one parallel walk. It is only worth having if it returns the same
+    // answers, so check it against both.
+    let tree = TempTree::new("analyze");
+    tree.file("pic.jpg", &[0u8; 3000]);
+    tree.file("nested/movie.mp4", &[0u8; 9000]);
+    tree.file("nested/deep/doc.pdf", &[0u8; 1000]);
+    tree.file("song.mp3", &[0u8; 5000]);
+
+    let summary = storage_summary(tree.str(), None).unwrap();
+    let biggest = largest_files(tree.str(), 3, None).unwrap();
+    let analysis = analyze_storage(tree.str(), 3, None, None).unwrap();
+
+    assert_eq!(analysis.scanned_bytes, summary.scanned_bytes);
+    assert_eq!(analysis.total_bytes, summary.total_bytes);
+    assert_eq!(analysis.file_count, 4);
+    // Not compared against the summary's figure: free space is live, and the
+    // two calls run statvfs at different moments, so anything else writing to
+    // the disk makes them disagree. Capacity is stable, so that one is checked
+    // exactly above.
+    assert!(analysis.free_bytes > 0);
+    assert!(analysis.free_bytes <= analysis.total_bytes);
+
+    let one: Vec<_> = analysis.by_category.iter()
+        .map(|c| (c.category, c.bytes, c.file_count)).collect();
+    let two: Vec<_> = summary.by_category.iter()
+        .map(|c| (c.category, c.bytes, c.file_count)).collect();
+    assert_eq!(one, two, "category breakdown must match the sequential walk");
+
+    let names: Vec<_> = analysis.largest.iter().map(|e| e.name.as_str()).collect();
+    let expected: Vec<_> = biggest.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, expected, "largest files must match, and stay biggest first");
+    assert_eq!(names, vec!["movie.mp4", "song.mp3", "pic.jpg"]);
+}
+
+#[test]
+fn analysis_walks_every_top_level_directory() {
+    // The walk is parallel across the root's children, so a file under one
+    // child must not be missed because another child finished first.
+    let tree = TempTree::new("analyze-parallel");
+    for i in 1..=12u64 {
+        tree.file(&format!("dir{i}/file.bin"), &vec![1u8; (100 * i) as usize]);
+    }
+
+    let analysis = analyze_storage(tree.str(), 50, None, None).unwrap();
+    assert_eq!(analysis.file_count, 12, "every child directory must be visited");
+    let expected: u64 = (1..=12u64).map(|i| 100 * i).sum();
+    assert_eq!(analysis.scanned_bytes, expected);
+    assert_eq!(analysis.largest.len(), 12);
+    // Biggest first across all threads, not merely within one.
+    assert_eq!(analysis.largest[0].size, 1200);
+}
+
+#[test]
+fn analysis_does_not_descend_into_symlinked_top_level_directories() {
+    // WalkDir always follows its root entry, even with follow_links(false),
+    // so walking each child of the root separately would descend into a
+    // symlinked directory and count its target twice. Against /usr, where
+    // lib64 -> lib, that inflated the total by 136,270 entries.
+    let tree = TempTree::new("analyze-symlink");
+    tree.file("real/a.bin", &[0u8; 4000]);
+    tree.file("real/b.bin", &[0u8; 6000]);
+    std::os::unix::fs::symlink(tree.path().join("real"), tree.path().join("alias")).unwrap();
+
+    let analysis = analyze_storage(tree.str(), 10, None, None).unwrap();
+    let summary = storage_summary(tree.str(), None).unwrap();
+
+    // Two real files plus the symlink itself, counted as one entry.
+    assert_eq!(analysis.file_count, 3, "the link target must not be walked again");
+    assert_eq!(
+        analysis.scanned_bytes, summary.scanned_bytes,
+        "must agree with the sequential walk, which never follows the link",
+    );
 }
