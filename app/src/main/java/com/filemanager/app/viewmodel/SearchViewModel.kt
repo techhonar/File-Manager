@@ -22,9 +22,17 @@ data class SearchState(
     val categories: Set<FileCategory> = emptySet(),
     val results: List<FileEntry> = emptyList(),
     val isSearching: Boolean = false,
-    /** Files examined so far, for the "scanned 12,480 files" line. */
-    val scanned: ULong = 0uL,
     val hasSearched: Boolean = false,
+)
+
+/**
+ * Results of a completed walk, kept so that extending the query can be
+ * answered without touching the disk again.
+ */
+private data class SearchCache(
+    val query: String,
+    val categories: Set<FileCategory>,
+    val entries: List<FileEntry>,
 )
 
 class SearchViewModel(
@@ -39,23 +47,40 @@ class SearchViewModel(
     private var cancelToken: CancelToken? = null
 
     /**
-     * Which search results belong to.
+     * Which search a batch belongs to.
      *
      * A cancelled walk does not stop instantly - its threads finish the file
-     * they are on and may deliver another batch or two. Without this, those
-     * late results from the previous query would land in the new query's list.
+     * they are on and may deliver another batch - so without this, late
+     * results from the previous query would land in the new query's list.
      */
     private val generation = AtomicLong(0)
 
+    /** Everything the last completed walk found, for narrowing. Null if the
+     *  last walk was cancelled or hit the cap, in which case it is unusable. */
+    private var cache: SearchCache? = null
+
+    /** Accumulates a running walk's results, which the cache is built from. */
+    private val accumulated = mutableListOf<FileEntry>()
+    private val accumulatedLock = Any()
+
     /**
-     * Debounced: a search starts 300 ms after the user stops typing.
+     * Every keystroke searches, as it should - but most keystrokes never
+     * touch the disk.
      *
-     * Without it every keystroke kicks off a full-device walk that is then
-     * thrown away, so the phone gets hot and the results still lag the text.
+     * Substring matching only ever narrows: a name containing "mad" must also
+     * contain "ma", so the results for "mad" are a subset of the results for
+     * "ma". Extending the query therefore just filters what is already in
+     * hand, which is instant and needs no walk at all. Only a query that is
+     * not an extension of the cached one - the first character, or deleting
+     * past it - has to go to disk.
      */
     fun onQueryChange(query: String) {
         _state.update { it.copy(query = query) }
-        scheduleSearch()
+
+        if (narrowFromCache(query)) {
+            return
+        }
+        scheduleWalk()
     }
 
     fun toggleCategory(category: FileCategory) {
@@ -64,7 +89,10 @@ class SearchViewModel(
             if (!next.add(category)) next.remove(category)
             current.copy(categories = next)
         }
-        scheduleSearch()
+        // Changing the category filter can widen the set, so the cache cannot
+        // answer it.
+        cache = null
+        scheduleWalk()
     }
 
     /**
@@ -76,19 +104,48 @@ class SearchViewModel(
      */
     fun applyCategory(category: FileCategory) {
         _state.update { it.copy(categories = setOf(category)) }
-        scheduleSearch()
+        cache = null
+        scheduleWalk()
     }
 
     fun clear() {
         cancelSearch()
+        cache = null
         _state.value = SearchState()
     }
 
-    private fun scheduleSearch() {
+    /**
+     * Answer from the cache if the new query only narrows it.
+     *
+     * Returns false when a real walk is needed.
+     */
+    private fun narrowFromCache(query: String): Boolean {
+        val cached = cache ?: return false
+        val current = _state.value
+
+        if (query.isBlank()) return false
+        if (cached.categories != current.categories) return false
+        // Only an extension is safe. "ma" -> "mad" narrows; "mad" -> "max"
+        // or "mad" -> "m" could both match files the cache never held.
+        if (!query.startsWith(cached.query, ignoreCase = true)) return false
+
+        // No walk is running, so nothing can arrive late and overwrite this.
+        cancelSearch()
+
+        val filtered = cached.entries
+            .filter { it.name.contains(query, ignoreCase = true) }
+            .take(DISPLAY_LIMIT)
+
+        _state.update {
+            it.copy(results = filtered, isSearching = false, hasSearched = true)
+        }
+        return true
+    }
+
+    private fun scheduleWalk() {
         cancelSearch()
 
         val current = _state.value
-        // Nothing to search for: no text and no category filter.
         if (current.query.isBlank() && current.categories.isEmpty()) {
             _state.update {
                 it.copy(results = emptyList(), hasSearched = false, isSearching = false)
@@ -97,41 +154,48 @@ class SearchViewModel(
         }
 
         val mine = generation.incrementAndGet()
+        synchronized(accumulatedLock) { accumulated.clear() }
 
         searchJob = viewModelScope.launch {
-            delay(DEBOUNCE_MS)
+            // A short pause only before a walk. Narrowing above is instant and
+            // never waits; this exists so that typing three characters from
+            // empty starts one walk rather than three that cancel each other.
+            delay(WALK_DEBOUNCE_MS)
 
             val token = CancelToken()
             cancelToken = token
-            _state.update {
-                it.copy(isSearching = true, scanned = 0uL, results = emptyList())
-            }
+            _state.update { it.copy(isSearching = true, results = emptyList()) }
 
-            // Results are shown as they are found rather than after the walk
-            // finishes, which on a full device is the difference between a
-            // list that fills in and a spinner that sits there for a minute.
             val sink = object : SearchSink {
                 override fun onBatch(entries: List<FileEntry>) {
                     if (generation.get() != mine) return
-                    _state.update { state ->
-                        // Kept newest-first as results arrive. The walk is
-                        // parallel, so batches turn up in no useful order and
-                        // an unsorted list would visibly reshuffle itself.
-                        val merged = (state.results + entries)
-                            .sortedByDescending { it.modifiedMs }
-                            .take(RESULT_LIMIT.toInt())
-                        state.copy(results = merged, hasSearched = true)
+
+                    val snapshot = synchronized(accumulatedLock) {
+                        accumulated += entries
+                        // Newest first. The walk is parallel, so batches turn
+                        // up in no useful order and an unsorted list would
+                        // visibly reshuffle while the user is reading it.
+                        accumulated.sortedByDescending { it.modifiedMs }
+                            .take(DISPLAY_LIMIT)
                     }
+                    _state.update { it.copy(results = snapshot, hasSearched = true) }
                 }
 
-                override fun onScanned(count: ULong) {
-                    if (generation.get() != mine) return
-                    _state.update { it.copy(scanned = count) }
-                }
+                override fun onScanned(count: ULong) = Unit
 
                 override fun onFinished(matched: ULong, cancelled: Boolean) {
                     if (generation.get() != mine) return
                     _state.update { it.copy(isSearching = false, hasSearched = true) }
+
+                    // Only a walk that ran to completion, and was not cut off
+                    // by the cap, holds every match - anything else would make
+                    // later narrowing silently drop results.
+                    val full = synchronized(accumulatedLock) { accumulated.toList() }
+                    cache = if (!cancelled && full.size < CACHE_LIMIT.toInt()) {
+                        SearchCache(current.query, current.categories, full)
+                    } else {
+                        null
+                    }
                 }
             }
 
@@ -142,7 +206,10 @@ class SearchViewModel(
                 maxSize = null,
                 modifiedAfter = null,
                 includeHidden = false,
-                limit = RESULT_LIMIT,
+                // Collect well beyond what is displayed, so the cache is
+                // usable for narrowing rather than being truncated on any
+                // common letter.
+                limit = CACHE_LIMIT,
             )
 
             runCatching { repository.searchStreaming(roots, filter, sink, token) }
@@ -155,8 +222,8 @@ class SearchViewModel(
     }
 
     private fun cancelSearch() {
-        // Bumping the generation first means any batch still in flight is
-        // discarded rather than racing the new search's results.
+        // Bump first: any batch still in flight is then discarded rather than
+        // racing the next search's results.
         generation.incrementAndGet()
         cancelToken?.cancel()
         searchJob?.cancel()
@@ -168,7 +235,17 @@ class SearchViewModel(
     }
 
     private companion object {
-        const val DEBOUNCE_MS = 300L
-        const val RESULT_LIMIT: UInt = 500u
+        /** Only before a disk walk. Narrowing from the cache never waits. */
+        const val WALK_DEBOUNCE_MS = 220L
+
+        /** How many results the list shows. */
+        const val DISPLAY_LIMIT = 500
+
+        /**
+         * How many a walk collects. Higher than the display limit so that a
+         * common letter still produces a cache worth narrowing from, and
+         * bounded so a device-wide match cannot grow without limit.
+         */
+        const val CACHE_LIMIT: UInt = 20000u
     }
 }

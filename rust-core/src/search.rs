@@ -11,6 +11,7 @@ use crate::types::{sort_entries, FileCategory, FileEntry, SortOptions};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 /// Everything the search screen's filter sheet can set.
@@ -138,6 +139,19 @@ pub fn search(
 /// costs nothing measurable.
 const BATCH_SIZE: usize = 64;
 
+/// Hand over a partial batch after this long, however few matches it holds.
+///
+/// Size alone is not enough. A narrow query like "madison" might match three
+/// files on the whole device, which never fills a batch - so those three would
+/// sit in the buffer until the walk ended, and the screen would show nothing
+/// until every file had been examined. That is precisely the behaviour
+/// streaming exists to avoid.
+const FLUSH_AFTER: Duration = Duration::from_millis(120);
+
+/// How often to check the clock, in files examined. Reading it per file would
+/// be wasted work on a tree of millions.
+const CLOCK_CHECK_INTERVAL: u64 = 64;
+
 /// How often to report files examined, in files.
 const SCAN_REPORT_INTERVAL: u64 = 512;
 
@@ -183,6 +197,8 @@ pub fn search_streaming(
 
     roots.par_iter().for_each(|root| {
         let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH_SIZE);
+        let mut last_flush = Instant::now();
+        let mut since_clock_check = 0u64;
 
         for entry in WalkDir::new(root).follow_links(false).into_iter() {
             if cancel.as_ref().is_some_and(|t| t.is_cancelled())
@@ -201,6 +217,20 @@ pub fn search_streaming(
                 sink.on_scanned(n);
             }
 
+            // Time-based flush, checked while scanning rather than only on a
+            // match: a rare query would otherwise leave its handful of results
+            // sitting in the buffer for the rest of the walk.
+            since_clock_check += 1;
+            if since_clock_check >= CLOCK_CHECK_INTERVAL {
+                since_clock_check = 0;
+                if !batch.is_empty() && last_flush.elapsed() >= FLUSH_AFTER {
+                    matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                    sink.on_batch(std::mem::take(&mut batch));
+                    batch.reserve(BATCH_SIZE);
+                    last_flush = Instant::now();
+                }
+            }
+
             let item = FileEntry::from_metadata(entry.path(), &meta);
             if !filter.matches(&item) {
                 continue;
@@ -212,6 +242,7 @@ pub fn search_streaming(
                     + batch.len() as u64;
                 sink.on_batch(std::mem::take(&mut batch));
                 batch.reserve(BATCH_SIZE);
+                last_flush = Instant::now();
                 if count >= limit {
                     hit_limit.store(true, Ordering::Relaxed);
                     break;

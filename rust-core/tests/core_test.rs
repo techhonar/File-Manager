@@ -507,3 +507,58 @@ fn streaming_search_reports_cancellation() {
     let (_, cancelled) = sink.finished.lock().unwrap().expect("on_finished must still be called");
     assert!(cancelled, "a cancelled walk must say so, not look like a normal end");
 }
+
+#[test]
+fn rare_matches_arrive_during_the_walk_not_at_the_end() {
+    // The reported bug: searching for a name only a few files carry showed
+    // nothing until the whole device had been scanned. Matches never filled a
+    // 64-item batch, so they sat in the buffer until the walk finished.
+    //
+    // Build a tree where the only matches are found early, followed by a lot
+    // of non-matching files, and assert the matches were handed over before
+    // the walk ended.
+    let tree = TempTree::new("stream-rare");
+    tree.file("aaa-madison.txt", b"x");
+    tree.file("aab-madison.txt", b"x");
+    for i in 0..20_000 {
+        tree.file(&format!("zzz/filler{i}.bin"), b"x");
+    }
+
+    struct TimingSink {
+        first_batch_at: std::sync::Mutex<Option<std::time::Instant>>,
+        finished_at: std::sync::Mutex<Option<std::time::Instant>>,
+        names: std::sync::Mutex<Vec<String>>,
+    }
+    impl SearchSink for TimingSink {
+        fn on_batch(&self, entries: Vec<filemanager_core::types::FileEntry>) {
+            let mut first = self.first_batch_at.lock().unwrap();
+            if first.is_none() {
+                *first = Some(std::time::Instant::now());
+            }
+            self.names.lock().unwrap().extend(entries.into_iter().map(|e| e.name));
+        }
+        fn on_scanned(&self, _c: u64) {}
+        fn on_finished(&self, _m: u64, _c: bool) {
+            *self.finished_at.lock().unwrap() = Some(std::time::Instant::now());
+        }
+    }
+
+    let sink = std::sync::Arc::new(TimingSink {
+        first_batch_at: std::sync::Mutex::new(None),
+        finished_at: std::sync::Mutex::new(None),
+        names: std::sync::Mutex::new(Vec::new()),
+    });
+    let filter = SearchFilter { query: "madison".into(), limit: 0, ..Default::default() };
+    search_streaming(vec![tree.str()], filter, sink.clone(), None).unwrap();
+
+    let mut names = sink.names.lock().unwrap().clone();
+    names.sort();
+    assert_eq!(names, vec!["aaa-madison.txt", "aab-madison.txt"]);
+
+    let first = sink.first_batch_at.lock().unwrap().expect("a batch must be delivered");
+    let done = sink.finished_at.lock().unwrap().expect("on_finished must be called");
+    assert!(
+        first < done,
+        "matches must be handed over while the walk is still running, not with on_finished",
+    );
+}

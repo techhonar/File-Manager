@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -83,25 +82,6 @@ fun SearchScreen(
                 }
             }
 
-            if (state.isSearching) {
-                Spacer(Modifier.height(12.dp))
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = OneUi.ScreenPadding)
-                        .clip(OneUi.PillShape),
-                )
-                Text(
-                    text = "Scanned ${state.scanned} files",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(
-                        horizontal = OneUi.ScreenPadding,
-                        vertical = 8.dp,
-                    ),
-                )
-            }
-
             Spacer(Modifier.height(8.dp))
 
             when {
@@ -110,11 +90,7 @@ fun SearchScreen(
                 state.results.isNotEmpty() -> LazyColumn(contentPadding = contentPadding) {
                     item {
                         Text(
-                            text = if (state.isSearching) {
-                                "${state.results.size} so far…"
-                            } else {
-                                "${state.results.size} results"
-                            },
+                            text = "${state.results.size} results",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(
@@ -127,9 +103,6 @@ fun SearchScreen(
                         SearchResultRow(entry = entry, onClick = { onOpenFile(entry) })
                     }
                 }
-
-                // Only shown while nothing has turned up yet.
-                state.isSearching -> EmptyMessage("Searching…")
 
                 state.hasSearched -> EmptyMessage("No files match")
 
