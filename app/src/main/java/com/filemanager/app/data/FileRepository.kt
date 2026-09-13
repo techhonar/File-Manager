@@ -1,6 +1,7 @@
 package com.filemanager.app.data
 
 import android.content.Context
+import android.os.Environment
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -57,14 +58,21 @@ class FileRepository(
     private val appContext = context.applicationContext
 
     /**
-     * Where trashed files live: the app's own external files directory.
+     * Where trashed files live: a hidden folder at the root of primary
+     * storage.
      *
-     * Deliberately not a hidden folder on shared storage. This one is removed
-     * when the app is uninstalled and needs no extra permission, and nothing
-     * else on the device scans it.
+     * It used to sit in the app's own external files directory, which is
+     * tidier - removed on uninstall, no permission needed - but Android serves
+     * `Android/data` through a separate mount. Renaming a file out of DCIM
+     * into it therefore fails with EXDEV, so every delete fell back to copying
+     * the whole file. Here a rename works, so trashing is instant whatever the
+     * file's size.
+     *
+     * The cost is that the folder outlives an uninstall. That is the same
+     * trade the platform's own file managers make, and the Trash screen can
+     * empty it.
      */
-    private val trashDir: String =
-        File(appContext.getExternalFilesDir(null), "trash").absolutePath
+    private val trashDir: String = resolveTrashDir(appContext)
 
     // --- Browsing -----------------------------------------------------------
 
@@ -293,5 +301,22 @@ class FileRepository(
     companion object {
         /** Matches Samsung's 30-day recycle bin. */
         const val TRASH_RETENTION_DAYS: UInt = 30u
+
+        private const val TRASH_FOLDER = ".FileManagerTrash"
+
+        /**
+         * Primary storage root if it is writable, the app's own directory
+         * otherwise.
+         *
+         * The fallback keeps the trash working when all-files access has not
+         * been granted; deletes are slower there, but they happen.
+         */
+        private fun resolveTrashDir(context: Context): String {
+            val external = Environment.getExternalStorageDirectory()
+            if (external != null && external.canWrite()) {
+                return File(external, TRASH_FOLDER).absolutePath
+            }
+            return File(context.getExternalFilesDir(null), "trash").absolutePath
+        }
     }
 }

@@ -48,18 +48,7 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
     let id = new_id();
     let dest = files_dir.join(&id);
 
-    // A rename is instant but only works within one filesystem. Moving from
-    // the SD card to internal storage crosses filesystems, so fall back to
-    // copy-then-delete.
-    if std::fs::rename(src, &dest).is_err() {
-        if meta.is_dir() {
-            crate::scanner::copy_paths(vec![path.clone()], dest.to_string_lossy().into_owned(), true, None, None)?;
-        } else {
-            std::fs::create_dir_all(&dest).ok();
-            std::fs::copy(src, &dest).map_err(|e| FileError::from_io(e, src))?;
-        }
-        crate::scanner::delete_paths(vec![path.clone()], None, None)?;
-    }
+    move_path(src, &dest)?;
 
     let record = TrashMeta {
         id: id.clone(),
@@ -130,16 +119,7 @@ pub fn trash_restore(trash_dir: String, id: String) -> Result<String> {
     }
 
     let stored = files_dir.join(&id);
-    if std::fs::rename(&stored, &dest).is_err() {
-        crate::scanner::copy_paths(
-            vec![stored.to_string_lossy().into_owned()],
-            dest.parent().unwrap_or(Path::new("/")).to_string_lossy().into_owned(),
-            false,
-            None,
-            None,
-        )?;
-        crate::scanner::delete_paths(vec![stored.to_string_lossy().into_owned()], None, None)?;
-    }
+    move_path(&stored, &dest)?;
     std::fs::remove_file(&meta_path).ok();
 
     Ok(meta.original_path)
@@ -189,6 +169,66 @@ pub fn trash_empty(trash_dir: String) -> Result<u32> {
 pub fn trash_size(trash_dir: String) -> Result<u64> {
     let (files_dir, _) = trash_layout(&trash_dir)?;
     crate::scanner::dir_size(files_dir.to_string_lossy().into_owned(), None)
+}
+
+/// Move `src` so that it ends up at exactly `dest`.
+///
+/// A rename is instant, but only within one filesystem. That fallback matters
+/// far more than it looks: the trash used to live under `Android/data`, which
+/// Android serves through a separate mount, so renaming a file out of DCIM
+/// into it returned EXDEV and every delete took this path.
+///
+/// The previous fallback was wrong in three ways. For a file it called
+/// `create_dir_all(dest)`, creating a directory where the file was supposed to
+/// go, and then copied onto it - which cannot succeed. For a directory it
+/// copied *into* `dest` rather than *as* `dest`, so a restore later looked in
+/// the wrong place. And it delegated to `copy_paths`, which requires its
+/// destination to already be a directory, so it failed before copying
+/// anything.
+fn move_path(src: &Path, dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| FileError::from_io(e, parent))?;
+    }
+    if std::fs::rename(src, dest).is_ok() {
+        return Ok(());
+    }
+    copy_exact(src, dest)?;
+    remove_exact(src)
+}
+
+/// Copy `src` to exactly `dest`, recursing for directories.
+///
+/// Note "to", not "into": copying `a/b` to `x/y` produces `x/y`, not `x/y/b`.
+///
+/// Public so the tests can exercise it directly. It is the half of the move
+/// that only runs when a rename is impossible, which is exactly the path that
+/// was broken and the hardest to reach through the public API.
+pub fn copy_exact(src: &Path, dest: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(src).map_err(|e| FileError::from_io(e, src))?;
+
+    if meta.is_dir() {
+        std::fs::create_dir_all(dest).map_err(|e| FileError::from_io(e, dest))?;
+        let read = std::fs::read_dir(src).map_err(|e| FileError::from_io(e, src))?;
+        for child in read.flatten() {
+            copy_exact(&child.path(), &dest.join(child.file_name()))?;
+        }
+        return Ok(());
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| FileError::from_io(e, parent))?;
+    }
+    std::fs::copy(src, dest).map_err(|e| FileError::from_io(e, src))?;
+    Ok(())
+}
+
+fn remove_exact(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| FileError::from_io(e, path))?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| FileError::from_io(e, path))
+    } else {
+        std::fs::remove_file(path).map_err(|e| FileError::from_io(e, path))
+    }
 }
 
 /// Ensure `<trash>/files` and `<trash>/meta` exist, and hand both back.

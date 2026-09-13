@@ -7,7 +7,7 @@
 
 use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::Result;
-use crate::types::{sort_entries, FileCategory, FileEntry, SortOptions};
+use crate::types::{is_hidden_dir, sort_entries, FileCategory, FileEntry, SortOptions};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,7 +90,12 @@ pub fn search(
     roots.par_iter().for_each(|root| {
         let mut local = Vec::new();
 
-        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+        let walk = WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| filter.include_hidden || !is_hidden_dir(e));
+
+        for entry in walk {
             if cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
                 return;
             }
@@ -200,7 +205,12 @@ pub fn search_streaming(
         let mut last_flush = Instant::now();
         let mut since_clock_check = 0u64;
 
-        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+        let walk = WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| filter.include_hidden || !is_hidden_dir(e));
+
+        for entry in walk {
             if cancel.as_ref().is_some_and(|t| t.is_cancelled())
                 || hit_limit.load(Ordering::Relaxed)
             {

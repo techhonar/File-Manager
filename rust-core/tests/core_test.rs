@@ -3,7 +3,7 @@
 //! bug that never reaches the phone.
 
 use filemanager_core::archive::{archive_create, archive_extract, archive_list};
-use filemanager_core::categories::{categorize, files_in_category};
+use filemanager_core::categories::{categorize, files_in_category, recent_files};
 use filemanager_core::dedup::find_duplicates;
 use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tree_stats};
 use filemanager_core::search::{search, search_streaming, SearchFilter, SearchSink};
@@ -561,4 +561,119 @@ fn rare_matches_arrive_during_the_walk_not_at_the_end() {
         first < done,
         "matches must be handed over while the walk is still running, not with on_finished",
     );
+}
+
+#[test]
+fn copy_exact_places_a_file_at_the_destination_not_inside_it() {
+    // The delete bug: the fallback called create_dir_all on the destination,
+    // making a directory where the file belonged, then copied onto it. Any
+    // delete that could not be done with a rename failed outright.
+    let tree = TempTree::new("copy-exact-file");
+    let src = tree.file("DCIM/photo.jpg", &[7u8; 500]);
+    let dest = tree.path().join("trash/files/abc123");
+
+    filemanager_core::trash::copy_exact(&src, &dest).unwrap();
+
+    assert!(dest.is_file(), "destination must be the file itself, not a directory");
+    assert_eq!(std::fs::read(&dest).unwrap(), vec![7u8; 500]);
+}
+
+#[test]
+fn copy_exact_copies_a_directory_as_the_destination_not_into_it() {
+    // The other half: a directory was copied *into* the destination, so a
+    // later restore looked for it one level too deep and found nothing.
+    let tree = TempTree::new("copy-exact-dir");
+    tree.file("album/one.jpg", b"a");
+    tree.file("album/nested/two.jpg", b"b");
+    let src = tree.path().join("album");
+    let dest = tree.path().join("trash/files/xyz789");
+
+    filemanager_core::trash::copy_exact(&src, &dest).unwrap();
+
+    assert!(dest.join("one.jpg").is_file(), "contents belong directly under dest");
+    assert!(dest.join("nested/two.jpg").is_file());
+    assert!(!dest.join("album").exists(), "must not nest the source name inside dest");
+}
+
+#[test]
+fn trashing_and_restoring_a_file_from_a_media_folder_round_trips() {
+    // Mirrors the report: a file in DCIM could not be deleted.
+    let tree = TempTree::new("trash-dcim");
+    let photo = tree.file("DCIM/Camera/IMG_0042.jpg", &[3u8; 2048]);
+    let trash_dir = tree.dir("trash").to_string_lossy().into_owned();
+
+    let id = trash_move(trash_dir.clone(), photo.to_string_lossy().into_owned()).unwrap();
+    assert!(!photo.exists(), "the original must be gone");
+
+    let listed = trash_list(trash_dir.clone(), 30).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "IMG_0042.jpg");
+
+    let restored = trash_restore(trash_dir, id).unwrap();
+    assert_eq!(restored, photo.to_string_lossy());
+    assert!(photo.is_file(), "restore must put the file back, as a file");
+    assert_eq!(std::fs::read(&photo).unwrap(), vec![3u8; 2048]);
+}
+
+#[test]
+fn trashing_and_restoring_a_directory_round_trips() {
+    let tree = TempTree::new("trash-dir");
+    tree.file("album/a.jpg", b"one");
+    tree.file("album/sub/b.jpg", b"two");
+    let album = tree.path().join("album");
+    let trash_dir = tree.dir("trash").to_string_lossy().into_owned();
+
+    let id = trash_move(trash_dir.clone(), album.to_string_lossy().into_owned()).unwrap();
+    assert!(!album.exists());
+
+    trash_restore(trash_dir, id).unwrap();
+    assert_eq!(std::fs::read_to_string(album.join("a.jpg")).unwrap(), "one");
+    assert_eq!(std::fs::read_to_string(album.join("sub/b.jpg")).unwrap(), "two");
+}
+
+#[test]
+fn search_does_not_surface_files_inside_hidden_directories() {
+    // The trash lives in a dot-directory at the root of storage, and trashed
+    // files are stored under opaque ids - so nothing about the file itself is
+    // hidden. Checking only the file's own name for a leading dot would let
+    // every deleted file reappear in search results.
+    let tree = TempTree::new("hidden-dirs");
+    tree.file("DCIM/madison.jpg", b"real");
+    tree.file(".FileManagerTrash/files/18f2a-abc123", b"deleted madison");
+    tree.file(".thumbnails/madison-thumb.jpg", b"cache");
+
+    let filter = SearchFilter { query: "madison".into(), ..Default::default() };
+    let hits = search(vec![tree.str()], filter.clone(), sort_by_name(), None, None).unwrap();
+    let names: Vec<_> = hits.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["madison.jpg"], "only the real file may be returned");
+
+    // Streaming must agree with the batch search here too.
+    let sink = std::sync::Arc::new(RecordingSink::default());
+    search_streaming(vec![tree.str()], filter, sink.clone(), None).unwrap();
+    assert_eq!(sink.names(), vec!["madison.jpg"]);
+}
+
+#[test]
+fn search_can_still_look_inside_hidden_directories_when_asked() {
+    let tree = TempTree::new("hidden-dirs-opt-in");
+    tree.file(".config/madison.conf", b"x");
+
+    let filter = SearchFilter {
+        query: "madison".into(),
+        include_hidden: true,
+        ..Default::default()
+    };
+    let hits = search(vec![tree.str()], filter, sort_by_name(), None, None).unwrap();
+    assert_eq!(hits.len(), 1, "include_hidden must still reach into dot-directories");
+}
+
+#[test]
+fn recent_files_excludes_the_trash() {
+    let tree = TempTree::new("recent-trash");
+    tree.file("DCIM/new.jpg", b"a");
+    tree.file(".FileManagerTrash/files/deadbeef", b"b");
+
+    let recent = recent_files(tree.str(), 7, 0, None).unwrap();
+    let names: Vec<_> = recent.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["new.jpg"], "deleted files are not recent files");
 }

@@ -129,3 +129,16 @@ fn extension_of(name: &str) -> String {
         .map(|(_, ext)| ext.to_lowercase())
         .unwrap_or_default()
 }
+
+/// True for a hidden directory below the walk's root.
+///
+/// Used to prune whole subtrees from searches. Without it, anything inside a
+/// dot-directory still shows up, because only the file's own name is checked
+/// for the leading dot - so trashed files, thumbnail caches and .git objects
+/// all appear as ordinary results. The root itself is never pruned, or
+/// searching a hidden folder deliberately would return nothing.
+pub(crate) fn is_hidden_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_dir()
+        && entry.file_name().to_string_lossy().starts_with('.')
+}
