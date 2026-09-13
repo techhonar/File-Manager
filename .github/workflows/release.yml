@@ -32,7 +32,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # "Re-run jobs" replays the SHA recorded when the run was created, so by
+      # default a re-run rebuilds the same code however many times you press
+      # it - it exists to retry flaky infrastructure, not to pick up fixes.
+      #
+      # For a manual run that is rarely what is wanted, so check out the tip of
+      # the dispatched branch by name instead: a re-run then builds whatever
+      # that branch points at now.
+      #
+      # Tag builds keep the pinned SHA. A release must be reproducible from its
+      # tag, and quietly shipping different code under an existing version
+      # would be far worse than the inconvenience this avoids.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.sha }}
+
+      # Record what was actually built. Which commit a run used has been
+      # genuinely confusing, and with the checkout above a re-run may well
+      # build something newer than the SHA shown in the run header.
+      - name: Report the commit being built
+        id: commit
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "subject=$(git log -1 --format=%s)" >> "$GITHUB_OUTPUT"
+          echo "Building $SHA"
+          git log -1 --format='  %h  %s'
 
       # ---- Version -------------------------------------------------------
       # v1.2.3 -> versionName 1.2.3. versionCode must increase every release,
@@ -264,6 +290,8 @@ jobs:
         run: |
           {
             echo "## File Manager ${{ steps.version.outputs.name }}"
+            echo ""
+            echo "Built from \`${{ steps.commit.outputs.short }}\` - ${{ steps.commit.outputs.subject }}"
             echo ""
             if [ ! -f "${{ steps.apk.outputs.path }}" ]; then
               echo "**No APK was produced** - the build failed before packaging."
