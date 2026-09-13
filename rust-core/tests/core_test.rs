@@ -6,7 +6,7 @@ use filemanager_core::archive::{archive_create, archive_extract, archive_list};
 use filemanager_core::categories::{categorize, files_in_category};
 use filemanager_core::dedup::find_duplicates;
 use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tree_stats};
-use filemanager_core::search::{search, SearchFilter};
+use filemanager_core::search::{search, search_streaming, SearchFilter, SearchSink};
 use filemanager_core::storage::{analyze_storage, largest_files, storage_summary};
 use filemanager_core::trash::{trash_list, trash_move, trash_restore, trash_purge_expired};
 use filemanager_core::types::{FileCategory, SortKey, SortOptions};
@@ -396,4 +396,114 @@ fn analysis_does_not_descend_into_symlinked_top_level_directories() {
         analysis.scanned_bytes, summary.scanned_bytes,
         "must agree with the sequential walk, which never follows the link",
     );
+}
+
+/// Records everything a streaming search hands back, so a test can assert on
+/// both the results and how they arrived.
+#[derive(Default)]
+struct RecordingSink {
+    batches: std::sync::Mutex<Vec<Vec<filemanager_core::types::FileEntry>>>,
+    scanned_calls: std::sync::atomic::AtomicU64,
+    finished: std::sync::Mutex<Option<(u64, bool)>>,
+}
+
+impl SearchSink for RecordingSink {
+    fn on_batch(&self, entries: Vec<filemanager_core::types::FileEntry>) {
+        self.batches.lock().unwrap().push(entries);
+    }
+    fn on_scanned(&self, _count: u64) {
+        self.scanned_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn on_finished(&self, matched: u64, cancelled: bool) {
+        *self.finished.lock().unwrap() = Some((matched, cancelled));
+    }
+}
+
+impl RecordingSink {
+    fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.batches.lock().unwrap().iter()
+            .flatten().map(|e| e.name.clone()).collect();
+        v.sort();
+        v
+    }
+}
+
+#[test]
+fn streaming_search_finds_exactly_what_the_batch_search_finds() {
+    let tree = TempTree::new("stream");
+    tree.file("holiday.jpg", &[0u8; 100]);
+    tree.file("nested/holiday-2.png", &[0u8; 100]);
+    tree.file("nested/deep/holiday notes.txt", b"x");
+    tree.file("unrelated.pdf", b"y");
+
+    let filter = SearchFilter { query: "holiday".into(), ..Default::default() };
+    let batch = search(vec![tree.str()], filter.clone(), sort_by_name(), None, None).unwrap();
+
+    let sink = std::sync::Arc::new(RecordingSink::default());
+    search_streaming(vec![tree.str()], filter, sink.clone(), None).unwrap();
+
+    let mut expected: Vec<String> = batch.iter().map(|e| e.name.clone()).collect();
+    expected.sort();
+    assert_eq!(sink.names(), expected, "streaming must find the same files");
+
+    let (matched, cancelled) = sink.finished.lock().unwrap().expect("on_finished must be called");
+    assert_eq!(matched, 3);
+    assert!(!cancelled);
+}
+
+#[test]
+fn streaming_search_delivers_in_several_batches_rather_than_one() {
+    // The whole point is that results appear during the walk. With more
+    // matches than fit in one batch, the sink must be called more than once -
+    // otherwise this is just the batch search with extra steps.
+    let tree = TempTree::new("stream-batches");
+    for i in 0..200 {
+        tree.file(&format!("dir{}/match{i}.log", i % 8), b"x");
+    }
+
+    let filter = SearchFilter { query: "match".into(), limit: 0, ..Default::default() };
+    let sink = std::sync::Arc::new(RecordingSink::default());
+    search_streaming(vec![tree.str()], filter, sink.clone(), None).unwrap();
+
+    let batch_count = sink.batches.lock().unwrap().len();
+    assert!(batch_count > 1, "expected several batches, got {batch_count}");
+    assert_eq!(sink.names().len(), 200);
+    assert!(
+        sink.scanned_calls.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "progress must be reported while scanning",
+    );
+}
+
+#[test]
+fn streaming_search_stops_at_the_limit() {
+    let tree = TempTree::new("stream-limit");
+    for i in 0..500 {
+        tree.file(&format!("f{i}.log"), b"x");
+    }
+
+    let filter = SearchFilter { query: "f".into(), limit: 64, ..Default::default() };
+    let sink = std::sync::Arc::new(RecordingSink::default());
+    search_streaming(vec![tree.str()], filter, sink.clone(), None).unwrap();
+
+    let found = sink.names().len();
+    assert!(found >= 64, "must deliver at least the limit, got {found}");
+    assert!(found < 500, "must stop early rather than walking everything, got {found}");
+}
+
+#[test]
+fn streaming_search_reports_cancellation() {
+    let tree = TempTree::new("stream-cancel");
+    for i in 0..100 {
+        tree.file(&format!("f{i}.log"), b"x");
+    }
+
+    let token = filemanager_core::cancel::CancelToken::new();
+    token.cancel();
+
+    let filter = SearchFilter { query: "f".into(), limit: 0, ..Default::default() };
+    let sink = std::sync::Arc::new(RecordingSink::default());
+    search_streaming(vec![tree.str()], filter, sink.clone(), Some(token)).unwrap();
+
+    let (_, cancelled) = sink.finished.lock().unwrap().expect("on_finished must still be called");
+    assert!(cancelled, "a cancelled walk must say so, not look like a normal end");
 }

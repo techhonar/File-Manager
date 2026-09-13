@@ -9,7 +9,7 @@ use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::Result;
 use crate::types::{sort_entries, FileCategory, FileEntry, SortOptions};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
@@ -128,4 +128,106 @@ pub fn search(
         out.truncate(filter.limit as usize);
     }
     Ok(out)
+}
+
+/// How many matches to gather before handing them over.
+///
+/// Every call crosses into the JVM, so emitting one file at a time would make
+/// the boundary the bottleneck on a folder of thousands. 64 is small enough
+/// that results appear to arrive continuously and large enough that the hop
+/// costs nothing measurable.
+const BATCH_SIZE: usize = 64;
+
+/// How often to report files examined, in files.
+const SCAN_REPORT_INTERVAL: u64 = 512;
+
+/// Receives results while the walk is still running.
+///
+/// The plain [`search`] collects everything, sorts it and returns once, so the
+/// caller sees nothing until the whole device has been walked. This lets the
+/// UI fill in as matches are found, which is how a file manager is expected to
+/// behave.
+#[uniffi::export(with_foreign)]
+pub trait SearchSink: Send + Sync {
+    /// A batch of newly found matches, in discovery order.
+    ///
+    /// Called from several threads. Order between batches is not meaningful -
+    /// the caller sorts what it has accumulated.
+    fn on_batch(&self, entries: Vec<FileEntry>);
+
+    /// Files examined so far, matched or not. Called periodically, so a search
+    /// that is finding nothing still looks alive.
+    fn on_scanned(&self, count: u64);
+
+    /// The walk has stopped. `cancelled` separates a user stop and the limit
+    /// being reached from a natural end.
+    fn on_finished(&self, matched: u64, cancelled: bool);
+}
+
+/// Search, delivering matches as they are found rather than all at once.
+///
+/// Returns when the walk is done; every result arrives through `sink`. The
+/// filter's `limit` still applies - the walk stops early once that many
+/// matches have been emitted, since nothing beyond it can be displayed.
+#[uniffi::export]
+pub fn search_streaming(
+    roots: Vec<String>,
+    filter: SearchFilter,
+    sink: Arc<dyn SearchSink>,
+    cancel: Option<Arc<CancelToken>>,
+) -> Result<()> {
+    let matched = AtomicU64::new(0);
+    let scanned = AtomicU64::new(0);
+    let hit_limit = AtomicBool::new(false);
+    let limit = if filter.limit == 0 { u64::MAX } else { filter.limit as u64 };
+
+    roots.par_iter().for_each(|root| {
+        let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH_SIZE);
+
+        for entry in WalkDir::new(root).follow_links(false).into_iter() {
+            if cancel.as_ref().is_some_and(|t| t.is_cancelled())
+                || hit_limit.load(Ordering::Relaxed)
+            {
+                break;
+            }
+            let Ok(entry) = entry else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                continue;
+            }
+
+            let n = scanned.fetch_add(1, Ordering::Relaxed);
+            if n % SCAN_REPORT_INTERVAL == 0 {
+                sink.on_scanned(n);
+            }
+
+            let item = FileEntry::from_metadata(entry.path(), &meta);
+            if !filter.matches(&item) {
+                continue;
+            }
+
+            batch.push(item);
+            if batch.len() >= BATCH_SIZE {
+                let count = matched.fetch_add(batch.len() as u64, Ordering::Relaxed)
+                    + batch.len() as u64;
+                sink.on_batch(std::mem::take(&mut batch));
+                batch.reserve(BATCH_SIZE);
+                if count >= limit {
+                    hit_limit.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
+        // Whatever did not fill a batch still has to be delivered.
+        if !batch.is_empty() {
+            matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
+            sink.on_batch(batch);
+        }
+    });
+
+    let was_cancelled = cancel.as_ref().is_some_and(|t| t.is_cancelled());
+    sink.on_scanned(scanned.load(Ordering::Relaxed));
+    sink.on_finished(matched.load(Ordering::Relaxed), was_cancelled);
+    Ok(())
 }

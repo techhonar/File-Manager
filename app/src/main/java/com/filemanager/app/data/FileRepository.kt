@@ -12,6 +12,7 @@ import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.FilesystemStats
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.SearchFilter
+import uniffi.filemanager_core.SearchSink
 import uniffi.filemanager_core.SortOptions
 import uniffi.filemanager_core.StorageAnalysis
 import uniffi.filemanager_core.StorageSummary
@@ -171,6 +172,32 @@ class FileRepository(
         cancel: CancelToken? = null,
     ): List<FileEntry> = withContext(io) {
         uniffi.filemanager_core.search(roots, filter, sort, progress, cancel)
+    }
+
+    /**
+     * Search, delivering matches to [sink] while the walk is still running.
+     *
+     * Prefer this over [search] anywhere results are displayed: [search]
+     * returns only once the whole device has been walked, so the screen shows
+     * nothing at all until the slowest part of the work is finished. This
+     * suspends until the walk ends, with every result arriving through the
+     * sink in the meantime.
+     *
+     * The sink is called from Rust worker threads, not the caller's - whatever
+     * it touches has to be safe for that.
+     */
+    suspend fun searchStreaming(
+        roots: List<String>,
+        filter: SearchFilter,
+        sink: SearchSink,
+        cancel: CancelToken? = null,
+    ) = withContext(io) {
+        // Fully qualified for the same reason as `search` above: this member
+        // and the generated binding share a name, a member always wins over a
+        // top-level function, and the unqualified call would therefore invoke
+        // itself and recurse until the stack blows - compiling perfectly
+        // cleanly on the way.
+        uniffi.filemanager_core.searchStreaming(roots, filter, sink, cancel)
     }
 
     // --- Storage analysis ----------------------------------------------------

@@ -105,10 +105,16 @@ fun SearchScreen(
             Spacer(Modifier.height(8.dp))
 
             when {
+                // Results render while the walk is still running - the list
+                // fills in rather than appearing all at once at the end.
                 state.results.isNotEmpty() -> LazyColumn(contentPadding = contentPadding) {
                     item {
                         Text(
-                            text = "${state.results.size} results",
+                            text = if (state.isSearching) {
+                                "${state.results.size} so far…"
+                            } else {
+                                "${state.results.size} results"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(
@@ -122,9 +128,12 @@ fun SearchScreen(
                     }
                 }
 
-                state.hasSearched && !state.isSearching -> EmptyMessage("No files match")
+                // Only shown while nothing has turned up yet.
+                state.isSearching -> EmptyMessage("Searching…")
 
-                !state.isSearching -> EmptyMessage("Search by name, or pick a category")
+                state.hasSearched -> EmptyMessage("No files match")
+
+                else -> EmptyMessage("Search by name, or pick a category")
             }
         }
     }
