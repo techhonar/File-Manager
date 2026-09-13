@@ -75,6 +75,9 @@ android {
     }
     buildFeatures {
         compose = true
+        // Off by default since AGP 8. The About screen reads VERSION_NAME and
+        // VERSION_CODE from it, which come from the tag CI builds from.
+        buildConfig = true
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

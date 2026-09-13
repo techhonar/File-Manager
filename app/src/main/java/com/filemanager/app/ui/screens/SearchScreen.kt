@@ -39,6 +39,11 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +68,14 @@ fun SearchScreen(
     onOpenFile: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    /**
+     * Focus the field and raise the keyboard on arrival.
+     *
+     * False when the screen was opened from a category tile - the user asked
+     * for Images, not to type, and a keyboard covering half the results would
+     * be in the way.
+     */
+    autoFocus: Boolean = true,
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
@@ -111,6 +124,7 @@ fun SearchScreen(
                 query = state.query,
                 onQueryChange = viewModel::onQueryChange,
                 onClear = viewModel::clear,
+                autoFocus = autoFocus && !state.inSelectionMode,
             )
 
             Spacer(Modifier.height(12.dp))
@@ -180,19 +194,36 @@ fun SearchScreen(
 }
 
 /** One UI search boxes are full pills with no visible outline. */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
+    autoFocus: Boolean,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(autoFocus) {
+        if (!autoFocus) return@LaunchedEffect
+        // One frame of delay: requesting focus before the node has been
+        // placed throws, and the screen is still animating in on arrival.
+        withFrameNanos {}
+        runCatching {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
+
     TextField(
         value = query,
         onValueChange = onQueryChange,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = OneUi.ScreenPadding)
-            .clip(OneUi.PillShape),
+            .clip(OneUi.PillShape)
+            .focusRequester(focusRequester),
         placeholder = { Text("Search all files") },
         leadingIcon = {
             Icon(
