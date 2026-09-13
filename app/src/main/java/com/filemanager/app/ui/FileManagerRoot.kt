@@ -203,3 +203,55 @@ fun FileManagerRoot(
         }
     }
 }
+
+/** The home screen's overflow menu: the two destinations without a tile. */
+@Composable
+private fun HomeOverflowMenu(
+    onManageStorage: () -> Unit,
+    onTrash: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }) {
+        Icon(Icons.Default.MoreVert, "More options")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text("Manage storage") },
+            onClick = { onManageStorage(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Trash") },
+            onClick = { onTrash(); expanded = false },
+        )
+    }
+}
+
+/**
+ * Hand a file to whichever app can open it.
+ *
+ * Goes through FileProvider because Android blocks file:// URIs across app
+ * boundaries -- passing the raw path throws FileUriExposedException.
+ */
+private fun openWithExternalApp(context: android.content.Context, entry: FileEntry) {
+    val file = File(entry.path)
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file,
+    )
+    val extension = file.extension.lowercase()
+    val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        ?: "*/*"
+
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        // Nothing installed handles this type; silently ignoring is better
+        // than crashing, and the user sees the file simply not open.
+    }
+}
