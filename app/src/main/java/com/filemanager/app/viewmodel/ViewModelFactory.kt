@@ -22,12 +22,13 @@ class ViewModelFactory(
     private val startPath: String = primaryPath,
     /** See BrowserViewModel: passed in so no ViewModel holds a Context. */
     private val ownerAppOf: suspend (String) -> String? = { null },
+    private val hasRemovableSlot: Boolean = false,
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = when {
         modelClass.isAssignableFrom(HomeViewModel::class.java) ->
-            HomeViewModel(repository, volumes, primaryPath) as T
+            HomeViewModel(repository, volumes, primaryPath, hasRemovableSlot) as T
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
             BrowserViewModel(repository, clipboard, paths, startPath, ownerAppOf) as T

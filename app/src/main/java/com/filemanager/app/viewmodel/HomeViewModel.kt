@@ -32,6 +32,8 @@ data class HomeState(
     val usedBytes: ULong = 0uL,
     val totalBytes: ULong = 0uL,
     val trashBytes: ULong = 0uL,
+    /** False on a phone with no card slot, where the SD row is just clutter. */
+    val hasRemovableSlot: Boolean = false,
     val isLoading: Boolean = true,
 )
 
@@ -39,9 +41,11 @@ class HomeViewModel(
     private val repository: FileRepository,
     private val volumes: List<StorageVolume>,
     private val primaryPath: String,
+    hasRemovableSlot: Boolean = false,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(HomeState(volumes = volumes))
+    private val _state =
+        MutableStateFlow(HomeState(volumes = volumes, hasRemovableSlot = hasRemovableSlot))
     val state: StateFlow<HomeState> = _state.asStateFlow()
 
     /**

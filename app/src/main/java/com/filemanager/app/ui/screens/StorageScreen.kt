@@ -1,6 +1,13 @@
 package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.alpha
+import uniffi.filemanager_core.StorageSummary
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -141,40 +148,7 @@ fun StorageScreen(
             contentPadding = contentPadding,
         ) {
             state.summary?.let { summary ->
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = OneUi.ScreenPadding)
-                            .clip(OneUi.CardShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(24.dp),
-                    ) {
-                        Text(
-                            text = formatSize(summary.totalBytes - summary.freeBytes),
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            text = "used of ${formatSize(summary.totalBytes)}  ·  " +
-                                "${formatSize(summary.freeBytes)} free",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(20.dp))
-                        StorageBar(usage = summary.byCategory, totalBytes = summary.totalBytes)
-                        Spacer(Modifier.height(24.dp))
-                        if (summary.byCategory.isEmpty()) {
-                            Text(
-                                text = "Working out what is using the space…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            StorageLegend(summary.byCategory)
-                        }
-                    }
-                }
+                item { StorageCard(summary) }
             }
 
             item { OneUiSectionHeader("Duplicate files") }
@@ -285,6 +259,92 @@ private fun DuplicateSection(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The capacity card: the bar sweeps out, then the figures arrive.
+ *
+ * The layout is drawn in full from the first frame - only the numbers wait,
+ * so nothing jumps as they appear. Holding the bar back until the categories
+ * are known would mean an empty card for as long as the walk takes; instead
+ * it fills once there is something to fill it with.
+ */
+@Composable
+private fun StorageCard(summary: StorageSummary) {
+    val hasBreakdown = summary.byCategory.isNotEmpty()
+
+    val progress by animateFloatAsState(
+        targetValue = if (hasBreakdown) 1f else 0f,
+        animationSpec = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+        label = "storageBarFill",
+    )
+    // Tied to the bar finishing rather than to a timer, so the figures cannot
+    // appear before the thing they describe has finished drawing.
+    val figuresVisible = progress > 0.99f
+    val figuresAlpha by animateFloatAsState(
+        targetValue = if (figuresVisible) 1f else 0f,
+        animationSpec = tween(durationMillis = 350),
+        label = "storageFiguresFade",
+    )
+
+    val usedBytes = summary.totalBytes - summary.freeBytes
+    val usedPercent = if (summary.totalBytes > 0uL) {
+        (usedBytes.toDouble() / summary.totalBytes.toDouble() * 100).roundToInt()
+    } else {
+        0
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = OneUi.ScreenPadding)
+            .clip(OneUi.CardShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(24.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = "$usedPercent%",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.alpha(figuresAlpha),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                // Capacity is known immediately and never moves, so it is the
+                // one figure that is there from the start.
+                text = "used of ${formatSize(summary.totalBytes)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+
+        Text(
+            text = "${formatSize(usedBytes)}  ·  ${formatSize(summary.freeBytes)} free",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.alpha(figuresAlpha),
+        )
+
+        Spacer(Modifier.height(20.dp))
+        StorageBar(
+            usage = summary.byCategory,
+            totalBytes = summary.totalBytes,
+            progress = progress,
+        )
+        Spacer(Modifier.height(24.dp))
+
+        if (hasBreakdown) {
+            StorageLegend(summary.byCategory)
+        } else {
+            Text(
+                text = "Working out what is using the space…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

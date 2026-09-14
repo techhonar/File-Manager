@@ -21,6 +21,21 @@ data class StorageVolume(
  */
 object StorageVolumes {
 
+    /**
+     * Whether the device has a card slot at all, mounted or not.
+     *
+     * StorageManager lists a removable volume even when nothing is in it - the
+     * state is unmounted rather than the volume being absent - so a slot with
+     * no card still appears here, while a phone without a slot reports none.
+     * That is the difference between "no card inserted" and "this phone cannot
+     * take one", and showing an SD row on a device that has no slot is just
+     * clutter the user can do nothing about.
+     */
+    fun hasRemovableSlot(context: Context): Boolean {
+        val manager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+        return manager.storageVolumes.any { it.isRemovable }
+    }
+
     fun list(context: Context): List<StorageVolume> {
         val manager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
         val volumes = mutableListOf<StorageVolume>()
