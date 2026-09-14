@@ -96,12 +96,99 @@ pub fn archive_create(
     Ok(done)
 }
 
+/// Archive formats this app can unpack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ArchiveFormat {
+    Zip,
+    Rar,
+    /// Recognised as an archive by name, but not one we can open.
+    Unsupported,
+}
+
+/// Which format an archive is, by extension.
+///
+/// By name rather than by magic bytes: opening every tapped file to sniff it
+/// would mean a read before the user has confirmed they want anything to
+/// happen, and an archive with the wrong extension is a rarity next to that.
+#[uniffi::export]
+pub fn archive_format(archive_path: String) -> ArchiveFormat {
+    let lower = archive_path.to_lowercase();
+    if lower.ends_with(".zip") || lower.ends_with(".apk") || lower.ends_with(".aab") {
+        ArchiveFormat::Zip
+    } else if lower.ends_with(".rar") {
+        ArchiveFormat::Rar
+    } else {
+        ArchiveFormat::Unsupported
+    }
+}
+
+/// Extract a RAR archive into `dest_dir`.
+///
+/// Separate from the zip path because the two libraries have nothing in
+/// common: unrar walks a cursor that is consumed and handed back on each step,
+/// so the archive value is reassigned as it goes rather than indexed.
+fn extract_rar(
+    archive_path: &str,
+    dest_dir: &Path,
+    password: Option<&str>,
+    listener: Option<Arc<dyn ProgressListener>>,
+    cancel: Option<Arc<CancelToken>>,
+) -> Result<u64> {
+    let opened = match password {
+        Some(pw) => unrar::Archive::with_password(archive_path, pw).open_for_processing(),
+        None => unrar::Archive::new(archive_path).open_for_processing(),
+    };
+    let mut archive = opened.map_err(rar_error)?;
+    let mut extracted = 0u64;
+
+    while let Some(header) = archive.read_header().map_err(rar_error)? {
+        if let Some(ref token) = cancel {
+            token.check()?;
+        }
+        let entry = header.entry();
+        let name = entry.filename.to_string_lossy().into_owned();
+        let is_file = entry.is_file();
+
+        archive = if is_file {
+            let next = header.extract_with_base(dest_dir).map_err(rar_error)?;
+            extracted += 1;
+            if let Some(ref l) = listener {
+                l.on_progress(extracted, 0, name);
+            }
+            next
+        } else {
+            header.skip().map_err(rar_error)?
+        };
+    }
+    Ok(extracted)
+}
+
+/// Map unrar's errors onto the ones the app already understands.
+fn rar_error(err: unrar::error::UnrarError) -> FileError {
+    use unrar::error::Code;
+    match err.code {
+        // Both mean the password was missing or wrong; the library does not
+        // distinguish, so neither can we.
+        Code::MissingPassword | Code::BadPassword => FileError::WrongPassword,
+        Code::BadArchive | Code::UnknownFormat => FileError::Archive {
+            detail: "the archive is damaged or not a RAR file".into(),
+        },
+        other => FileError::Archive { detail: format!("{other:?}") },
+    }
+}
+
 /// Whether any entry in the archive is encrypted.
 ///
 /// Checked before extracting so the app can ask for a password up front,
 /// rather than starting, failing partway and leaving a half-unpacked folder.
 #[uniffi::export]
 pub fn archive_is_encrypted(archive_path: String) -> Result<bool> {
+    if archive_format(archive_path.clone()) == ArchiveFormat::Rar {
+        // Listing a RAR whose headers are encrypted fails outright, which is
+        // itself the answer: it needs a password.
+        return Ok(unrar::Archive::new(&archive_path).open_for_listing().is_err());
+    }
+
     let file = File::open(&archive_path)
         .map_err(|e| FileError::from_io(e, Path::new(&archive_path)))?;
     let mut zip = ZipArchive::new(BufReader::new(file))?;
@@ -128,6 +215,10 @@ pub fn archive_extract(
 ) -> Result<u64> {
     let dest = Path::new(&dest_dir);
     std::fs::create_dir_all(dest).map_err(|e| FileError::from_io(e, dest))?;
+
+    if archive_format(archive_path.clone()) == ArchiveFormat::Rar {
+        return extract_rar(&archive_path, dest, password.as_deref(), listener, cancel);
+    }
 
     let file = File::open(&archive_path)
         .map_err(|e| FileError::from_io(e, Path::new(&archive_path)))?;

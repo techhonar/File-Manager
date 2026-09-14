@@ -815,3 +815,40 @@ fn entries_for_skips_paths_that_have_gone() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "keep.txt");
 }
+
+#[test]
+fn archive_format_is_recognised_by_extension() {
+    use filemanager_core::archive::{archive_format, ArchiveFormat};
+
+    assert_eq!(archive_format("/x/backup.zip".into()), ArchiveFormat::Zip);
+    assert_eq!(archive_format("/x/BACKUP.ZIP".into()), ArchiveFormat::Zip);
+    assert_eq!(archive_format("/x/app.apk".into()), ArchiveFormat::Zip);
+    assert_eq!(archive_format("/x/photos.rar".into()), ArchiveFormat::Rar);
+    assert_eq!(archive_format("/x/photos.RaR".into()), ArchiveFormat::Rar);
+    assert_eq!(archive_format("/x/notes.txt".into()), ArchiveFormat::Unsupported);
+    assert_eq!(archive_format("/x/archive.7z".into()), ArchiveFormat::Unsupported);
+}
+
+#[test]
+fn a_file_that_is_not_a_rar_fails_as_a_damaged_archive() {
+    // Extraction is routed by extension, so a mislabelled file reaches the RAR
+    // path. It must come back as an archive error the user can act on, not a
+    // panic from the C++ library underneath.
+    let tree = TempTree::new("rar-bogus");
+    let fake = tree.file("not-really.rar", b"this is plain text, not an archive");
+    let out = tree.dir("out");
+
+    let err = archive_extract(
+        fake.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::Archive { .. }),
+        "expected an Archive error, got {err:?}",
+    );
+}
