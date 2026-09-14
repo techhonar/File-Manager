@@ -16,7 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,6 +39,7 @@ import com.filemanager.app.ui.theme.OneUi
 @Composable
 fun InlineResultActions(
     visible: Boolean,
+    onOpen: () -> Unit,
     onOpenWith: () -> Unit,
     onCopyPath: () -> Unit,
     onShowInFolder: () -> Unit,
@@ -61,9 +63,10 @@ fun InlineResultActions(
                 ),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            InlineAction(Icons.Default.FolderOpen, "Show in folder", onShowInFolder)
+            InlineAction(Icons.AutoMirrored.Filled.OpenInNew, "Open", onOpen)
             InlineAction(Icons.Default.ContentCopy, "Copy path", onCopyPath)
-            InlineAction(Icons.Default.OpenInNew, "Open with", onOpenWith)
+            InlineAction(Icons.Default.FolderOpen, "Show in folder", onShowInFolder)
+            InlineAction(Icons.Default.Apps, "Open with", onOpenWith)
         }
     }
 }

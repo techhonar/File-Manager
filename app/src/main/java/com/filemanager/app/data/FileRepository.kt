@@ -78,6 +78,10 @@ class FileRepository(
 
     // --- Browsing -----------------------------------------------------------
 
+    /** Turn stored paths back into entries, skipping any that have gone. */
+    suspend fun entriesFor(paths: List<String>): List<FileEntry> =
+        withContext(io) { uniffi.filemanager_core.entriesFor(paths) }
+
     suspend fun list(path: String, showHidden: Boolean, sort: SortOptions): List<FileEntry> =
         withContext(io) { listDir(path, showHidden, sort) }
 
@@ -142,6 +146,32 @@ class FileRepository(
         val from = File(path)
         val to = File(from.parentFile, newName)
         if (to.exists()) false else from.renameTo(to)
+    }
+
+    /**
+     * Hide or reveal paths by renaming them.
+     *
+     * A leading dot is the whole mechanism on Android, as on any Unix - there
+     * is no attribute to set. Which direction to go is decided from the whole
+     * selection, so one button does not invert each item individually.
+     *
+     * Returns the paths as they are now, so callers can re-point anything that
+     * referred to the old names.
+     */
+    suspend fun toggleHidden(paths: List<String>): List<String> = withContext(io) {
+        val allHidden = paths.isNotEmpty() && paths.all { File(it).name.startsWith(".") }
+        paths.mapNotNull { path ->
+            val file = File(path)
+            val name = file.name
+            val newName = if (allHidden) name.removePrefix(".") else ".$name"
+            // Refuse to strip a file down to nothing, and skip a rename that
+            // would collide with something already there.
+            if (newName.isEmpty()) return@mapNotNull path
+            val target = File(file.parentFile, newName)
+            if (target.exists()) path
+            else if (file.renameTo(target)) target.absolutePath
+            else path
+        }
     }
 
     suspend fun createFolder(parent: String, name: String): Boolean =

@@ -114,6 +114,29 @@ class StorageViewModel(
         scan = token
 
         _state.update { it.copy(isLoading = true) }
+
+        // Capacity is one statvfs call and returns immediately, so the screen
+        // can draw its real layout - total, free, the used figure - while the
+        // walk that fills in the per-category breakdown is still running.
+        // Waiting for the whole scan meant staring at a spinner for a minute
+        // to learn something the system already knew.
+        viewModelScope.launch {
+            runCatching { repository.volumeStats(rootPath) }.getOrNull()?.let { fs ->
+                _state.update { current ->
+                    if (current.summary != null) return@update current
+                    current.copy(
+                        summary = StorageSummary(
+                            totalBytes = fs.totalBytes,
+                            freeBytes = fs.freeBytes,
+                            // Not yet known; the categories fill in below.
+                            scannedBytes = 0uL,
+                            byCategory = emptyList(),
+                        ),
+                    )
+                }
+            }
+        }
+
         viewModelScope.launch {
             // No progress listener: the screen no longer reports a file count,
             // and a callback firing every few hundred files to update state

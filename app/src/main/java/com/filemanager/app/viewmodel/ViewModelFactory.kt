@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.StorageVolume
 
 /**
@@ -15,6 +16,7 @@ import com.filemanager.app.data.StorageVolume
 class ViewModelFactory(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
+    private val paths: PathPrefs,
     private val volumes: List<StorageVolume>,
     private val primaryPath: String,
     private val startPath: String = primaryPath,
@@ -28,13 +30,16 @@ class ViewModelFactory(
             HomeViewModel(repository, volumes, primaryPath) as T
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
-            BrowserViewModel(repository, clipboard, startPath, ownerAppOf) as T
+            BrowserViewModel(repository, clipboard, paths, startPath, ownerAppOf) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
             SearchViewModel(repository, clipboard, volumes.map { it.path }) as T
 
         modelClass.isAssignableFrom(StorageViewModel::class.java) ->
             StorageViewModel(repository, primaryPath) as T
+
+        modelClass.isAssignableFrom(FavoritesViewModel::class.java) ->
+            FavoritesViewModel(repository, paths) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
             RecentViewModel(repository, clipboard, primaryPath) as T

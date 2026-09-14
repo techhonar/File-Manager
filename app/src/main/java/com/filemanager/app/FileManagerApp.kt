@@ -5,8 +5,10 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
 import com.filemanager.app.data.ApkIconFetcher
+import com.filemanager.app.data.AudioArtFetcher
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
+import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.FileRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,9 @@ class FileManagerApp : Application(), ImageLoaderFactory {
 
     val settings: AppSettings by lazy { AppSettings(this) }
 
+    /** Favourites and pinned paths, shared by every screen that shows files. */
+    val paths: PathPrefs by lazy { PathPrefs(this) }
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -45,6 +50,7 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             .components {
                 add(VideoFrameDecoder.Factory())
                 add(ApkIconFetcher.Factory(this@FileManagerApp))
+                add(AudioArtFetcher.Factory(this@FileManagerApp))
             }
             // Thumbnails are small and there are a great many of them, so a
             // slice of the heap goes further here than Coil's default.

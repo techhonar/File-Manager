@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.isWrongPassword
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,6 +94,7 @@ data class BrowserState(
 class BrowserViewModel(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
+    private val paths: PathPrefs,
     startPath: String,
     /**
      * Resolves which app created a file.
@@ -116,6 +118,25 @@ class BrowserViewModel(
 
     init {
         load(startPath)
+
+        // Re-sort when a pin changes, so the item moves without a reload.
+        viewModelScope.launch {
+            paths.pinned.collect { pinned ->
+                _state.update { it.copy(entries = applyPinning(it.entries, pinned)) }
+            }
+        }
+    }
+
+    /**
+     * Pinned items first, everything else in the order the core returned.
+     *
+     * A stable partition, so the chosen sort still holds inside each group -
+     * pinning is a promotion, not a second sort key.
+     */
+    private fun applyPinning(entries: List<FileEntry>, pinned: Set<String>): List<FileEntry> {
+        if (pinned.isEmpty()) return entries
+        val (top, rest) = entries.partition { it.path in pinned }
+        return top + rest
     }
 
     fun load(path: String) {
@@ -133,7 +154,12 @@ class BrowserViewModel(
             runCatching {
                 repository.list(path, _state.value.showHidden, _state.value.sort)
             }.onSuccess { entries ->
-                _state.update { it.copy(entries = entries, isLoading = false) }
+                _state.update {
+                    it.copy(
+                        entries = applyPinning(entries, paths.pinned.value),
+                        isLoading = false,
+                    )
+                }
             }.onFailure { error ->
                 _state.update {
                     it.copy(isLoading = false, error = error.userMessage("Could not open folder"))
@@ -157,7 +183,8 @@ class BrowserViewModel(
         refresh()
     }
 
-    fun toggleHidden() {
+    /** View option: whether hidden files appear in the listing at all. */
+    fun toggleShowHidden() {
         _state.update { it.copy(showHidden = !it.showHidden) }
         refresh()
     }
@@ -193,6 +220,64 @@ class BrowserViewModel(
     }
 
     fun dismissDetails() = _state.update { it.copy(detailsTarget = null, details = null) }
+
+    // --- Marks and visibility ------------------------------------------------
+
+    /**
+     * Move any marks from an old path to a new one.
+     *
+     * Favourites and pins are keyed by path, so anything that renames or moves
+     * a file has to carry them across or the mark is silently lost - which
+     * looks to the user like the app forgetting on its own.
+     */
+    private fun carryMarks(from: String, to: String) {
+        if (from == to) return
+        if (paths.isFavorite(from)) {
+            paths.toggleFavorite(listOf(from))
+            paths.toggleFavorite(listOf(to))
+        }
+        if (paths.isPinned(from)) {
+            paths.togglePinned(listOf(from))
+            paths.togglePinned(listOf(to))
+        }
+    }
+
+    fun toggleFavorite() {
+        val selected = _state.value.selected.toList()
+        paths.toggleFavorite(selected)
+        _messages.value = if (selected.all { paths.isFavorite(it) }) {
+            "Added to favourites"
+        } else {
+            "Removed from favourites"
+        }
+        clearSelection()
+    }
+
+    fun togglePinned() {
+        val selected = _state.value.selected.toList()
+        paths.togglePinned(selected)
+        _messages.value = if (selected.all { paths.isPinned(it) }) "Pinned to top" else "Unpinned"
+        clearSelection()
+    }
+
+    /** File attribute: hide or reveal the selection by renaming it. */
+    fun toggleSelectionHidden() {
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+
+        viewModelScope.launch {
+            val renamed = runCatching { repository.toggleHidden(selected) }.getOrNull()
+            if (renamed == null) {
+                _messages.value = "Could not change visibility"
+                return@launch
+            }
+            // Marks are keyed by path, so a rename has to carry them across or
+            // a hidden favourite silently stops being a favourite.
+            selected.zip(renamed).forEach { (before, after) -> carryMarks(before, after) }
+            clearSelection()
+            refresh()
+        }
+    }
 
     // --- Selection ----------------------------------------------------------
 
@@ -247,6 +332,12 @@ class BrowserViewModel(
                     repository.copy(pending.paths, destination)
                 }
             }.onSuccess { count ->
+                // A move changes every path involved, so the marks follow.
+                if (pending.isMove) {
+                    pending.paths.forEach { source ->
+                        carryMarks(source, File(destination, File(source).name).absolutePath)
+                    }
+                }
                 clipboard.clear()
                 _messages.value =
                     "$count ${if (pending.isMove) "moved" else "copied"}"
@@ -266,6 +357,9 @@ class BrowserViewModel(
         viewModelScope.launch {
             runCatching { repository.moveToTrash(paths) }
                 .onSuccess {
+                    // Otherwise favourites and pins pile up pointing at files
+                    // that are no longer there.
+                    this@BrowserViewModel.paths.forget(paths)
                     _messages.value = "${paths.size} moved to trash"
                     refresh()
                 }
@@ -277,7 +371,10 @@ class BrowserViewModel(
         viewModelScope.launch {
             val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
             _messages.value = if (ok) null else "A file named \"$newName\" already exists"
-            if (ok) refresh()
+            if (ok) {
+                carryMarks(path, File(File(path).parentFile, newName).absolutePath)
+                refresh()
+            }
         }
     }
 
