@@ -17,11 +17,28 @@ import java.io.File
  */
 object ShareFiles {
 
-    fun share(context: Context, paths: List<String>): Boolean {
-        // Folders have no stream to send, and a share sheet offering one that
-        // every target would reject is worse than not offering it.
+    /** Beyond this, the intent risks exceeding the Binder limit. */
+    const val MAX_FILES = 300
+
+    /**
+     * Result of a share attempt, so the caller can say why nothing happened.
+     */
+    sealed interface Result {
+        data object Sent : Result
+        data object NoFiles : Result
+        data class TooMany(val count: Int) : Result
+        data object NoApp : Result
+    }
+
+    fun share(context: Context, paths: List<String>): Result {
         val files = paths.map(::File).filter { it.isFile }
-        if (files.isEmpty()) return false
+        if (files.isEmpty()) return Result.NoFiles
+
+        // Every URI travels through a Binder transaction, which is capped at
+        // about 1 MB for the whole intent. A few thousand of them silently
+        // throws TransactionTooLargeException, so refuse with a count the user
+        // can act on rather than failing obscurely.
+        if (files.size > MAX_FILES) return Result.TooMany(files.size)
 
         val uris = files.map { file ->
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -46,9 +63,9 @@ object ShareFiles {
             context.startActivity(
                 Intent.createChooser(intent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-            true
+            Result.Sent
         } catch (_: ActivityNotFoundException) {
-            false
+            Result.NoApp
         }
     }
 

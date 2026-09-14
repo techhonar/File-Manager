@@ -14,6 +14,7 @@ import uniffi.filemanager_core.FilesystemStats
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SearchSink
+import uniffi.filemanager_core.SortKey
 import uniffi.filemanager_core.SortOptions
 import uniffi.filemanager_core.StorageAnalysis
 import uniffi.filemanager_core.StorageSummary
@@ -146,33 +147,41 @@ class FileRepository(
         withContext(io) { File(parent, name).mkdirs() }
 
     /**
-     * Zip [paths] into the cache and hand back the archive.
+     * Expand a selection into the individual files it contains.
      *
-     * Sharing a folder needs this. Android has no way to pass a directory as
-     * a stream - not to Quick Share, not to anything - so a folder has to
-     * become a single file first, which is what every file manager does.
+     * Sharing a folder means sharing what is in it: Android cannot pass a
+     * directory as a stream, so the alternative to this is zipping, which
+     * hands the recipient an archive to unpack instead of the photos they
+     * were expecting.
      *
-     * The archive goes in the cache directory: it is a transient copy, and
-     * the system can reclaim it.
+     * Folders are walked recursively and plain files pass through untouched.
+     * Hidden files are skipped - nobody means to share a thumbnail cache.
      */
-    suspend fun archiveForSharing(paths: List<String>, cacheDir: File): String =
-        withContext(io) {
-            val outDir = File(cacheDir, "shared")
-            // Clear previous archives rather than accumulating a copy of
-            // everything the user has ever shared. listFiles returns null when
-            // the path is absent or not a directory, so both cases fall
-            // through to mkdirs.
-            outDir.listFiles()?.forEach { it.delete() }
-            outDir.mkdirs()
-            val name = if (paths.size == 1) {
-                File(paths.first()).name.substringBeforeLast('.', File(paths.first()).name)
-            } else {
-                "Files"
-            }
-            val dest = File(outDir, "$name.zip")
-            archiveCreate(paths, dest.absolutePath, null, null)
-            dest.absolutePath
-        }
+    suspend fun expandForSharing(paths: List<String>): List<String> = withContext(io) {
+        val folders = paths.filter { File(it).isDirectory }
+        val files = paths.filter { File(it).isFile }
+        if (folders.isEmpty()) return@withContext files
+
+        // An empty query matches everything, so this is just "every file under
+        // here", reusing the existing walk rather than writing a second one.
+        val contained = uniffi.filemanager_core.search(
+            folders,
+            SearchFilter(
+                query = "",
+                categories = emptyList(),
+                minSize = null,
+                maxSize = null,
+                modifiedAfter = null,
+                includeHidden = false,
+                limit = 0u,
+            ),
+            SortOptions(SortKey.NAME, descending = false, dirsFirst = false),
+            null,
+            null,
+        ).map { it.path }
+
+        (files + contained).distinct()
+    }
 
     /**
      * Create an empty file. Returns false if something of that name is already

@@ -677,3 +677,41 @@ fn recent_files_excludes_the_trash() {
     let names: Vec<_> = recent.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["new.jpg"], "deleted files are not recent files");
 }
+
+#[test]
+fn an_empty_query_lists_every_file_under_a_folder() {
+    // Sharing a folder expands it by searching with an empty query, so that
+    // has to mean "everything here", recursively, and must not quietly stop
+    // at a default limit.
+    let tree = TempTree::new("expand-folder");
+    tree.file("album/a.jpg", b"1");
+    tree.file("album/nested/b.jpg", b"2");
+    tree.file("album/nested/deeper/c.png", b"3");
+    tree.file("album/.thumbnails/cache.jpg", b"hidden");
+
+    let filter = SearchFilter {
+        query: String::new(),
+        categories: Vec::new(),
+        min_size: None,
+        max_size: None,
+        modified_after: None,
+        include_hidden: false,
+        limit: 0,
+    };
+    let found = search(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        filter,
+        sort_by_name(),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let mut names: Vec<_> = found.iter().map(|e| e.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["a.jpg", "b.jpg", "c.png"],
+        "every depth is included, and the thumbnail cache is not",
+    );
+}

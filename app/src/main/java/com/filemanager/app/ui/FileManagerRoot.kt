@@ -120,28 +120,33 @@ fun FileManagerRoot(
     val scope = rememberCoroutineScope()
 
     /**
-     * Share files, zipping first when any folder is involved.
+     * Share files, expanding any folder into the files it contains.
      *
-     * Android cannot pass a directory as a stream - not to Quick Share, not to
-     * anything - so a folder has to become one file first. Plain files are
-     * sent directly, since zipping them would only make the recipient unpack
-     * something they did not ask for.
+     * Not zipped: the recipient wants the photos, not an archive to unpack.
+     * Android cannot send a directory as a stream, so the folder is walked and
+     * its files are sent individually - which is also what Quick Share expects.
      */
     val shareFiles: (List<String>) -> Unit = { paths ->
-        val hasFolder = paths.any { File(it).isDirectory }
-        if (!hasFolder) {
-            ShareFiles.share(context, paths)
-        } else {
-            scope.launch {
-                runCatching { app.repository.archiveForSharing(paths, context.cacheDir) }
-                    .onSuccess { ShareFiles.share(context, listOf(it)) }
+        scope.launch {
+            val expanded = runCatching { app.repository.expandForSharing(paths) }
+                .getOrDefault(emptyList())
+
+            when (val result = ShareFiles.share(context, expanded)) {
+                is ShareFiles.Result.Sent -> Unit
+                is ShareFiles.Result.NoFiles ->
+                    toast(context, "Nothing to share here")
+                is ShareFiles.Result.TooMany ->
+                    toast(
+                        context,
+                        "Too many files to share at once (${result.count}). " +
+                            "Android caps a single share at about ${ShareFiles.MAX_FILES}.",
+                    )
+                is ShareFiles.Result.NoApp ->
+                    toast(context, "No app can receive these files")
             }
         }
     }
 
-    // Surface, not a bare NavHost: during the transition between destinations
-    // both screens are briefly semi-transparent, and with nothing painted
-    // behind them the window background shows through as a flash.
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -330,4 +335,9 @@ private fun openWithExternalApp(context: android.content.Context, entry: FileEnt
         // Nothing installed handles this type; silently ignoring is better
         // than crashing, and the user sees the file simply not open.
     }
+}
+
+/** Brief message for a share that could not proceed. */
+private fun toast(context: android.content.Context, message: String) {
+    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
 }
