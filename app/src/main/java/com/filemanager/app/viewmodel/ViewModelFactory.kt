@@ -18,6 +18,8 @@ class ViewModelFactory(
     private val volumes: List<StorageVolume>,
     private val primaryPath: String,
     private val startPath: String = primaryPath,
+    /** See BrowserViewModel: passed in so no ViewModel holds a Context. */
+    private val ownerAppOf: suspend (String) -> String? = { null },
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
@@ -26,7 +28,7 @@ class ViewModelFactory(
             HomeViewModel(repository, volumes, primaryPath) as T
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
-            BrowserViewModel(repository, clipboard, startPath) as T
+            BrowserViewModel(repository, clipboard, startPath, ownerAppOf) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
             SearchViewModel(repository, clipboard, volumes.map { it.path }) as T

@@ -146,6 +146,35 @@ class FileRepository(
         withContext(io) { File(parent, name).mkdirs() }
 
     /**
+     * Zip [paths] into the cache and hand back the archive.
+     *
+     * Sharing a folder needs this. Android has no way to pass a directory as
+     * a stream - not to Quick Share, not to anything - so a folder has to
+     * become a single file first, which is what every file manager does.
+     *
+     * The archive goes in the cache directory: it is a transient copy, and
+     * the system can reclaim it.
+     */
+    suspend fun archiveForSharing(paths: List<String>, cacheDir: File): String =
+        withContext(io) {
+            val outDir = File(cacheDir, "shared")
+            // Clear previous archives rather than accumulating a copy of
+            // everything the user has ever shared. listFiles returns null when
+            // the path is absent or not a directory, so both cases fall
+            // through to mkdirs.
+            outDir.listFiles()?.forEach { it.delete() }
+            outDir.mkdirs()
+            val name = if (paths.size == 1) {
+                File(paths.first()).name.substringBeforeLast('.', File(paths.first()).name)
+            } else {
+                "Files"
+            }
+            val dest = File(outDir, "$name.zip")
+            archiveCreate(paths, dest.absolutePath, null, null)
+            dest.absolutePath
+        }
+
+    /**
      * Create an empty file. Returns false if something of that name is already
      * there, rather than silently truncating it.
      */

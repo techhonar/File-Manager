@@ -15,6 +15,20 @@ import uniffi.filemanager_core.SortOptions
 import java.io.File
 
 /** What the browser screen renders. */
+/**
+ * The parts of a file's details that have to be fetched.
+ *
+ * Everything else comes straight off the FileEntry; these three need either a
+ * subtree walk or a MediaStore query, so the sheet shows what it has and fills
+ * these in when they land.
+ */
+data class FileDetails(
+    val folderBytes: ULong? = null,
+    val fileCount: ULong? = null,
+    val folderCount: ULong? = null,
+    val ownerApp: String? = null,
+)
+
 /** How the file list is laid out. */
 enum class ViewMode {
     /** Icon, name, and a single quiet line of date and size. */
@@ -35,15 +49,10 @@ data class BrowserState(
     val showHidden: Boolean = false,
     val sort: SortOptions = SortOptions(SortKey.NAME, descending = false, dirsFirst = true),
     val viewMode: ViewMode = ViewMode.LIST,
-    /** Set while the properties sheet is open. */
-    val propertiesTarget: FileEntry? = null,
-    /**
-     * Recursive size of the folder shown in properties.
-     *
-     * Null while it is still being measured - a folder's size is a whole
-     * subtree walk, so the sheet opens immediately and fills this in after.
-     */
-    val propertiesFolderSize: ULong? = null,
+    /** Set while the details sheet is open. */
+    val detailsTarget: FileEntry? = null,
+    /** Null until the walk and the MediaStore lookup come back. */
+    val details: FileDetails? = null,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     /**
@@ -79,6 +88,13 @@ class BrowserViewModel(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
     startPath: String,
+    /**
+     * Resolves which app created a file.
+     *
+     * Injected rather than called directly because it needs a Context, and a
+     * ViewModel holding one is how activities get leaked.
+     */
+    private val ownerAppOf: suspend (String) -> String? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
@@ -142,27 +158,35 @@ class BrowserViewModel(
 
     fun setViewMode(mode: ViewMode) = _state.update { it.copy(viewMode = mode) }
 
-    fun showProperties(entry: FileEntry) {
-        _state.update { it.copy(propertiesTarget = entry, propertiesFolderSize = null) }
-        if (!entry.isDir) return
+    fun showDetails(entry: FileEntry) {
+        _state.update { it.copy(detailsTarget = entry, details = null) }
 
-        // A folder has no size of its own, so it has to be walked. The sheet
-        // is already on screen by then and fills the figure in when it lands.
         viewModelScope.launch {
-            val size = runCatching { repository.directorySize(entry.path) }.getOrNull()
+            // One walk covers size and contents; tree_stats returns both, so
+            // asking for them separately would traverse twice.
+            val stats = if (entry.isDir) {
+                runCatching { repository.stats(listOf(entry.path)) }.getOrNull()
+            } else {
+                null
+            }
+            val owner = runCatching { ownerAppOf(entry.path) }.getOrNull()
+
             _state.update { current ->
-                // Ignore a result that arrives after the sheet moved on.
-                if (current.propertiesTarget?.path == entry.path) {
-                    current.copy(propertiesFolderSize = size)
-                } else {
-                    current
-                }
+                // Discard a result that arrives after the sheet moved on.
+                if (current.detailsTarget?.path != entry.path) return@update current
+                current.copy(
+                    details = FileDetails(
+                        folderBytes = stats?.totalBytes,
+                        fileCount = stats?.fileCount,
+                        folderCount = stats?.dirCount,
+                        ownerApp = owner,
+                    ),
+                )
             }
         }
     }
 
-    fun dismissProperties() =
-        _state.update { it.copy(propertiesTarget = null, propertiesFolderSize = null) }
+    fun dismissDetails() = _state.update { it.copy(detailsTarget = null, details = null) }
 
     // --- Selection ----------------------------------------------------------
 

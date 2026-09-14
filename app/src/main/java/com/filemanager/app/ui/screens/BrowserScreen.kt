@@ -66,7 +66,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
-import com.filemanager.app.ui.components.PropertiesDialog
+import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
@@ -139,7 +139,7 @@ fun BrowserScreen(
                             single = state.selected.singleOrNull()
                                 ?.let { p -> state.entries.firstOrNull { it.path == p } },
                             onRename = { renameTarget = it },
-                            onProperties = viewModel::showProperties,
+                            onDetails = viewModel::showDetails,
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -153,7 +153,17 @@ fun BrowserScreen(
                     onMove = viewModel::cut,
                     onDelete = viewModel::deleteSelected,
                     onShare = { onShare(state.selected.toList()) },
-                    onCompress = viewModel::compressSelected,
+                    // With one file selected, Details is the more useful fifth
+                    // action; with several, zipping them is.
+                    onDetails = state.selected.singleOrNull()?.let { path ->
+                        { state.entries.firstOrNull { it.path == path }
+                            ?.let(viewModel::showDetails) }
+                    },
+                    onCompress = if (state.selected.size > 1) {
+                        { viewModel.compressSelected() }
+                    } else {
+                        null
+                    },
                 )
             },
         ) { padding ->
@@ -226,14 +236,14 @@ fun BrowserScreen(
         )
     }
 
-    state.propertiesTarget?.let { target ->
-        PropertiesDialog(
+    state.detailsTarget?.let { target ->
+        DetailsDialog(
             entry = target,
-            folderSize = state.propertiesFolderSize,
-            onDismiss = viewModel::dismissProperties,
+            details = state.details,
+            onDismiss = viewModel::dismissDetails,
             onShare = {
                 onShare(listOf(target.path))
-                viewModel.dismissProperties()
+                viewModel.dismissDetails()
             },
         )
     }
@@ -543,7 +553,7 @@ private fun MenuSectionLabel(text: String) {
 private fun SelectionOverflowMenu(
     single: FileEntry?,
     onRename: (FileEntry) -> Unit,
-    onProperties: (FileEntry) -> Unit,
+    onDetails: (FileEntry) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -557,9 +567,9 @@ private fun SelectionOverflowMenu(
             onClick = { single?.let(onRename); expanded = false },
         )
         DropdownMenuItem(
-            text = { Text("Properties") },
+            text = { Text("Details") },
             leadingIcon = { Icon(Icons.Default.Info, null) },
-            onClick = { single?.let(onProperties); expanded = false },
+            onClick = { single?.let(onDetails); expanded = false },
         )
     }
 }

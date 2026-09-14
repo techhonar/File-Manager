@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +49,7 @@ fun SelectionActionBar(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     onShare: (() -> Unit)? = null,
+    onDetails: (() -> Unit)? = null,
     onCompress: (() -> Unit)? = null,
 ) {
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
@@ -63,6 +65,7 @@ fun SelectionActionBar(
                 ActionItem(Icons.Default.ContentCopy, "Copy", onCopy)
                 ActionItem(Icons.Default.ContentCut, "Move", onMove)
                 onShare?.let { ActionItem(Icons.Default.Share, "Share", it) }
+                onDetails?.let { ActionItem(Icons.Default.Info, "Details", it) }
                 onCompress?.let { ActionItem(Icons.Default.FolderZip, "Zip", it) }
                 ActionItem(Icons.Default.Delete, "Delete", onDelete)
             }
