@@ -2,6 +2,7 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.userMessage
@@ -60,8 +61,13 @@ private data class SearchCache(
 class SearchViewModel(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
+    private val settings: AppSettings,
     private val roots: List<String>,
 ) : ViewModel() {
+
+    init {
+        _state.update { it.copy(viewMode = settings.viewMode.value.toViewMode()) }
+    }
 
     private val _state = MutableStateFlow(SearchState())
     val state: StateFlow<SearchState> = _state.asStateFlow()
@@ -275,7 +281,12 @@ class SearchViewModel(
     /** Enter selection mode with nothing ticked, from the overflow menu. */
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
 
-    fun setViewMode(mode: ViewMode) = _state.update { it.copy(viewMode = mode) }
+    fun setViewMode(mode: ViewMode) {
+        // Shared with the browser: the layout is a preference, not a property
+        // of whichever screen happens to be open.
+        settings.setViewMode(mode.toSetting())
+        _state.update { it.copy(viewMode = mode) }
+    }
 
     /** Select everything, or clear it if everything is already selected. */
     fun toggleSelectAll() = _state.update { current ->

@@ -1,5 +1,7 @@
 package com.filemanager.app.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -20,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,13 +55,24 @@ fun FileRow(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
     isPinned: Boolean = false,
+    isHighlighted: Boolean = false,
 ) {
+    // Fades out rather than vanishing, so the eye is led to the row instead of
+    // being startled by it.
+    val highlight by animateColorAsState(
+        targetValue = when {
+            isSelected -> MaterialTheme.colorScheme.primaryContainer
+            isHighlighted -> MaterialTheme.colorScheme.primaryContainer
+            else -> Color.Transparent
+        },
+        animationSpec = tween(durationMillis = 400),
+        label = "rowHighlight",
+    )
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-            )
+            .background(highlight)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .defaultMinSize(minHeight = OneUi.RowHeight)
             .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),

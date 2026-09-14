@@ -2,6 +2,12 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.AppSettings
+import com.filemanager.app.data.SortKeySetting
+import com.filemanager.app.data.ViewModeSetting
+import com.filemanager.app.data.FolderWatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
@@ -56,6 +62,14 @@ data class BrowserState(
     val pinned: Set<String> = emptySet(),
     /** Paths currently favourited, so the menu can offer the opposite. */
     val favorites: Set<String> = emptySet(),
+    /**
+     * Briefly marked after arriving from "show in folder".
+     *
+     * Opening the folder alone leaves the user to find the file themselves,
+     * which in a folder of hundreds is most of the work they were trying to
+     * avoid.
+     */
+    val highlightPath: String? = null,
     /** Set while the details sheet is open. */
     val detailsTarget: FileEntry? = null,
     /** Null until the walk and the MediaStore lookup come back. */
@@ -99,7 +113,9 @@ class BrowserViewModel(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
     private val paths: PathPrefs,
+    private val settings: AppSettings,
     startPath: String,
+    highlightPath: String? = null,
     /**
      * Resolves which app created a file.
      *
@@ -121,6 +137,20 @@ class BrowserViewModel(
     val messages: StateFlow<String?> = _messages.asStateFlow()
 
     init {
+        // Seeded from the stored preferences, so a folder opens the way the
+        // last one was left rather than back at the defaults.
+        _state.update {
+            it.copy(
+                viewMode = settings.viewMode.value.toViewMode(),
+                showHidden = settings.showHidden.value,
+                sort = SortOptions(
+                    key = settings.sortKey.value.toSortKey(),
+                    descending = settings.sortDescending.value,
+                    dirsFirst = true,
+                ),
+            )
+        }
+        _state.update { it.copy(highlightPath = highlightPath) }
         load(startPath)
 
         // Re-sort when a pin changes, so the item moves without a reload.
@@ -149,6 +179,7 @@ class BrowserViewModel(
     }
 
     fun load(path: String) {
+        watch(path)
         _state.update {
             it.copy(
                 path = path,
@@ -179,6 +210,53 @@ class BrowserViewModel(
 
     fun refresh() = load(_state.value.path)
 
+    /**
+     * Reload without the loading state, for a refresh the user did not ask to
+     * see - a pull-to-refresh gesture, or a change on disk.
+     *
+     * Showing the spinner would make the list blink every time anything in the
+     * folder changed, which is worse than the staleness it fixes.
+     */
+    private fun reloadQuietly() {
+        val path = _state.value.path
+        viewModelScope.launch {
+            runCatching { repository.list(path, _state.value.showHidden, _state.value.sort) }
+                .onSuccess { entries ->
+                    _state.update {
+                        // Discard a result for a folder the user has left.
+                        if (it.path != path) it
+                        else it.copy(entries = applyPinning(entries, paths.pinned.value))
+                    }
+                }
+        }
+    }
+
+    /** Pull-to-refresh. The gesture animates; the work stays invisible. */
+    fun refreshQuietly() = reloadQuietly()
+
+    // --- Live folder watching -------------------------------------------------
+
+    private var watcher: FolderWatcher? = null
+    private var watchJob: Job? = null
+
+    private fun watch(path: String) {
+        watcher?.stop()
+        watcher = FolderWatcher(path) {
+            // Copying one file emits a burst of events, so collapse them:
+            // wait for quiet, then reload once.
+            watchJob?.cancel()
+            watchJob = viewModelScope.launch {
+                delay(WATCH_DEBOUNCE_MS)
+                reloadQuietly()
+            }
+        }.also { it.start() }
+    }
+
+    override fun onCleared() {
+        watcher?.stop()
+        super.onCleared()
+    }
+
     /** Navigate up one level, stopping at the volume root. */
     fun navigateUp(): Boolean {
         val parent = File(_state.value.path).parentFile ?: return false
@@ -188,17 +266,23 @@ class BrowserViewModel(
     }
 
     fun setSort(sort: SortOptions) {
+        settings.setSort(sort.key.toSetting(), sort.descending)
         _state.update { it.copy(sort = sort) }
         refresh()
     }
 
     /** View option: whether hidden files appear in the listing at all. */
     fun toggleShowHidden() {
-        _state.update { it.copy(showHidden = !it.showHidden) }
+        val next = !_state.value.showHidden
+        settings.setShowHidden(next)
+        _state.update { it.copy(showHidden = next) }
         refresh()
     }
 
-    fun setViewMode(mode: ViewMode) = _state.update { it.copy(viewMode = mode) }
+    fun setViewMode(mode: ViewMode) {
+        settings.setViewMode(mode.toSetting())
+        _state.update { it.copy(viewMode = mode) }
+    }
 
     fun showDetails(entry: FileEntry) {
         _state.update { it.copy(detailsTarget = entry, details = null) }
@@ -229,6 +313,9 @@ class BrowserViewModel(
     }
 
     fun dismissDetails() = _state.update { it.copy(detailsTarget = null, details = null) }
+
+    /** Clears the marker once it has been shown for long enough to notice. */
+    fun clearHighlight() = _state.update { it.copy(highlightPath = null) }
 
     // --- Marks and visibility ------------------------------------------------
 
@@ -496,4 +583,39 @@ class BrowserViewModel(
     fun consumeMessage() {
         _messages.value = null
     }
+
+    private companion object {
+        /** Long enough for a copy to settle, short enough to feel immediate. */
+        const val WATCH_DEBOUNCE_MS = 350L
+    }
+}
+
+// Translations between the stored settings and the types the UI and the core
+// use. Deliberately explicit rather than relying on matching ordinals, which
+// would break silently if either side gained a variant.
+
+private fun ViewModeSetting.toViewMode(): ViewMode = when (this) {
+    ViewModeSetting.LIST -> ViewMode.LIST
+    ViewModeSetting.DETAILED -> ViewMode.DETAILED
+    ViewModeSetting.GRID -> ViewMode.GRID
+}
+
+private fun ViewMode.toSetting(): ViewModeSetting = when (this) {
+    ViewMode.LIST -> ViewModeSetting.LIST
+    ViewMode.DETAILED -> ViewModeSetting.DETAILED
+    ViewMode.GRID -> ViewModeSetting.GRID
+}
+
+private fun SortKeySetting.toSortKey(): SortKey = when (this) {
+    SortKeySetting.NAME -> SortKey.NAME
+    SortKeySetting.SIZE -> SortKey.SIZE
+    SortKeySetting.MODIFIED -> SortKey.MODIFIED
+    SortKeySetting.TYPE -> SortKey.TYPE
+}
+
+private fun SortKey.toSetting(): SortKeySetting = when (this) {
+    SortKey.NAME -> SortKeySetting.NAME
+    SortKey.SIZE -> SortKeySetting.SIZE
+    SortKey.MODIFIED -> SortKeySetting.MODIFIED
+    SortKey.TYPE -> SortKeySetting.TYPE
 }

@@ -3,6 +3,7 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.filemanager.app.data.FileClipboard
+import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.StorageVolume
@@ -17,9 +18,11 @@ class ViewModelFactory(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
     private val paths: PathPrefs,
+    private val settings: AppSettings,
     private val volumes: List<StorageVolume>,
     private val primaryPath: String,
     private val startPath: String = primaryPath,
+    private val highlightPath: String? = null,
     /** See BrowserViewModel: passed in so no ViewModel holds a Context. */
     private val ownerAppOf: suspend (String) -> String? = { null },
     private val hasRemovableSlot: Boolean = false,
@@ -31,16 +34,18 @@ class ViewModelFactory(
             HomeViewModel(repository, volumes, primaryPath, hasRemovableSlot) as T
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
-            BrowserViewModel(repository, clipboard, paths, startPath, ownerAppOf) as T
+            BrowserViewModel(
+                repository, clipboard, paths, settings, startPath, highlightPath, ownerAppOf,
+            ) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
-            SearchViewModel(repository, clipboard, volumes.map { it.path }) as T
+            SearchViewModel(repository, clipboard, settings, volumes.map { it.path }) as T
 
         modelClass.isAssignableFrom(StorageViewModel::class.java) ->
             StorageViewModel(repository, primaryPath) as T
 
         modelClass.isAssignableFrom(FavoritesViewModel::class.java) ->
-            FavoritesViewModel(repository, paths) as T
+            FavoritesViewModel(repository, paths, settings) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
             RecentViewModel(repository, clipboard, primaryPath) as T

@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import uniffi.filemanager_core.CategoryUsage
+import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.formatSize
 
 /**
@@ -77,9 +78,55 @@ fun StorageBar(
     }
 }
 
-/** The colour key under the bar: a filled dot, the name, then the figures. */
+/**
+ * Every category the app knows about, in the order the legend lists them.
+ *
+ * Fixed rather than derived from a result, so the legend can be drawn in full
+ * before anything has been measured - the layout never reflows as figures
+ * arrive, because the rows were already there.
+ */
+private val LEGEND_ORDER = listOf(
+    FileCategory.IMAGE,
+    FileCategory.VIDEO,
+    FileCategory.AUDIO,
+    FileCategory.DOCUMENT,
+    FileCategory.ARCHIVE,
+    FileCategory.APK,
+    FileCategory.OTHER,
+)
+
+/**
+ * The colour key under the bar: a filled dot, the name, then the figures.
+ *
+ * With [usage] empty the names and colours are still shown and the figures are
+ * simply blank, which is what a scan in progress should look like - no zeroes
+ * that will change, and nothing moving when the real numbers land.
+ */
 @Composable
 fun StorageLegend(usage: List<CategoryUsage>, modifier: Modifier = Modifier) {
+    if (usage.isEmpty()) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            LEGEND_ORDER.forEach { category ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(category.color()),
+                    )
+                    Text(
+                        text = category.label(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(start = 14.dp).weight(1f),
+                    )
+                    // Deliberately nothing here yet.
+                }
+            }
+        }
+        return
+    }
+
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         usage.filter { it.bytes > 0uL }.forEach { slice ->
             Row(verticalAlignment = Alignment.CenterVertically) {

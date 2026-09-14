@@ -82,7 +82,7 @@ import uniffi.filemanager_core.FileEntry
  */
 private object Routes {
     const val HOME = "home"
-    const val BROWSE_PATTERN = "browse/{path}"
+    const val BROWSE_PATTERN = "browse/{path}?highlight={highlight}"
     const val SEARCH_PATTERN = "search?category={category}"
     const val STORAGE = "storage"
     const val TRASH = "trash"
@@ -91,8 +91,16 @@ private object Routes {
     const val FAVORITES = "favorites"
 
     /** Paths contain slashes, so they must be encoded into the route. */
-    fun browse(path: String): String =
-        "browse/${URLEncoder.encode(path, Charsets.UTF_8.name())}"
+    fun browse(path: String, highlight: String? = null): String {
+        val encoded = URLEncoder.encode(path, Charsets.UTF_8.name())
+        // Show-in-folder passes the file so the browser can scroll to it;
+        // opening a folder normally passes nothing.
+        return if (highlight == null) {
+            "browse/$encoded"
+        } else {
+            "browse/$encoded?highlight=${URLEncoder.encode(highlight, Charsets.UTF_8.name())}"
+        }
+    }
 
     /** Search, optionally pre-filtered to one category. */
     fun search(category: FileCategory? = null): String =
@@ -131,6 +139,7 @@ fun FileManagerRoot(
             repository = app.repository,
             clipboard = app.clipboard,
             paths = app.paths,
+            settings = app.settings,
             volumes = volumes,
             primaryPath = primaryPath,
             ownerAppOf = ownerAppOf,
@@ -265,9 +274,20 @@ fun FileManagerRoot(
             )
         }
 
-        composable(Routes.BROWSE_PATTERN) { entry ->
+        composable(
+                route = Routes.BROWSE_PATTERN,
+                arguments = listOf(
+                    navArgument("highlight") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { entry ->
                 val encoded = entry.arguments?.getString("path").orEmpty()
                 val path = URLDecoder.decode(encoded, Charsets.UTF_8.name())
+                val highlight = entry.arguments?.getString("highlight")
+                    ?.let { URLDecoder.decode(it, Charsets.UTF_8.name()) }
 
                 // Keyed by path so each folder gets its own ViewModel rather
                 // than reusing the previous folder's state.
@@ -277,9 +297,11 @@ fun FileManagerRoot(
                         repository = app.repository,
                         clipboard = app.clipboard,
                         paths = app.paths,
+                        settings = app.settings,
                         volumes = volumes,
                         primaryPath = primaryPath,
                         startPath = path,
+                        highlightPath = highlight,
                         ownerAppOf = ownerAppOf,
                         hasRemovableSlot = hasRemovableSlot,
                     ),
@@ -320,7 +342,9 @@ fun FileManagerRoot(
                     onOpenWith = openWith,
                     onCopyPath = copyPath,
                     onShowInFolder = { path ->
-                        navController.navigate(Routes.browse(path.substringBeforeLast('/')))
+                        navController.navigate(
+                            Routes.browse(path.substringBeforeLast('/'), highlight = path),
+                        )
                     },
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
@@ -339,7 +363,9 @@ fun FileManagerRoot(
                 viewModel = vm,
                 onOpenFile = openFile,
                 onShowInFolder = { path ->
-                    navController.navigate(Routes.browse(path.substringBeforeLast('/')))
+                    navController.navigate(
+                            Routes.browse(path.substringBeforeLast('/'), highlight = path),
+                        )
                 },
                 onNavigateBack = { navController.popBackStack() },
             )

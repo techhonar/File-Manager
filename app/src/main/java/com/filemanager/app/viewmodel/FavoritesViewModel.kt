@@ -6,7 +6,9 @@ import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import com.filemanager.app.data.AppSettings
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.filemanager_core.FileEntry
@@ -35,6 +37,7 @@ data class FavoritesState(
 class FavoritesViewModel(
     private val repository: FileRepository,
     private val paths: PathPrefs,
+    private val settings: AppSettings,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FavoritesState())
@@ -42,16 +45,22 @@ class FavoritesViewModel(
 
     init {
         viewModelScope.launch {
-            paths.favorites.collect { favorites -> resolve(favorites) }
+            // Re-resolve when either the marks or the hidden-files preference
+            // changes: a favourite that has just been hidden should disappear
+            // from here too, which it did not before.
+            combine(paths.favorites, settings.showHidden) { favorites, showHidden ->
+                favorites to showHidden
+            }.collect { (favorites, showHidden) -> resolve(favorites, showHidden) }
         }
     }
 
-    private suspend fun resolve(favorites: Set<String>) {
+    private suspend fun resolve(favorites: Set<String>, showHidden: Boolean) {
         if (favorites.isEmpty()) {
             _state.value = FavoritesState(isLoading = false)
             return
         }
         val entries = repository.entriesFor(favorites.toList())
+            .filter { showHidden || !it.isHidden }
         val found = entries.map { it.path }.toSet()
         val missing = favorites - found
 

@@ -50,7 +50,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -80,6 +80,7 @@ import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
 import androidx.activity.compose.BackHandler
 import com.filemanager.app.ui.components.ExtractDialog
+import kotlinx.coroutines.delay
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.SelectAllToggle
@@ -123,6 +124,32 @@ fun BrowserScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
 
+    // Scroll the highlighted file into view once the folder has loaded, then
+    // let the marker fade. Keyed on the path and the entries so it runs after
+    // the list exists, not before.
+    LaunchedEffect(state.highlightPath, state.entries) {
+        val target = state.highlightPath ?: return@LaunchedEffect
+        val index = state.entries.indexOfFirst { it.path == target }
+        if (index < 0) return@LaunchedEffect
+
+        // A little above centre, so the row is clearly in view rather than
+        // pinned to the very top edge.
+        runCatching { listState.animateScrollToItem(index.coerceAtLeast(0)) }
+        delay(HIGHLIGHT_DURATION_MS)
+        viewModel.clearHighlight()
+    }
+
+    // Held long enough for the gesture to complete, not for the scan: the work
+    // is quick and invisible, and snapping the indicator away the instant it
+    // started would read as nothing having happened.
+    var isRefreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing) {
+            delay(REFRESH_INDICATOR_MS)
+            isRefreshing = false
+        }
+    }
+
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
@@ -148,81 +175,54 @@ fun BrowserScreen(
         }
     }
 
-    if (state.inSelectionMode) {
-        // Selection mode gets a plain compact bar plus a bottom action bar.
-        Scaffold(
-            modifier = modifier,
-            containerColor = MaterialTheme.colorScheme.background,
-            snackbarHost = { SnackbarHost(snackbarState) },
-            topBar = {
-                TopAppBar(
-                    title = { Text("${state.selected.size} selected") },
-                    navigationIcon = {
-                        IconButton(onClick = viewModel::clearSelection) {
-                            Icon(Icons.Default.Close, "Cancel selection")
-                        }
-                    },
-                    actions = {
-                        SelectAllToggle(
-                            allSelected = state.allSelected,
-                            onToggle = viewModel::toggleSelectAll,
-                        )
-                        SelectionOverflowMenu(
-                            single = state.selected.singleOrNull()
-                                ?.let { p -> state.entries.firstOrNull { it.path == p } },
-                            allHidden = state.selected.isNotEmpty() && state.selected.all {
-                                it.substringAfterLast('/').startsWith(".")
-                            },
-                            allFavorite = state.selected.isNotEmpty() &&
-                                state.selected.all { it in state.favorites },
-                            allPinned = state.selected.isNotEmpty() &&
-                                state.selected.all { it in state.pinned },
-                            onRename = { renameTarget = it },
-                            onDetails = viewModel::showDetails,
-                            onFavorite = viewModel::toggleFavorite,
-                            onPin = viewModel::togglePinned,
-                            onHide = viewModel::toggleSelectionHidden,
-                            onOpenWith = { path -> onOpenWith(path) },
-                        )
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                    ),
-                )
-            },
-            bottomBar = {
-                SelectionActionBar(
-                    onCopy = viewModel::copy,
-                    onMove = viewModel::cut,
-                    onDelete = viewModel::deleteSelected,
-                    onShare = { onShare(state.selected.toList()) },
-                    // With one file selected, Details is the more useful fifth
-                    // action; with several, zipping them is.
-                    onDetails = state.selected.singleOrNull()?.let { path ->
-                        { state.entries.firstOrNull { it.path == path }
-                            ?.let(viewModel::showDetails) }
-                    },
-                    onCompress = if (state.selected.size > 1) {
-                        { viewModel.compressSelected() }
-                    } else {
-                        null
-                    },
-                )
-            },
-        ) { padding ->
-            FileList(state, viewModel, onOpenFile, padding, contentPadding, listState, gridState)
-        }
-    } else {
-        OneUiScreen(
-            title = folderName,
-            modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarState) },
-            navigationIcon = {
+    // One screen whose bars change, not two screens swapped between. The
+    // earlier version rendered a Scaffold in selection mode and a OneUiScreen
+    // otherwise, which meant the list was torn down and rebuilt the moment a
+    // file was ticked - taking its scroll position with it and dropping the
+    // user back at the top of the folder.
+    OneUiScreen(
+        title = if (state.inSelectionMode) {
+            "${state.selected.size} selected"
+        } else {
+            folderName
+        },
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarState) },
+        navigationIcon = {
+            if (state.inSelectionMode) {
+                IconButton(onClick = viewModel::clearSelection) {
+                    Icon(Icons.Default.Close, "Cancel selection")
+                }
+            } else {
                 IconButton(onClick = { if (!viewModel.navigateUp()) onNavigateBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Up")
                 }
-            },
-            actions = {
+            }
+        },
+        actions = {
+            if (state.inSelectionMode) {
+                SelectAllToggle(
+                    allSelected = state.allSelected,
+                    onToggle = viewModel::toggleSelectAll,
+                )
+                SelectionOverflowMenu(
+                    single = state.selected.singleOrNull()
+                        ?.let { p -> state.entries.firstOrNull { it.path == p } },
+                    allHidden = state.selected.isNotEmpty() && state.selected.all {
+                        it.substringAfterLast('/').startsWith(".")
+                    },
+                    allFavorite = state.selected.isNotEmpty() &&
+                        state.selected.all { it in state.favorites },
+                    allPinned = state.selected.isNotEmpty() &&
+                        state.selected.all { it in state.pinned },
+                    onRename = { renameTarget = it },
+                    onDetails = viewModel::showDetails,
+                    onFavorite = viewModel::toggleFavorite,
+                    onPin = viewModel::togglePinned,
+                    onHide = viewModel::toggleSelectionHidden,
+                    onOpenWith = { path -> onOpenWith(path) },
+                )
+            } else {
                 if (clipboard != null) {
                     IconButton(onClick = viewModel::paste) {
                         Icon(Icons.Default.ContentPaste, "Paste")
@@ -242,10 +242,44 @@ fun BrowserScreen(
                     onSetSort = viewModel::setSort,
                     onSelectItems = viewModel::enterSelectionMode,
                 )
-            },
-        ) { padding ->
-            Column(Modifier.padding(padding).fillMaxSize()) {
+            }
+        },
+        bottomBar = {
+            if (state.inSelectionMode) {
+                SelectionActionBar(
+                    onCopy = viewModel::copy,
+                    onMove = viewModel::cut,
+                    onDelete = viewModel::deleteSelected,
+                    onShare = { onShare(state.selected.toList()) },
+                    onDetails = state.selected.singleOrNull()?.let { path ->
+                        { state.entries.firstOrNull { it.path == path }
+                            ?.let(viewModel::showDetails) }
+                    },
+                    onCompress = if (state.selected.size > 1) {
+                        { viewModel.compressSelected() }
+                    } else {
+                        null
+                    },
+                )
+            }
+        },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            if (!state.inSelectionMode) {
                 Breadcrumbs(crumbs = state.breadcrumbs, onNavigate = viewModel::load)
+            }
+
+            // The indicator is the only thing shown. The rescan itself is
+            // deliberately silent - a spinner over the list would make a
+            // refresh look like a reload of something that is already correct.
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    isRefreshing = true
+                    viewModel.refreshQuietly()
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 FileList(
                     state, viewModel, onOpenFile, PaddingValues(0.dp), contentPadding,
                     listState, gridState,
@@ -423,6 +457,7 @@ private fun FileList(
                             onClick = { onEntryClick(entry) },
                             onLongClick = { viewModel.toggleSelection(entry.path) },
                             isPinned = entry.path in state.pinned,
+                            isHighlighted = entry.path == state.highlightPath,
                         )
                     }
                 }
@@ -676,3 +711,9 @@ private fun SelectionOverflowMenu(
         )
     }
 }
+
+/** Long enough to notice the row, short enough not to look stuck. */
+private const val HIGHLIGHT_DURATION_MS = 1_200L
+
+/** How long the pull-to-refresh indicator stays after the gesture. */
+private const val REFRESH_INDICATOR_MS = 600L
