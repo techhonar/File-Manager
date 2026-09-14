@@ -191,3 +191,65 @@ fun SearchResultRow(
         )
     }
 }
+
+/**
+ * Detailed list row: the same as [FileRow] plus the type and a fuller
+ * timestamp, for comparing files at a glance rather than reading one.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun FileDetailRow(
+    entry: FileEntry,
+    isSelected: Boolean,
+    selectionMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .defaultMinSize(minHeight = 84.dp)
+            .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (selectionMode) {
+            Checkbox(checked = isSelected, onCheckedChange = { onClick() })
+            Spacer(Modifier.width(8.dp))
+        }
+
+        FileThumbnail(entry)
+        Spacer(Modifier.width(16.dp))
+
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = entry.name,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (entry.isDir) "Folder" else entry.category.label(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
+            Text(
+                text = detailedTimestamp(entry) +
+                    if (entry.isDir) "" else "  ·  ${formatSize(entry.size)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun detailedTimestamp(entry: FileEntry): String =
+    SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault())
+        .format(Date(entry.modifiedMs.toLong()))
