@@ -59,6 +59,19 @@ android {
                 storePassword = keystorePassword
                 keyAlias = keystoreAlias
                 keyPassword = keystoreKeyPassword
+
+                // Named explicitly rather than left to the plugin. Left alone
+                // it picks schemes from minSdk, and at 30 that meant v2 only:
+                // the published 0.2.1 carries a v2 block and nothing else.
+                // That is legal - every Android 11 device verifies v2 - but it
+                // leaves one scheme between the build and every installer that
+                // has to read it. v1 costs about 30 KB of manifest digests and
+                // v3 a few hundred bytes, and between them they cover the
+                // older and the newer verifier, so a parser that dislikes one
+                // has two others to fall back on.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -96,6 +109,18 @@ android {
         // VERSION_CODE from it, which come from the tag CI builds from.
         buildConfig = true
     }
+    // Strips the block the plugin otherwise stuffs into the APK signing
+    // block: a Google-encrypted blob listing every dependency, which only
+    // Play reads. We do not publish to Play, so it is dead weight, and it is
+    // the one thing in the signed APK that is not a documented Android
+    // structure - an installer that walks the signing block sees an ID it has
+    // no definition for. Removing it also stops the dependency list leaving
+    // the machine.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         // JNA ships .so files for every platform; keep only ours.

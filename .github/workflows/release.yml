@@ -245,7 +245,81 @@ jobs:
           NAME="FileManager-${{ steps.version.outputs.name }}${SUFFIX}.apk"
           mv "$APK" "$NAME"
           echo "path=$NAME" >> "$GITHUB_OUTPUT"
+          # The release notes quote both of these and tell the reader to check
+          # a failed install against them. They were referenced there before
+          # anything set them, so every release so far published an empty size
+          # and an empty hash - the one check we offered for a truncated
+          # download did not exist.
+          echo "sha=$(sha256sum "$NAME" | cut -d" " -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c%s "$NAME")" >> "$GITHUB_OUTPUT"
           echo "Built $NAME ($(du -h "$NAME" | cut -f1))"
+
+      # Everything here is what a device checks before it will install, and
+      # every one of them has to be right or the phone says only "There was a
+      # problem parsing the package" - which names none of them. Checking on
+      # the runner turns a failed install on someone's phone into a failed
+      # build we can read.
+      - name: Check the APK is installable
+        run: |
+          python3 - "${{ steps.apk.outputs.path }}" <<'EOF'
+          import struct, sys, zipfile
+
+          apk = sys.argv[1]
+          blob = open(apk, "rb").read()
+          zf = zipfile.ZipFile(apk)
+          problems = []
+
+          def data_start(hdr):
+              # The central directory's extra field is not the local header's,
+              # and it is the local one that zipalign pads. Reading the central
+              # copy reports every entry as misaligned.
+              n, e = struct.unpack_from("<HH", blob, hdr + 26)
+              return hdr + 30 + n + e
+
+          for info in zf.infolist():
+              off = data_start(info.header_offset)
+              if info.filename.endswith(".so"):
+                  if info.compress_type != 0:
+                      problems.append(f"{info.filename} is compressed")
+                  elif off % 4096:
+                      problems.append(f"{info.filename} not page aligned ({off % 4096})")
+              elif info.filename == "resources.arsc":
+                  if info.compress_type != 0:
+                      problems.append("resources.arsc is compressed")
+                  elif off % 4:
+                      problems.append(f"resources.arsc not 4-byte aligned ({off % 4})")
+
+          # Signature schemes, read straight out of the APK Signing Block.
+          names = {0x7109871a: "v2", 0xf05368c0: "v3", 0x1b93ad61: "v3.1"}
+          eocd = blob.rfind(b"PK\x05\x06")
+          cd = struct.unpack_from("<I", blob, eocd + 16)[0]
+          found = []
+          if blob[cd - 16:cd] == b"APK Sig Block 42":
+              size = struct.unpack_from("<Q", blob, cd - 24)[0]
+              p = cd - 8 - size + 8
+              while p < cd - 24:
+                  ln = struct.unpack_from("<Q", blob, p)[0]
+                  pid = struct.unpack_from("<I", blob, p + 8)[0]
+                  if pid in names:
+                      found.append(names[pid])
+                  p += 8 + ln
+          else:
+              problems.append("no APK Signing Block - the APK is not v2+ signed")
+          if any(n.startswith("META-INF/") and n.endswith((".RSA", ".DSA", ".EC"))
+                 for n in zf.namelist()):
+              found.insert(0, "v1")
+
+          print("signature schemes:", ", ".join(found) or "NONE")
+          print("entries:", len(zf.namelist()))
+          print("abis:", sorted({n.split("/")[1] for n in zf.namelist()
+                                 if n.startswith("lib/")}))
+
+          if problems:
+              for m in problems:
+                  print(f"::error::{m}")
+              sys.exit(1)
+          print("APK structure is installable")
+          EOF
 
       - name: Upload APK as a build artifact
         uses: actions/upload-artifact@v4
