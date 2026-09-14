@@ -265,7 +265,7 @@ fun FileManagerRoot(
 
             composable(Routes.STORAGE) {
                 val vm: StorageViewModel = viewModel(factory = factory)
-                StorageScreen(viewModel = vm, onOpenFile = openFile)
+                StorageScreen(viewModel = vm, onOpenFile = openFile, onShare = shareFiles)
             }
 
             composable(Routes.ABOUT) {

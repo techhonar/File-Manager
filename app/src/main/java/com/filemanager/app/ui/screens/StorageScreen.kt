@@ -15,6 +15,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import com.filemanager.app.ui.components.SelectAllToggle
+import com.filemanager.app.ui.components.SelectionActionBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,12 +57,57 @@ import uniffi.filemanager_core.formatSize
 fun StorageScreen(
     viewModel: StorageViewModel,
     onOpenFile: (FileEntry) -> Unit,
+    onShare: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val state by viewModel.state.collectAsState()
+    val snackbarState = remember { SnackbarHostState() }
 
-    OneUiScreen(title = "Storage", modifier = modifier) { padding ->
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbarState.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
+
+    OneUiScreen(
+        title = if (state.inSelectionMode) {
+            // The figure is the point of the screen, so it goes in the title.
+            "${state.selected.size} selected  ·  ${formatSize(state.selectedBytes)}"
+        } else {
+            "Storage"
+        },
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarState) },
+        navigationIcon = {
+            if (state.inSelectionMode) {
+                IconButton(onClick = viewModel::clearSelection) {
+                    Icon(Icons.Default.Close, "Cancel selection")
+                }
+            }
+        },
+        actions = {
+            if (state.inSelectionMode) {
+                SelectAllToggle(
+                    allSelected = state.allSelected,
+                    onToggle = viewModel::toggleSelectAll,
+                )
+            } else if (state.largest.isNotEmpty()) {
+                IconButton(onClick = viewModel::enterSelectionMode) {
+                    Icon(Icons.Default.SelectAll, "Select items")
+                }
+            }
+        },
+        bottomBar = {
+            if (state.inSelectionMode) {
+                SelectionActionBar(
+                    onDelete = viewModel::deleteSelection,
+                    onShare = { onShare(state.selected.toList()) },
+                )
+            }
+        },
+    ) { padding ->
         if (state.isLoading && state.summary == null) {
             Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -125,7 +181,16 @@ fun StorageScreen(
             if (state.largest.isNotEmpty()) {
                 item { OneUiSectionHeader("Largest files") }
                 items(state.largest, key = { it.path }) { entry ->
-                    SearchResultRow(entry = entry, onClick = { onOpenFile(entry) })
+                    SearchResultRow(
+                        entry = entry,
+                        isSelected = entry.path in state.selected,
+                        selectionMode = state.inSelectionMode,
+                        onClick = {
+                            if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                            else onOpenFile(entry)
+                        },
+                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                    )
                 }
             }
 

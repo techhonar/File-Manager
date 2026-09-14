@@ -13,6 +13,7 @@ import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.StorageSummary
+import uniffi.filemanager_core.formatSize
 
 data class StorageState(
     val summary: StorageSummary? = null,
@@ -23,15 +24,81 @@ data class StorageState(
     val duplicateProgress: String = "",
     /** Live count while the storage walk runs, shown under the spinner. */
     val scanProgress: String = "",
+    /** Paths ticked in the largest-files list. */
+    val selected: Set<String> = emptySet(),
+    val selectionActive: Boolean = false,
+    val message: String? = null,
 ) {
     /** Bytes recoverable by removing every duplicate but one. */
     val reclaimable: ULong get() = duplicates.fold(0uL) { sum, group -> sum + group.wastedBytes }
+
+    val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
+
+    val allSelected: Boolean
+        get() = largest.isNotEmpty() && selected.size == largest.size
+
+    /** Space that deleting the current selection would free. */
+    val selectedBytes: ULong
+        get() = largest.filter { it.path in selected }.fold(0uL) { sum, e -> sum + e.size }
 }
 
 class StorageViewModel(
     private val repository: FileRepository,
     private val rootPath: String,
 ) : ViewModel() {
+
+    // --- Selection ----------------------------------------------------------
+    //
+    // This screen exists to free space, so being able to look at the biggest
+    // files without being able to act on them was the wrong half of the job.
+
+    fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
+
+    fun toggleSelection(path: String) = _state.update { current ->
+        val next = current.selected.toMutableSet()
+        if (!next.add(path)) next.remove(path)
+        current.copy(selected = next)
+    }
+
+    fun toggleSelectAll() = _state.update { current ->
+        if (current.allSelected) {
+            current.copy(selected = emptySet())
+        } else {
+            current.copy(selected = current.largest.map { it.path }.toSet())
+        }
+    }
+
+    fun clearSelection() =
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
+
+    /** Delete goes through the trash, so a mistake here is recoverable. */
+    fun deleteSelection() {
+        val paths = _state.value.selected.toList()
+        if (paths.isEmpty()) return
+        val freed = _state.value.selectedBytes
+
+        viewModelScope.launch {
+            runCatching { repository.moveToTrash(paths) }
+                .onSuccess {
+                    val gone = paths.toSet()
+                    _state.update { current ->
+                        current.copy(
+                            // Drop them from the list rather than re-running
+                            // the whole walk for a handful of removals.
+                            largest = current.largest.filterNot { it.path in gone },
+                            selected = emptySet(),
+                            selectionActive = false,
+                            message = "${paths.size} moved to trash, ${formatSize(freed)} freed",
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _state.update { it.copy(message = e.message ?: "Could not delete") }
+                }
+        }
+    }
+
+    fun consumeMessage() = _state.update { it.copy(message = null) }
 
     private val _state = MutableStateFlow(StorageState())
     val state: StateFlow<StorageState> = _state.asStateFlow()
