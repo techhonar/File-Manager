@@ -20,6 +20,16 @@ data class FavoritesState(
     val selected: Set<String> = emptySet(),
     val selectionActive: Boolean = false,
     val message: String? = null,
+    /**
+     * Whether hidden favourites are listed.
+     *
+     * Marking a favourite as hidden used to remove it from this screen with no
+     * way to see it again - the file was still favourited, but the only switch
+     * that would show it lived in the browser's menu, on a different screen.
+     */
+    val showHidden: Boolean = false,
+    /** Favourites that exist but are filtered out by [showHidden]. */
+    val hiddenCount: Int = 0,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
     val allSelected: Boolean
@@ -50,31 +60,46 @@ class FavoritesViewModel(
             // from here too, which it did not before.
             combine(paths.favorites, settings.showHidden) { favorites, showHidden ->
                 favorites to showHidden
-            }.collect { (favorites, showHidden) -> resolve(favorites, showHidden) }
+            }.collect { (favorites, showHidden) ->
+                _state.update { it.copy(showHidden = showHidden) }
+                resolve(favorites, showHidden)
+            }
         }
     }
 
+    /** Show or hide the hidden favourites. Shared with every other list. */
+    fun toggleShowHidden() = settings.setShowHidden(!_state.value.showHidden)
+
     private suspend fun resolve(favorites: Set<String>, showHidden: Boolean) {
         if (favorites.isEmpty()) {
-            _state.value = FavoritesState(isLoading = false)
+            _state.value = FavoritesState(isLoading = false, showHidden = showHidden)
             return
         }
-        val entries = repository.entriesFor(favorites.toList())
-            .filter { showHidden || !it.isHidden }
-        val found = entries.map { it.path }.toSet()
+        val resolved = repository.entriesFor(favorites.toList())
+
+        // Resolved, not shown. A hidden favourite still exists - it is only
+        // filtered out of the list below - and counting it as missing here
+        // dropped the mark, so turning hidden files back on showed nothing and
+        // the favourite was gone for good.
+        val found = resolved.map { it.path }.toSet()
         val missing = favorites - found
 
         // Forget the ones that have gone, so the list does not keep shrinking
         // silently every time it is opened.
         if (missing.isNotEmpty()) paths.forget(missing)
 
+        val visible = resolved.filter { showHidden || !it.isHidden }
+        val shown = visible.map { it.path }.toSet()
+
         _state.update { current ->
             current.copy(
-                entries = entries.sortedBy { it.name.lowercase() },
+                entries = visible.sortedBy { it.name.lowercase() },
                 isLoading = false,
                 missingCount = missing.size,
-                // Drop any tick whose file is no longer in the list.
-                selected = current.selected.intersect(found),
+                hiddenCount = resolved.size - visible.size,
+                // Drop any tick whose file is no longer on screen, so the
+                // count in the title matches what can be acted on.
+                selected = current.selected.intersect(shown),
             )
         }
     }

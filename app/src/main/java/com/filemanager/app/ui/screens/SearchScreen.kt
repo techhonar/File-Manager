@@ -2,6 +2,7 @@ package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.merge
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.color
@@ -105,6 +107,33 @@ fun SearchScreen(
     // user back to the top of a long result list.
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
+
+    // Whether the user has taken hold of the list since the last query. A
+    // keyed lazy list keeps its place by following whichever item was on top,
+    // so re-ordering the finished results drags the view down to wherever that
+    // item ended up - opening Videos would land the user in the middle of the
+    // list. Putting it back at the top is right unless they had already
+    // started scrolling, which is the one case where being moved is worse.
+    var userScrolled by remember { mutableStateOf(false) }
+    LaunchedEffect(state.query, state.categories) { userScrolled = false }
+    // Drags rather than isScrollInProgress, which is also true while the
+    // scroll below is running - that would set this on the first reset and
+    // stop every later one.
+    LaunchedEffect(listState, gridState) {
+        merge(
+            listState.interactionSource.interactions,
+            gridState.interactionSource.interactions,
+        ).collect { if (it is DragInteraction.Start) userScrolled = true }
+    }
+    LaunchedEffect(state.resultsEpoch) {
+        if (userScrolled) return@LaunchedEffect
+        // Both, because the layout can be switched while results are coming in
+        // and only one of them is on screen at a time.
+        runCatching {
+            listState.scrollToItem(0)
+            gridState.scrollToItem(0)
+        }
+    }
     // Which result has its actions unfolded. One at a time, so the list does
     // not turn into a column of expanded panels.
     var expandedPath by remember { mutableStateOf<String?>(null) }

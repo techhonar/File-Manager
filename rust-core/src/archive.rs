@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{AesMode, CompressionMethod, ZipArchive, ZipWriter};
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ArchiveEntry {
@@ -43,10 +43,22 @@ pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
 }
 
 /// Zip `sources` into `dest_path`. Directories go in recursively.
+///
+/// A non-empty `password` encrypts every file in the archive with AES-256.
+/// That is the strong option rather than the zip format's original scheme,
+/// which is broken and recoverable in seconds; the trade is that Windows
+/// Explorer cannot open an AES archive on its own, while 7-Zip, WinRAR, and
+/// this app all can.
+///
+/// Only the contents are protected. A zip's index is not encrypted by either
+/// scheme, so the names and sizes of the files inside stay readable to anyone
+/// holding the archive - worth knowing before trusting one with something
+/// whose *name* is the secret.
 #[uniffi::export]
 pub fn archive_create(
     sources: Vec<String>,
     dest_path: String,
+    password: Option<String>,
     listener: Option<Arc<dyn ProgressListener>>,
     cancel: Option<Arc<CancelToken>>,
 ) -> Result<u64> {
@@ -58,7 +70,18 @@ pub fn archive_create(
     let total = crate::scanner::tree_stats(sources.clone(), cancel.clone())?.file_count;
     let file = File::create(dest).map_err(|e| FileError::from_io(e, dest))?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let dir_options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    // An empty string is not a password. It arrives as one when a dialog is
+    // confirmed with the field untouched, and encrypting with it would produce
+    // an archive nothing can open without knowing to type nothing.
+    let secret = password.filter(|p| !p.is_empty());
+    let options = match secret.as_deref() {
+        // Directory entries are left in the clear, which is what every other
+        // tool writes - they carry no data, and encrypting a zero-byte entry
+        // only adds a header for readers to trip over.
+        Some(pw) => dir_options.with_aes_encryption(AesMode::Aes256, pw),
+        None => dir_options,
+    };
     let mut done = 0u64;
 
     for source in &sources {
@@ -76,7 +99,7 @@ pub fn archive_create(
             let name = rel.to_string_lossy().replace('\\', "/");
 
             if entry.file_type().is_dir() {
-                zip.add_directory(format!("{name}/"), options)?;
+                zip.add_directory(format!("{name}/"), dir_options)?;
                 continue;
             }
 
