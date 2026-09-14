@@ -337,14 +337,9 @@ private fun StorageCard(summary: StorageSummary) {
         )
         Spacer(Modifier.height(24.dp))
 
-        if (hasBreakdown) {
-            StorageLegend(summary.byCategory)
-        } else {
-            Text(
-                text = "Working out what is using the space…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        // Passed through either way: the legend draws its names and colours
+        // with blank figures while the list is empty, so the card is complete
+        // from the first frame and only the numbers arrive later.
+        StorageLegend(summary.byCategory)
     }
 }

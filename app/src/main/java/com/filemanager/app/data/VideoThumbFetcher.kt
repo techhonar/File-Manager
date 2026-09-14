@@ -1,6 +1,9 @@
 package com.filemanager.app.data
 
 import android.content.Context
+import android.content.ContentUris
+import android.provider.MediaStore
+import android.util.Size
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
@@ -49,7 +52,12 @@ class VideoThumbFetcher(
             cached.delete()
         }
 
-        val frame = extractFrame() ?: return null
+        // The system keeps its own thumbnails for indexed media, already
+        // generated and already sized. Asking for one is far cheaper than
+        // seeking into a large file ourselves, and the difference grows with
+        // the video - which is why big files stayed slow while small ones did
+        // not. Only when there is no indexed thumbnail do we decode a frame.
+        val frame = systemThumbnail() ?: extractFrame() ?: return null
         runCatching { writeCache(cached, frame) }
 
         return DrawableResult(
@@ -58,6 +66,32 @@ class VideoThumbFetcher(
             dataSource = DataSource.DISK,
         )
     }
+
+    /**
+     * The thumbnail MediaStore has already produced for this file, if any.
+     *
+     * Returns null for anything the media scanner has not indexed - a file
+     * just copied in over USB, say - and for anything it declines to thumbnail.
+     */
+    private fun systemThumbnail(): Bitmap? = runCatching {
+        val resolver = context.contentResolver
+        val projection = arrayOf(MediaStore.Video.Media._ID)
+        val uri = resolver.query(
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL),
+            projection,
+            "${MediaStore.Video.Media.DATA} = ?",
+            arrayOf(file.path),
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            ContentUris.withAppendedId(
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL),
+                cursor.getLong(0),
+            )
+        } ?: return@runCatching null
+
+        resolver.loadThumbnail(uri, Size(requestedSize, requestedSize), null)
+    }.getOrNull()
 
     private fun extractFrame(): Bitmap? {
         val retriever = MediaMetadataRetriever()
