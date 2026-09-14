@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,33 +34,45 @@ fun StorageBar(
     usage: List<CategoryUsage>,
     totalBytes: ULong,
     modifier: Modifier = Modifier,
+    /** Sweeps the fill from nothing to its full width when it reaches 1. */
+    progress: Float = 1f,
 ) {
     if (totalBytes == 0uL) return
 
-    Row(
+    val segments = usage.filter { it.bytes > 0uL }
+    val usedFraction = segments
+        .sumOf { it.bytes.toDouble() / totalBytes.toDouble() }
+        .coerceIn(0.0, 1.0)
+        .toFloat()
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .height(12.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        usage.filter { it.bytes > 0uL }.forEach { slice ->
-            // Compose rejects a zero weight, so a category rounding to no
-            // width is skipped rather than crashing the layout.
-            val fraction = slice.bytes.toDouble() / totalBytes.toDouble()
-            if (fraction > 0.001) {
-                Box(
-                    Modifier
-                        .weight(fraction.toFloat())
-                        .fillMaxSize()
-                        .background(slice.category.color()),
-                )
+        // The whole used portion is one box scaled by progress, with the
+        // categories laid out inside it. Animating each segment separately
+        // would have them arrive at different times and reflow as they grew.
+        Row(
+            Modifier
+                .fillMaxWidth(usedFraction * progress)
+                .fillMaxHeight(),
+        ) {
+            segments.forEach { slice ->
+                // Compose rejects a zero weight, so a category rounding to no
+                // width is skipped rather than crashing the layout.
+                val share = slice.bytes.toDouble() / totalBytes.toDouble()
+                if (share > 0.001) {
+                    Box(
+                        Modifier
+                            .weight(share.toFloat())
+                            .fillMaxSize()
+                            .background(slice.category.color()),
+                    )
+                }
             }
-        }
-        val used = usage.sumOf { it.bytes.toDouble() }
-        val free = ((totalBytes.toDouble() - used) / totalBytes.toDouble()).coerceAtLeast(0.0)
-        if (free > 0.001) {
-            Box(Modifier.weight(free.toFloat()).fillMaxSize())
         }
     }
 }

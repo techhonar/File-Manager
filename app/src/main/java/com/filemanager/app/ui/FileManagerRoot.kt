@@ -120,9 +120,21 @@ fun FileManagerRoot(
     val ownerAppOf: suspend (String) -> String? = remember(context) {
         { path -> withContext(Dispatchers.IO) { MediaOwner.ownerAppLabel(context, path) } }
     }
-    val factory = remember(volumes, ownerAppOf) {
+    // Whether the device has a card slot at all, as opposed to an empty one.
+    val hasRemovableSlot = remember(context) { StorageVolumes.hasRemovableSlot(context) }
+
+    // Named arguments throughout: this now takes eight parameters, several of
+    // them adjacent strings, and a positional call would be one transposition
+    // away from wiring the wrong folder to the wrong screen.
+    val factory = remember(volumes, ownerAppOf, hasRemovableSlot) {
         ViewModelFactory(
-            app.repository, app.clipboard, app.paths, volumes, primaryPath, primaryPath, ownerAppOf,
+            repository = app.repository,
+            clipboard = app.clipboard,
+            paths = app.paths,
+            volumes = volumes,
+            primaryPath = primaryPath,
+            ownerAppOf = ownerAppOf,
+            hasRemovableSlot = hasRemovableSlot,
         )
     }
 
@@ -262,8 +274,14 @@ fun FileManagerRoot(
                 val vm: BrowserViewModel = viewModel(
                     key = path,
                     factory = ViewModelFactory(
-                        app.repository, app.clipboard, app.paths, volumes, primaryPath, path,
-                        ownerAppOf,
+                        repository = app.repository,
+                        clipboard = app.clipboard,
+                        paths = app.paths,
+                        volumes = volumes,
+                        primaryPath = primaryPath,
+                        startPath = path,
+                        ownerAppOf = ownerAppOf,
+                        hasRemovableSlot = hasRemovableSlot,
                     ),
                 )
                 BrowserScreen(

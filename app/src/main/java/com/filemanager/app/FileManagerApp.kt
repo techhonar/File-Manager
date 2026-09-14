@@ -3,6 +3,8 @@ package com.filemanager.app
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.memory.MemoryCache
+import com.filemanager.app.data.VideoThumbFetcher
 import coil.decode.VideoFrameDecoder
 import com.filemanager.app.data.ApkIconFetcher
 import com.filemanager.app.data.AudioArtFetcher
@@ -40,14 +42,20 @@ class FileManagerApp : Application(), ImageLoaderFactory {
     /**
      * The app-wide image loader, with the decoders the file list needs.
      *
-     * Coil out of the box handles still images only, so a video row fell back
-     * to a generic glyph and every installer looked the same. VideoFrameDecoder
-     * pulls a frame out of a video, and ApkIconFetcher reads an installer's own
-     * icon straight from the archive.
+     * Coil out of the box handles still images only, so videos, installers and
+     * tracks all fell back to the same generic glyphs.
+     *
+     * Order matters: VideoThumbFetcher comes first and serves the formats it
+     * knows from a disk cache, and VideoFrameDecoder stays behind it as a
+     * fallback for anything it does not. ApkIconFetcher reads an installer's
+     * icon out of the archive, AudioArtFetcher a track's embedded cover.
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
             .components {
+                // Before the stock decoder, so videos come from the disk
+                // cache instead of being re-decoded on every scroll.
+                add(VideoThumbFetcher.Factory(this@FileManagerApp))
                 add(VideoFrameDecoder.Factory())
                 add(ApkIconFetcher.Factory(this@FileManagerApp))
                 add(AudioArtFetcher.Factory(this@FileManagerApp))
@@ -55,6 +63,13 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             // Thumbnails are small and there are a great many of them, so a
             // slice of the heap goes further here than Coil's default.
             .crossfade(true)
+            // Thumbnails are small and numerous, and the default is a fraction
+            // of a fraction of the heap - too little for a folder of photos.
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)
+                    .build()
+            }
             .build()
 
     override fun onCreate() {
@@ -64,6 +79,9 @@ class FileManagerApp : Application(), ImageLoaderFactory {
         // nothing in the UI waits on it, and a failure is not worth surfacing.
         appScope.launch {
             runCatching { repository.purgeExpiredTrash() }
+            // Once per launch is enough; doing it per thumbnail would cost a
+            // directory listing for every row.
+            runCatching { VideoThumbFetcher.trimCache(this@FileManagerApp) }
         }
     }
 }

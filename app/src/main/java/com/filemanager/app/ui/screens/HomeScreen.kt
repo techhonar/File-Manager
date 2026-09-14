@@ -128,9 +128,9 @@ fun HomeScreen(
                 )
                 if (index < state.volumes.lastIndex) InsetDivider()
             }
-            // One UI always shows the SD card slot, saying so when empty,
-            // rather than hiding the row and leaving the user to wonder.
-            if (state.volumes.none { it.isRemovable }) {
+            // Shown only when the device actually has a slot: an empty slot
+            // is worth reporting, a slot that does not exist is not.
+            if (state.hasRemovableSlot && state.volumes.none { it.isRemovable }) {
                 InsetDivider()
                 HomeRow(
                     icon = Icons.Outlined.SdCard,
