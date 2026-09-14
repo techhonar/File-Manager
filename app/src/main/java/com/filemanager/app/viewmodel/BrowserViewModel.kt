@@ -15,6 +15,18 @@ import uniffi.filemanager_core.SortOptions
 import java.io.File
 
 /** What the browser screen renders. */
+/** How the file list is laid out. */
+enum class ViewMode {
+    /** Icon, name, and a single quiet line of date and size. */
+    LIST,
+
+    /** Adds type and a fuller timestamp, for comparing files at a glance. */
+    DETAILED,
+
+    /** Large thumbnails in a grid, for pictures and video. */
+    GRID,
+}
+
 data class BrowserState(
     val path: String = "",
     val entries: List<FileEntry> = emptyList(),
@@ -22,7 +34,16 @@ data class BrowserState(
     val error: String? = null,
     val showHidden: Boolean = false,
     val sort: SortOptions = SortOptions(SortKey.NAME, descending = false, dirsFirst = true),
-    val gridView: Boolean = false,
+    val viewMode: ViewMode = ViewMode.LIST,
+    /** Set while the properties sheet is open. */
+    val propertiesTarget: FileEntry? = null,
+    /**
+     * Recursive size of the folder shown in properties.
+     *
+     * Null while it is still being measured - a folder's size is a whole
+     * subtree walk, so the sheet opens immediately and fills this in after.
+     */
+    val propertiesFolderSize: ULong? = null,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     /**
@@ -119,7 +140,29 @@ class BrowserViewModel(
         refresh()
     }
 
-    fun toggleGrid() = _state.update { it.copy(gridView = !it.gridView) }
+    fun setViewMode(mode: ViewMode) = _state.update { it.copy(viewMode = mode) }
+
+    fun showProperties(entry: FileEntry) {
+        _state.update { it.copy(propertiesTarget = entry, propertiesFolderSize = null) }
+        if (!entry.isDir) return
+
+        // A folder has no size of its own, so it has to be walked. The sheet
+        // is already on screen by then and fills the figure in when it lands.
+        viewModelScope.launch {
+            val size = runCatching { repository.directorySize(entry.path) }.getOrNull()
+            _state.update { current ->
+                // Ignore a result that arrives after the sheet moved on.
+                if (current.propertiesTarget?.path == entry.path) {
+                    current.copy(propertiesFolderSize = size)
+                } else {
+                    current
+                }
+            }
+        }
+    }
+
+    fun dismissProperties() =
+        _state.update { it.copy(propertiesTarget = null, propertiesFolderSize = null) }
 
     // --- Selection ----------------------------------------------------------
 

@@ -59,6 +59,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
+import com.filemanager.app.ui.components.FileDetailRow
+import com.filemanager.app.ui.components.FileGridCell
+import com.filemanager.app.ui.components.PropertiesDialog
+import com.filemanager.app.viewmodel.ViewMode
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.SelectAllToggle
@@ -84,6 +93,7 @@ import uniffi.filemanager_core.SortOptions
 fun BrowserScreen(
     viewModel: BrowserViewModel,
     onOpenFile: (FileEntry) -> Unit,
+    onShare: (List<String>) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -125,6 +135,12 @@ fun BrowserScreen(
                             allSelected = state.allSelected,
                             onToggle = viewModel::toggleSelectAll,
                         )
+                        SelectionOverflowMenu(
+                            single = state.selected.singleOrNull()
+                                ?.let { p -> state.entries.firstOrNull { it.path == p } },
+                            onRename = { renameTarget = it },
+                            onProperties = viewModel::showProperties,
+                        )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -136,9 +152,7 @@ fun BrowserScreen(
                     onCopy = viewModel::copy,
                     onMove = viewModel::cut,
                     onDelete = viewModel::deleteSelected,
-                    onRename = state.selected.singleOrNull()?.let { path ->
-                        { renameTarget = state.entries.firstOrNull { it.path == path } }
-                    },
+                    onShare = { onShare(state.selected.toList()) },
                     onCompress = viewModel::compressSelected,
                 )
             },
@@ -168,8 +182,11 @@ fun BrowserScreen(
                 SortMenu(current = state.sort, onSelect = viewModel::setSort)
                 OverflowMenu(
                     showHidden = state.showHidden,
+                    viewMode = state.viewMode,
+                    sort = state.sort,
                     onToggleHidden = viewModel::toggleHidden,
-                    onToggleGrid = viewModel::toggleGrid,
+                    onSetViewMode = viewModel::setViewMode,
+                    onSetSort = viewModel::setSort,
                     onSelectItems = viewModel::enterSelectionMode,
                 )
             },
@@ -206,6 +223,18 @@ fun BrowserScreen(
                 showNewFileDialog = false
             },
             onDismiss = { showNewFileDialog = false },
+        )
+    }
+
+    state.propertiesTarget?.let { target ->
+        PropertiesDialog(
+            entry = target,
+            folderSize = state.propertiesFolderSize,
+            onDismiss = viewModel::dismissProperties,
+            onShare = {
+                onShare(listOf(target.path))
+                viewModel.dismissProperties()
+            },
         )
     }
 
@@ -262,28 +291,68 @@ private fun FileList(
             )
         }
 
-        else -> LazyColumn(
-            modifier = Modifier.padding(scaffoldPadding).fillMaxSize(),
-            contentPadding = contentPadding,
-        ) {
-            items(state.entries, key = { it.path }) { entry ->
-                FileRow(
-                    entry = entry,
-                    isSelected = entry.path in state.selected,
-                    selectionMode = state.inSelectionMode,
-                    onClick = {
-                        when {
-                            state.inSelectionMode -> viewModel.toggleSelection(entry.path)
-                            entry.isDir -> viewModel.load(entry.path)
-                            // Tapping a zip extracts it in place - the one
-                            // file type this app opens itself.
-                            entry.category == FileCategory.ARCHIVE ->
-                                viewModel.extract(entry.path)
-                            else -> onOpenFile(entry)
-                        }
-                    },
-                    onLongClick = { viewModel.toggleSelection(entry.path) },
-                )
+        else -> {
+            val onEntryClick: (FileEntry) -> Unit = { entry ->
+                when {
+                    state.inSelectionMode -> viewModel.toggleSelection(entry.path)
+                    entry.isDir -> viewModel.load(entry.path)
+                    // Tapping a zip extracts it in place - the one file type
+                    // this app opens itself.
+                    entry.category == FileCategory.ARCHIVE -> viewModel.extract(entry.path)
+                    else -> onOpenFile(entry)
+                }
+            }
+            val listModifier = Modifier.padding(scaffoldPadding).fillMaxSize()
+
+            when (state.viewMode) {
+                ViewMode.GRID -> LazyVerticalGrid(
+                    // Adaptive rather than a fixed count, so a tablet or a
+                    // landscape phone gets more columns instead of enormous
+                    // tiles.
+                    columns = GridCells.Adaptive(minSize = 108.dp),
+                    modifier = listModifier,
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        FileGridCell(
+                            entry = entry,
+                            isSelected = entry.path in state.selected,
+                            selectionMode = state.inSelectionMode,
+                            onClick = { onEntryClick(entry) },
+                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                        )
+                    }
+                }
+
+                ViewMode.DETAILED -> LazyColumn(
+                    modifier = listModifier,
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        FileDetailRow(
+                            entry = entry,
+                            isSelected = entry.path in state.selected,
+                            selectionMode = state.inSelectionMode,
+                            onClick = { onEntryClick(entry) },
+                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                        )
+                    }
+                }
+
+                ViewMode.LIST -> LazyColumn(
+                    modifier = listModifier,
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        FileRow(
+                            entry = entry,
+                            isSelected = entry.path in state.selected,
+                            selectionMode = state.inSelectionMode,
+                            onClick = { onEntryClick(entry) },
+                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -383,8 +452,11 @@ private fun SortMenu(current: SortOptions, onSelect: (SortOptions) -> Unit) {
 @Composable
 private fun OverflowMenu(
     showHidden: Boolean,
+    viewMode: ViewMode,
+    sort: SortOptions,
     onToggleHidden: () -> Unit,
-    onToggleGrid: () -> Unit,
+    onSetViewMode: (ViewMode) -> Unit,
+    onSetSort: (SortOptions) -> Unit,
     onSelectItems: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -398,13 +470,96 @@ private fun OverflowMenu(
             leadingIcon = { Icon(Icons.Default.SelectAll, null) },
             onClick = { onSelectItems(); expanded = false },
         )
+        HorizontalDivider()
+
+        // Sort was only ever the unlabelled icon in the bar, which is easy to
+        // miss; the same options are listed here by name.
+        MenuSectionLabel("Sort by")
+        listOf(
+            SortKey.NAME to "Name",
+            SortKey.MODIFIED to "Date",
+            SortKey.TYPE to "Type",
+            SortKey.SIZE to "Size",
+        ).forEach { (key, label) ->
+            DropdownMenuItem(
+                text = {
+                    val arrow = if (sort.key == key) {
+                        if (sort.descending) "  ↓" else "  ↑"
+                    } else {
+                        ""
+                    }
+                    Text(label + arrow)
+                },
+                trailingIcon = {
+                    if (sort.key == key) Icon(Icons.Default.Check, null)
+                },
+                onClick = {
+                    // Choosing the active key flips direction, which is what a
+                    // sort menu is expected to do.
+                    val descending = if (sort.key == key) !sort.descending else false
+                    onSetSort(sort.copy(key = key, descending = descending))
+                    expanded = false
+                },
+            )
+        }
+
+        HorizontalDivider()
+
+        MenuSectionLabel("View as")
+        listOf(
+            ViewMode.LIST to "List",
+            ViewMode.DETAILED to "Detailed list",
+            ViewMode.GRID to "Grid",
+        ).forEach { (mode, label) ->
+            DropdownMenuItem(
+                text = { Text(label) },
+                trailingIcon = { if (viewMode == mode) Icon(Icons.Default.Check, null) },
+                onClick = { onSetViewMode(mode); expanded = false },
+            )
+        }
+
+        HorizontalDivider()
+
         DropdownMenuItem(
             text = { Text(if (showHidden) "Hide hidden files" else "Show hidden files") },
             onClick = { onToggleHidden(); expanded = false },
         )
+    }
+}
+
+/** Quiet heading inside a dropdown, grouping the options under it. */
+@Composable
+private fun MenuSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp),
+    )
+}
+
+/** Actions that only make sense for exactly one selected file. */
+@Composable
+private fun SelectionOverflowMenu(
+    single: FileEntry?,
+    onRename: (FileEntry) -> Unit,
+    onProperties: (FileEntry) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }, enabled = single != null) {
+        Icon(Icons.Default.MoreVert, "More actions")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         DropdownMenuItem(
-            text = { Text("Toggle grid view") },
-            onClick = { onToggleGrid(); expanded = false },
+            text = { Text("Rename") },
+            leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null) },
+            onClick = { single?.let(onRename); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Properties") },
+            leadingIcon = { Icon(Icons.Default.Info, null) },
+            onClick = { single?.let(onProperties); expanded = false },
         )
     }
 }

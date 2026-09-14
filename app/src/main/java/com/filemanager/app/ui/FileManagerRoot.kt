@@ -38,6 +38,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
+import com.filemanager.app.data.ShareFiles
 import com.filemanager.app.data.StorageVolumes
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.screens.AboutScreen
@@ -108,6 +109,7 @@ fun FileManagerRoot(
     }
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
+    val shareFiles: (List<String>) -> Unit = { paths -> ShareFiles.share(context, paths) }
 
     // Surface, not a bare NavHost: during the transition between destinations
     // both screens are briefly semi-transparent, and with nothing painted
@@ -191,6 +193,7 @@ fun FileManagerRoot(
                 BrowserScreen(
                     viewModel = vm,
                     onOpenFile = openFile,
+                    onShare = shareFiles,
                     onNavigateBack = { navController.popBackStack() },
                 )
             }
@@ -218,6 +221,7 @@ fun FileManagerRoot(
                 SearchScreen(
                     viewModel = vm,
                     onOpenFile = openFile,
+                    onShare = shareFiles,
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
                     autoFocus = categoryName == null,

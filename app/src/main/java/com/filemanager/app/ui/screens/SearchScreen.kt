@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
@@ -67,6 +68,7 @@ import uniffi.filemanager_core.FileEntry
 fun SearchScreen(
     viewModel: SearchViewModel,
     onOpenFile: (FileEntry) -> Unit,
+    onShare: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /**
@@ -106,6 +108,13 @@ fun SearchScreen(
                     allSelected = state.allSelected,
                     onToggle = viewModel::toggleSelectAll,
                 )
+                // Rename applies to exactly one file, so it is an action here
+                // rather than a sixth icon in the bottom bar.
+                val single = state.selected.singleOrNull()
+                    ?.let { p -> state.results.firstOrNull { it.path == p } }
+                IconButton(onClick = { renameTarget = single }, enabled = single != null) {
+                    Icon(Icons.Default.DriveFileRenameOutline, "Rename")
+                }
             } else if (state.results.isNotEmpty()) {
                 IconButton(onClick = viewModel::enterSelectionMode) {
                     Icon(Icons.Default.SelectAll, "Select items")
@@ -118,9 +127,7 @@ fun SearchScreen(
                     onCopy = viewModel::copySelection,
                     onMove = viewModel::cutSelection,
                     onDelete = viewModel::deleteSelection,
-                    onRename = state.selected.singleOrNull()?.let { path ->
-                        { renameTarget = state.results.firstOrNull { it.path == path } }
-                    },
+                    onShare = { onShare(state.selected.toList()) },
                 )
             }
         },

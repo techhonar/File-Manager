@@ -14,7 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -30,6 +30,10 @@ import androidx.compose.ui.unit.dp
 /**
  * Actions for the current selection, along the bottom edge.
  *
+ * Five at most. Rename and Properties apply to exactly one file, so they live
+ * in the selection bar's overflow instead - a row of seven icons is a row
+ * nobody reads.
+ *
  * Bottom rather than top because that is where One UI puts them, and on a
  * tall phone it is the half the thumb can reach. Shared by the browser and
  * the search results so a selection behaves the same wherever it is made.
@@ -43,7 +47,7 @@ fun SelectionActionBar(
     onMove: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
-    onRename: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
     onCompress: (() -> Unit)? = null,
 ) {
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
@@ -58,7 +62,7 @@ fun SelectionActionBar(
             ) {
                 ActionItem(Icons.Default.ContentCopy, "Copy", onCopy)
                 ActionItem(Icons.Default.ContentCut, "Move", onMove)
-                onRename?.let { ActionItem(Icons.Default.DriveFileRenameOutline, "Rename", it) }
+                onShare?.let { ActionItem(Icons.Default.Share, "Share", it) }
                 onCompress?.let { ActionItem(Icons.Default.FolderZip, "Zip", it) }
                 ActionItem(Icons.Default.Delete, "Delete", onDelete)
             }
