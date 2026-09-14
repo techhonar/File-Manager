@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -39,6 +40,17 @@ data class SearchState(
     val selectionActive: Boolean = false,
     /** Category results are often photos, so the layout matters here too. */
     val viewMode: ViewMode = ViewMode.LIST,
+    /**
+     * Bumped whenever [results] is replaced wholesale rather than extended.
+     *
+     * The screen watches this to put the list back at the top. A keyed
+     * LazyColumn holds its position by remembering which item was at the top
+     * and scrolling to wherever that item has moved to - so when the finished
+     * walk re-sorts everything by date, the file that happened to be first
+     * lands somewhere in the middle and the list jumps down to follow it. To
+     * the user, opening Videos scrolls itself to the bottom.
+     */
+    val resultsEpoch: Int = 0,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
 
@@ -69,7 +81,7 @@ class SearchViewModel(
     // initialised in declaration order, and an init block above this line runs
     // before _state exists.
     private val _state = MutableStateFlow(
-        SearchState(viewMode = settings.viewMode.value.toViewMode()),
+        SearchState(viewMode = settings.viewMode(ViewScope.Search).value.toViewMode()),
     )
     val state: StateFlow<SearchState> = _state.asStateFlow()
 
@@ -117,7 +129,9 @@ class SearchViewModel(
         _state.update { current ->
             val next = current.categories.toMutableSet()
             if (!next.add(category)) next.remove(category)
-            current.copy(categories = next)
+            // Ticking a chip moves to a different list, which has its own
+            // stored layout.
+            current.copy(categories = next, viewMode = storedViewMode(next))
         }
         // Changing the category filter can widen the set, so the cache cannot
         // answer it.
@@ -133,7 +147,8 @@ class SearchViewModel(
      * whatever was ticked last time.
      */
     fun applyCategory(category: FileCategory) {
-        _state.update { it.copy(categories = setOf(category)) }
+        val only = setOf(category)
+        _state.update { it.copy(categories = only, viewMode = storedViewMode(only)) }
         cache = null
         scheduleWalk()
     }
@@ -141,7 +156,7 @@ class SearchViewModel(
     fun clear() {
         cancelSearch()
         cache = null
-        _state.value = SearchState()
+        _state.value = SearchState(viewMode = storedViewMode(emptySet()))
     }
 
     /**
@@ -166,7 +181,12 @@ class SearchViewModel(
             .filter { it.name.contains(query, ignoreCase = true) }
 
         _state.update {
-            it.copy(results = filtered, isSearching = false, hasSearched = true)
+            it.copy(
+                results = filtered,
+                isSearching = false,
+                hasSearched = true,
+                resultsEpoch = it.resultsEpoch + 1,
+            )
         }
         return true
     }
@@ -193,7 +213,13 @@ class SearchViewModel(
 
             val token = CancelToken()
             cancelToken = token
-            _state.update { it.copy(isSearching = true, results = emptyList()) }
+            _state.update {
+                it.copy(
+                    isSearching = true,
+                    results = emptyList(),
+                    resultsEpoch = it.resultsEpoch + 1,
+                )
+            }
 
             val sink = object : SearchSink {
                 override fun onBatch(entries: List<FileEntry>) {
@@ -221,7 +247,14 @@ class SearchViewModel(
                         accumulated.toList()
                     }
                     _state.update {
-                        it.copy(results = ordered, isSearching = false, hasSearched = true)
+                        it.copy(
+                            results = ordered,
+                            isSearching = false,
+                            hasSearched = true,
+                            // The order just changed under the list, so
+                            // whatever it was anchored to has moved.
+                            resultsEpoch = it.resultsEpoch + 1,
+                        )
                     }
 
                     // Only a walk that ran to completion, and was not cut off
@@ -282,10 +315,20 @@ class SearchViewModel(
     /** Enter selection mode with nothing ticked, from the overflow menu. */
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
 
+    /**
+     * Which stored layout this screen is currently showing.
+     *
+     * One category is its own list and keeps its own layout; no category, or
+     * several at once, is a plain search and shares one.
+     */
+    private fun scopeFor(categories: Set<FileCategory>): ViewScope =
+        categories.singleOrNull()?.let { ViewScope.category(it.name) } ?: ViewScope.Search
+
+    private fun storedViewMode(categories: Set<FileCategory>): ViewMode =
+        settings.viewMode(scopeFor(categories)).value.toViewMode()
+
     fun setViewMode(mode: ViewMode) {
-        // Shared with the browser: the layout is a preference, not a property
-        // of whichever screen happens to be open.
-        settings.setViewMode(mode.toSetting())
+        settings.setViewMode(scopeFor(_state.value.categories), mode.toSetting())
         _state.update { it.copy(viewMode = mode) }
     }
 

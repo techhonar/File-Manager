@@ -76,6 +76,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
+import com.filemanager.app.ui.components.CompressDialog
 import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
 import androidx.activity.compose.BackHandler
@@ -153,6 +154,7 @@ fun BrowserScreen(
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var showCompressDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -255,8 +257,12 @@ fun BrowserScreen(
                         { state.entries.firstOrNull { it.path == path }
                             ?.let(viewModel::showDetails) }
                     },
-                    onCompress = if (state.selected.size > 1) {
-                        { viewModel.compressSelected() }
+                    // Offered for one file as well as many. Compressing a
+                    // single file is the usual reason to want a password on
+                    // it, and refusing to until a second is ticked is an odd
+                    // rule to have to discover.
+                    onCompress = if (state.selected.isNotEmpty()) {
+                        { showCompressDialog = true }
                     } else {
                         null
                     },
@@ -265,9 +271,18 @@ fun BrowserScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            if (!state.inSelectionMode) {
-                Breadcrumbs(crumbs = state.breadcrumbs, onNavigate = viewModel::load)
-            }
+            // Kept in selection mode too. Hiding it took a row of height out
+            // from above the list, and everything below slid up to fill the
+            // gap - so ticking one file appeared to scroll the folder. The
+            // path is also still worth reading while choosing what to act on.
+            Breadcrumbs(
+                crumbs = state.breadcrumbs,
+                onNavigate = viewModel::load,
+                // Shown but inert while selecting: leaving the folder would
+                // keep the ticks, which now point at files that are no longer
+                // on screen.
+                enabled = !state.inSelectionMode,
+            )
 
             // The indicator is the only thing shown. The rescan itself is
             // deliberately silent - a spinner over the list would make a
@@ -286,6 +301,21 @@ fun BrowserScreen(
                 )
             }
         }
+    }
+
+    if (showCompressDialog) {
+        val first = state.selected.firstOrNull()?.substringAfterLast('/').orEmpty()
+        CompressDialog(
+            itemCount = state.selected.size,
+            // Matches what the view model names the file, so the dialog is not
+            // promising one thing and writing another.
+            archiveName = first.substringBeforeLast('.', first) + ".zip",
+            onCompress = { password ->
+                viewModel.compressSelected(password)
+                showCompressDialog = false
+            },
+            onDismiss = { showCompressDialog = false },
+        )
     }
 
     if (showNewFolderDialog) {
@@ -469,7 +499,11 @@ private fun FileList(
 
 /** Horizontally scrolling path, each segment tappable. */
 @Composable
-private fun Breadcrumbs(crumbs: List<Pair<String, String>>, onNavigate: (String) -> Unit) {
+private fun Breadcrumbs(
+    crumbs: List<Pair<String, String>>,
+    onNavigate: (String) -> Unit,
+    enabled: Boolean = true,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -489,11 +523,16 @@ private fun Breadcrumbs(crumbs: List<Pair<String, String>>, onNavigate: (String)
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (index == crumbs.lastIndex) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.primary,
+                color = when {
+                    !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+                    index == crumbs.lastIndex -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.primary
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.clickable { onNavigate(path) }.padding(6.dp),
+                modifier = Modifier
+                    .clickable(enabled = enabled) { onNavigate(path) }
+                    .padding(6.dp),
             )
         }
     }

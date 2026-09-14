@@ -25,6 +25,32 @@ enum class ThemeMode {
 }
 
 /**
+ * Which list a layout preference belongs to.
+ *
+ * The layout used to be one setting for the whole app, so switching Videos to
+ * a grid switched Audio and every folder to a grid as well. The right layout
+ * is a property of what is being looked at - thumbnails suit a wall of video,
+ * a details list suits music, and neither suits a folder of mixed files - so
+ * each list keeps its own.
+ *
+ * The key is stored, so it has to stay stable: renaming one silently resets
+ * that list to the default rather than failing.
+ */
+@JvmInline
+value class ViewScope(val key: String) {
+    companion object {
+        /** Every folder in the browser, including the storage roots. */
+        val Folders = ViewScope("folders")
+
+        /** Search results with no category filter, or more than one. */
+        val Search = ViewScope("search")
+
+        /** One category tile - Images, Video, Audio, and so on. */
+        fun category(name: String) = ViewScope("category_$name")
+    }
+}
+
+/**
  * Preferences that outlive the process.
  *
  * SharedPreferences rather than DataStore: this holds one small value read at
@@ -39,16 +65,46 @@ class AppSettings(context: Context) {
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
 
     /**
-     * How lists are laid out, and how they are sorted and filtered.
+     * One layout per [ViewScope], created the first time it is asked for.
+     *
+     * A flow per scope rather than one map-valued flow: a screen watching the
+     * folder layout should not recompose because a category's changed.
+     */
+    private val viewModes = mutableMapOf<String, MutableStateFlow<ViewModeSetting>>()
+
+    /**
+     * The layout for one list, which nothing else can change.
+     *
+     * Falls back to whatever the old single setting held, so upgrading keeps
+     * the layout everyone had instead of resetting every list to List.
+     */
+    fun viewMode(scope: ViewScope): StateFlow<ViewModeSetting> = flowFor(scope).asStateFlow()
+
+    fun setViewMode(scope: ViewScope, mode: ViewModeSetting) {
+        prefs.edit().putString(viewKey(scope), mode.name).apply()
+        flowFor(scope).value = mode
+    }
+
+    @Synchronized
+    private fun flowFor(scope: ViewScope): MutableStateFlow<ViewModeSetting> =
+        viewModes.getOrPut(scope.key) {
+            MutableStateFlow(readEnum(viewKey(scope), readEnum(KEY_VIEW, ViewModeSetting.LIST)))
+        }
+
+    private fun viewKey(scope: ViewScope) = "${KEY_VIEW}_${scope.key}"
+
+    /**
+     * How lists are sorted and filtered, across the whole app.
      *
      * These lived in the browser's per-folder view model, which is created
-     * fresh for every folder and discarded on the way out - so choosing
-     * Details or turning on hidden files lasted exactly as long as that one
+     * fresh for every folder and discarded on the way out - so choosing a sort
+     * order or turning on hidden files lasted exactly as long as that one
      * screen. They are preferences, so they belong here.
+     *
+     * Unlike the layout above these are not per-list. Sorting by size means
+     * the same thing everywhere, and hidden files are one decision about what
+     * the user wants to see at all.
      */
-    private val _viewMode = MutableStateFlow(readEnum(KEY_VIEW, ViewModeSetting.LIST))
-    val viewMode: StateFlow<ViewModeSetting> = _viewMode.asStateFlow()
-
     private val _sortKey = MutableStateFlow(readEnum(KEY_SORT, SortKeySetting.NAME))
     val sortKey: StateFlow<SortKeySetting> = _sortKey.asStateFlow()
 
@@ -58,11 +114,6 @@ class AppSettings(context: Context) {
     /** Applies everywhere files are listed, not only in the browser. */
     private val _showHidden = MutableStateFlow(prefs.getBoolean(KEY_SHOW_HIDDEN, false))
     val showHidden: StateFlow<Boolean> = _showHidden.asStateFlow()
-
-    fun setViewMode(mode: ViewModeSetting) {
-        prefs.edit().putString(KEY_VIEW, mode.name).apply()
-        _viewMode.value = mode
-    }
 
     fun setSort(key: SortKeySetting, descending: Boolean) {
         prefs.edit().putString(KEY_SORT, key.name).putBoolean(KEY_SORT_DESC, descending).apply()
@@ -93,6 +144,10 @@ class AppSettings(context: Context) {
 
     private companion object {
         const val KEY_THEME = "theme_mode"
+        /**
+         * Also the prefix for the per-scope keys, and still read on its own as
+         * the fallback for a scope that has never been set.
+         */
         const val KEY_VIEW = "view_mode"
         const val KEY_SORT = "sort_key"
         const val KEY_SORT_DESC = "sort_descending"

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.SortKeySetting
 import com.filemanager.app.data.ViewModeSetting
+import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.FolderWatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -141,7 +142,7 @@ class BrowserViewModel(
         // last one was left rather than back at the defaults.
         _state.update {
             it.copy(
-                viewMode = settings.viewMode.value.toViewMode(),
+                viewMode = settings.viewMode(ViewScope.Folders).value.toViewMode(),
                 showHidden = settings.showHidden.value,
                 sort = SortOptions(
                     key = settings.sortKey.value.toSortKey(),
@@ -280,7 +281,10 @@ class BrowserViewModel(
     }
 
     fun setViewMode(mode: ViewMode) {
-        settings.setViewMode(mode.toSetting())
+        // Folders keep one layout between them. Choosing Grid in Pictures and
+        // finding List again in the folder next to it would read as the
+        // setting not having been saved.
+        settings.setViewMode(ViewScope.Folders, mode.toSetting())
         _state.update { it.copy(viewMode = mode) }
     }
 
@@ -492,7 +496,14 @@ class BrowserViewModel(
         }
     }
 
-    fun compressSelected() {
+    /**
+     * Zip the selection, optionally behind a password.
+     *
+     * A blank [password] means an ordinary archive - the dialog hands back an
+     * empty string when the field is left alone, and that is a request for no
+     * encryption rather than for encryption with nothing.
+     */
+    fun compressSelected(password: String? = null) {
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
 
@@ -502,9 +513,13 @@ class BrowserViewModel(
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
-            runCatching { repository.compress(paths, destination) }
+            runCatching { repository.compress(paths, destination, password) }
                 .onSuccess {
-                    _messages.value = "Compressed $it files"
+                    _messages.value = if (password.isNullOrEmpty()) {
+                        "Compressed $it files"
+                    } else {
+                        "Compressed $it files, password protected"
+                    }
                     clearSelection()
                     refresh()
                 }

@@ -325,12 +325,16 @@ class FileRepository(
     suspend fun listArchive(path: String): List<ArchiveEntry> =
         withContext(io) { archiveList(path) }
 
+    /** A non-empty [password] encrypts the contents with AES-256. */
     suspend fun compress(
         sources: List<String>,
         destination: String,
+        password: String? = null,
         progress: ProgressListener? = null,
         cancel: CancelToken? = null,
-    ): ULong = withContext(io) { archiveCreate(sources, destination, progress, cancel) }
+    ): ULong = withContext(io) {
+        archiveCreate(sources, destination, password, progress, cancel)
+    }
 
     suspend fun extract(
         archive: String,

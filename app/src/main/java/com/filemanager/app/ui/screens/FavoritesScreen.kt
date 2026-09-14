@@ -21,6 +21,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -90,10 +97,18 @@ fun FavoritesScreen(
                     allSelected = state.allSelected,
                     onToggle = viewModel::toggleSelectAll,
                 )
-            } else if (state.entries.isNotEmpty()) {
-                IconButton(onClick = viewModel::enterSelectionMode) {
-                    Icon(Icons.Default.SelectAll, "Select items")
-                }
+            } else {
+                // Offered even when the list looks empty: every favourite may
+                // be hidden, and this is the switch that brings them back.
+                FavoritesOverflowMenu(
+                    showHidden = state.showHidden,
+                    onToggleHidden = viewModel::toggleShowHidden,
+                    onSelectItems = if (state.entries.isNotEmpty()) {
+                        viewModel::enterSelectionMode
+                    } else {
+                        null
+                    },
+                )
             }
         },
         bottomBar = {
@@ -138,8 +153,17 @@ fun FavoritesScreen(
                 Alignment.Center,
             ) {
                 Text(
-                    text = if (state.isLoading) "Loading…"
-                    else "Nothing here yet.\nSelect a file and choose Add to favourites.",
+                    text = when {
+                        state.isLoading -> "Loading…"
+                        // "You have none" and "yours are all hidden" look
+                        // identical otherwise, and only one of them is fixed
+                        // by adding more favourites.
+                        state.hiddenCount > 0 ->
+                            "${state.hiddenCount} hidden " +
+                                (if (state.hiddenCount == 1) "favourite is" else "favourites are") +
+                                " not shown.\nTurn on Show hidden files from the menu."
+                        else -> "Nothing here yet.\nSelect a file and choose Add to favourites."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -165,5 +189,50 @@ fun FavoritesScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * The menu behind the three dots.
+ *
+ * [onSelectItems] is null when there is nothing to select, which leaves the
+ * hidden-files switch reachable on an empty list - the case where it matters
+ * most, since hiding every favourite is what emptied it.
+ */
+@Composable
+private fun FavoritesOverflowMenu(
+    showHidden: Boolean,
+    onToggleHidden: () -> Unit,
+    onSelectItems: (() -> Unit)?,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }) {
+        Icon(Icons.Default.MoreVert, "More options")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        if (onSelectItems != null) {
+            DropdownMenuItem(
+                text = { Text("Select items") },
+                leadingIcon = { Icon(Icons.Default.SelectAll, null) },
+                onClick = {
+                    onSelectItems()
+                    expanded = false
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text(if (showHidden) "Hide hidden files" else "Show hidden files") },
+            leadingIcon = {
+                Icon(
+                    if (showHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    null,
+                )
+            },
+            onClick = {
+                onToggleHidden()
+                expanded = false
+            },
+        )
     }
 }

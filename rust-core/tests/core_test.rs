@@ -219,6 +219,7 @@ fn round_trips_a_zip_archive() {
         zip_path.to_string_lossy().into_owned(),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(count, 2);
@@ -746,6 +747,7 @@ fn an_encrypted_archive_is_reported_as_such() {
         plain.to_string_lossy().into_owned(),
         None,
         None,
+        None,
     )
     .unwrap();
     assert!(!archive_is_encrypted(plain.to_string_lossy().into_owned()).unwrap());
@@ -814,4 +816,99 @@ fn entries_for_skips_paths_that_have_gone() {
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "keep.txt");
+}
+
+#[test]
+fn creates_an_archive_the_password_is_needed_to_read() {
+    let tree = TempTree::new("zip-create-encrypted");
+    tree.file("private/notes.txt", b"for my eyes only");
+    let locked = tree.path().join("locked.zip");
+
+    let count = archive_create(
+        vec![tree.path().join("private").to_string_lossy().into_owned()],
+        locked.to_string_lossy().into_owned(),
+        Some("hunter2".to_string()),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(count, 1);
+
+    // The app checks this before extracting to decide whether to prompt, so an
+    // archive we wrote has to answer the same way as one written elsewhere.
+    assert!(archive_is_encrypted(locked.to_string_lossy().into_owned()).unwrap());
+
+    // Without the password there is nothing to read.
+    let err = archive_extract(
+        locked.to_string_lossy().into_owned(),
+        tree.dir("no-password").to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::PasswordRequired),
+        "got {err:?}",
+    );
+
+    // The wrong one is refused rather than quietly writing rubbish.
+    let err = archive_extract(
+        locked.to_string_lossy().into_owned(),
+        tree.dir("wrong-password").to_string_lossy().into_owned(),
+        Some("hunter3".to_string()),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::WrongPassword),
+        "got {err:?}",
+    );
+
+    // And the right one gives the bytes back unchanged.
+    let out = tree.dir("out");
+    archive_extract(
+        locked.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        Some("hunter2".to_string()),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(out.join("private/notes.txt")).unwrap(),
+        "for my eyes only",
+    );
+}
+
+#[test]
+fn an_empty_password_leaves_the_archive_unencrypted() {
+    // The dialog hands back "" when the field is left alone. Treating that as
+    // a password would write an archive that asks for one nobody typed.
+    let tree = TempTree::new("zip-empty-password");
+    tree.file("open/a.txt", b"nothing secret");
+    let zip_path = tree.path().join("open.zip");
+
+    archive_create(
+        vec![tree.path().join("open").to_string_lossy().into_owned()],
+        zip_path.to_string_lossy().into_owned(),
+        Some(String::new()),
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert!(!archive_is_encrypted(zip_path.to_string_lossy().into_owned()).unwrap());
+
+    let out = tree.dir("out");
+    archive_extract(
+        zip_path.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(out.join("open/a.txt")).unwrap(), "nothing secret");
 }
