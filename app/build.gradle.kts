@@ -27,7 +27,16 @@ android {
 
     defaultConfig {
         applicationId = "com.filemanager.app"
-        minSdk = 33
+        // Android 11. This is the real floor, not a preference: the app is
+        // built around MANAGE_EXTERNAL_STORAGE, which arrived in API 30, and
+        // nothing it uses needs anything newer - the highest calls are
+        // isExternalStorageManager and StorageVolume.directory, both API 30.
+        //
+        // It was 33 for no better reason than that being the newest at the
+        // time. That excluded every phone not updated past Android 12, and an
+        // install on one fails with "There was a problem parsing the package",
+        // which says nothing about the version being the cause.
+        minSdk = 30
         targetSdk = 35
         versionCode = buildVersionCode
         versionName = buildVersionName
@@ -73,6 +82,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    lint {
+        // An API used above minSdk compiles fine and crashes at runtime, or -
+        // as happened here - quietly narrows which phones can install at all.
+        // NewApi is advisory by default; this makes it stop the build.
+        error += "NewApi"
+        abortOnError = true
+    }
+
     buildFeatures {
         compose = true
         // Off by default since AGP 8. The About screen reads VERSION_NAME and

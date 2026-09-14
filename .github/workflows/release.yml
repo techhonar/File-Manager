@@ -284,7 +284,10 @@ jobs:
             package"*, the download was almost certainly truncated - check the
             file size against the figure above and download it again.
 
-            Requires **Android 13 (API 33)** or newer, on an **arm64** device.
+            Requires **Android 11 (API 30)** or newer, on an **arm64** device.
+            An older phone reports this as a parsing error rather than a
+            version mismatch, so check the Android version first if the
+            install fails.
 
             After first launch the app asks for *All files access*, which it
             needs to browse and search storage. Grant it in the Settings page
