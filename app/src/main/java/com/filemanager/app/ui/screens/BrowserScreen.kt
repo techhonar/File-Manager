@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -105,6 +109,13 @@ fun BrowserScreen(
     val message by viewModel.messages.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
 
+    // Hoisted above the selection-mode branch on purpose. That branch swaps a
+    // Scaffold for a OneUiScreen, so the list below it is destroyed and rebuilt
+    // - and a state remembered inside it went with it, dropping the user back
+    // at the top the moment they ticked a file halfway down a long folder.
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
@@ -181,7 +192,7 @@ fun BrowserScreen(
                 )
             },
         ) { padding ->
-            FileList(state, viewModel, onOpenFile, padding, contentPadding)
+            FileList(state, viewModel, onOpenFile, padding, contentPadding, listState, gridState)
         }
     } else {
         OneUiScreen(
@@ -217,7 +228,10 @@ fun BrowserScreen(
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
                 Breadcrumbs(crumbs = state.breadcrumbs, onNavigate = viewModel::load)
-                FileList(state, viewModel, onOpenFile, PaddingValues(0.dp), contentPadding)
+                FileList(
+                    state, viewModel, onOpenFile, PaddingValues(0.dp), contentPadding,
+                    listState, gridState,
+                )
             }
         }
     }
@@ -296,6 +310,8 @@ private fun FileList(
     onOpenFile: (FileEntry) -> Unit,
     scaffoldPadding: PaddingValues,
     contentPadding: PaddingValues,
+    listState: LazyListState,
+    gridState: LazyGridState,
 ) {
     when {
         state.isLoading -> Box(
@@ -345,6 +361,7 @@ private fun FileList(
                     // landscape phone gets more columns instead of enormous
                     // tiles.
                     columns = GridCells.Adaptive(minSize = 108.dp),
+                    state = gridState,
                     modifier = listModifier,
                     contentPadding = contentPadding,
                 ) {
@@ -360,6 +377,7 @@ private fun FileList(
                 }
 
                 ViewMode.DETAILED -> LazyColumn(
+                    state = listState,
                     modifier = listModifier,
                     contentPadding = contentPadding,
                 ) {
@@ -375,6 +393,7 @@ private fun FileList(
                 }
 
                 ViewMode.LIST -> LazyColumn(
+                    state = listState,
                     modifier = listModifier,
                     contentPadding = contentPadding,
                 ) {

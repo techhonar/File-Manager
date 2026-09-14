@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -109,7 +110,7 @@ class RecentViewModel(
                     }
                 }
                 .onFailure { e ->
-                    _state.update { it.copy(message = e.message ?: "Could not delete") }
+                    _state.update { it.copy(message = e.userMessage("Could not delete")) }
                 }
         }
     }

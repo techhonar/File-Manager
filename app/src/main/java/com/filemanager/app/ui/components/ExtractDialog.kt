@@ -13,6 +13,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -29,6 +38,7 @@ import com.filemanager.app.ui.theme.OneUi
  * asks up front rather than failing partway and leaving half a folder behind.
  * [wrongPassword] re-opens the dialog after a failed attempt.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ExtractDialog(
     archiveName: String,
@@ -39,6 +49,20 @@ fun ExtractDialog(
     onDismiss: () -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    // A dialog that exists to take a password should be ready to take one.
+    // Keyed on needsPassword because the field only appears once the archive
+    // has been checked, which happens after the dialog is already up.
+    LaunchedEffect(needsPassword) {
+        if (!needsPassword) return@LaunchedEffect
+        withFrameNanos {}
+        runCatching {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -64,6 +88,11 @@ fun ExtractDialog(
                             if (wrongPassword) Text("That password did not work")
                         },
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(
+                            onDone = { if (password.isNotEmpty()) onExtract(password) },
+                        ),
+                        modifier = Modifier.focusRequester(focusRequester),
                     )
                 }
             }

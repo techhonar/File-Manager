@@ -271,10 +271,18 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.name, '-') }}
           body: |
+            **SHA-256:** `${{ steps.apk.outputs.sha }}`
+
+            **Size:** ${{ steps.apk.outputs.size }} bytes
+
             ## Install
 
             Download the APK below and open it on your phone. You will need to
             allow installing from unknown sources.
+
+            If the install fails with *"There was a problem parsing the
+            package"*, the download was almost certainly truncated - check the
+            file size against the figure above and download it again.
 
             Requires **Android 13 (API 33)** or newer, on an **arm64** device.
 

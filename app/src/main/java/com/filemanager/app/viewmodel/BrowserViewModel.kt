@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.isWrongPassword
+import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -134,7 +136,7 @@ class BrowserViewModel(
                 _state.update { it.copy(entries = entries, isLoading = false) }
             }.onFailure { error ->
                 _state.update {
-                    it.copy(isLoading = false, error = error.message ?: "Could not open folder")
+                    it.copy(isLoading = false, error = error.userMessage("Could not open folder"))
                 }
             }
         }
@@ -251,7 +253,7 @@ class BrowserViewModel(
                 refresh()
             }.onFailure { error ->
                 _state.update { it.copy(isLoading = false) }
-                _messages.value = error.message ?: "Operation failed"
+                _messages.value = error.userMessage("Operation failed")
             }
         }
     }
@@ -267,7 +269,7 @@ class BrowserViewModel(
                     _messages.value = "${paths.size} moved to trash"
                     refresh()
                 }
-                .onFailure { _messages.value = it.message ?: "Could not delete" }
+                .onFailure { _messages.value = it.userMessage("Could not delete") }
         }
     }
 
@@ -315,7 +317,7 @@ class BrowserViewModel(
                 }
                 .onFailure {
                     _state.update { s -> s.copy(isLoading = false) }
-                    _messages.value = it.message ?: "Could not compress"
+                    _messages.value = it.userMessage("Could not compress")
                 }
         }
     }
@@ -367,10 +369,10 @@ class BrowserViewModel(
                 }
                 .onFailure { error ->
                     _state.update { s -> s.copy(isLoading = false) }
-                    // A wrong password reopens the prompt; anything else is a
-                    // failure the user cannot retype their way out of.
-                    val wrongPassword = error.message?.contains("wrong password", true) == true
-                    if (wrongPassword) {
+                    // Matched on the exception type, not its text: a variant
+                    // with no fields has an empty message, so a string test
+                    // never fired and the prompt silently never reopened.
+                    if (error.isWrongPassword()) {
                         _state.update { s ->
                             s.copy(
                                 extractTarget = s.entries.firstOrNull { it.path == archivePath },
@@ -379,7 +381,7 @@ class BrowserViewModel(
                             )
                         }
                     } else {
-                        _messages.value = error.message ?: "Could not extract"
+                        _messages.value = error.userMessage("Could not extract")
                     }
                 }
         }
