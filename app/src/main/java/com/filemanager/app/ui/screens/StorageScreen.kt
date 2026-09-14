@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +70,12 @@ fun StorageScreen(
             snackbarState.showSnackbar(it)
             viewModel.consumeMessage()
         }
+    }
+
+    // Back unwinds a selection before leaving, which is what every other
+    // Android list does - and what the browser already did.
+    BackHandler(enabled = state.inSelectionMode) {
+        viewModel.clearSelection()
     }
 
     OneUiScreen(

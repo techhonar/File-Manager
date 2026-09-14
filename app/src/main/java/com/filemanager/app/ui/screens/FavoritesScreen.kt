@@ -9,6 +9,26 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Star
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import com.filemanager.app.ui.components.SelectAllToggle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,13 +56,79 @@ fun FavoritesScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val state by viewModel.state.collectAsState()
+    val snackbarState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbarState.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
+
+    BackHandler(enabled = state.inSelectionMode) { viewModel.clearSelection() }
 
     OneUiScreen(
-        title = "Favourites",
+        title = if (state.inSelectionMode) "${state.selected.size} selected" else "Favourites",
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
-            IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+            IconButton(
+                onClick = {
+                    if (state.inSelectionMode) viewModel.clearSelection() else onNavigateBack()
+                },
+            ) {
+                Icon(
+                    if (state.inSelectionMode) Icons.Default.Close
+                    else Icons.AutoMirrored.Filled.ArrowBack,
+                    if (state.inSelectionMode) "Cancel selection" else "Back",
+                )
+            }
+        },
+        actions = {
+            if (state.inSelectionMode) {
+                SelectAllToggle(
+                    allSelected = state.allSelected,
+                    onToggle = viewModel::toggleSelectAll,
+                )
+            } else if (state.entries.isNotEmpty()) {
+                IconButton(onClick = viewModel::enterSelectionMode) {
+                    Icon(Icons.Default.SelectAll, "Select items")
+                }
+            }
+        },
+        bottomBar = {
+            if (state.inSelectionMode) {
+                // Only the mark is removed here; the files themselves are left
+                // alone, so this bar carries one action and not the usual set.
+                Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+                    Column {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                        ) {
+                            // Locating a favourite is the other thing this
+                            // list is for, and it only means anything for one.
+                            val single = state.selected.singleOrNull()
+                            TextButton(
+                                onClick = { single?.let(onShowInFolder) },
+                                enabled = single != null,
+                            ) {
+                                Icon(Icons.Default.FolderOpen, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Show in folder")
+                            }
+                            TextButton(onClick = viewModel::removeSelected) {
+                                Icon(Icons.Default.StarOutline, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Remove")
+                            }
+                        }
+                    }
+                }
             }
         },
     ) { padding ->
@@ -68,11 +154,13 @@ fun FavoritesScreen(
                 items(state.entries, key = { it.path }) { entry ->
                     SearchResultRow(
                         entry = entry,
-                        // A favourite is opened by tapping and located by
-                        // long-press, which is the pair of things a list of
-                        // scattered files is actually for.
-                        onClick = { onOpenFile(entry) },
-                        onLongClick = { onShowInFolder(entry.path) },
+                        isSelected = entry.path in state.selected,
+                        selectionMode = state.inSelectionMode,
+                        onClick = {
+                            if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                            else onOpenFile(entry)
+                        },
+                        onLongClick = { viewModel.toggleSelection(entry.path) },
                     )
                 }
             }
