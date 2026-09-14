@@ -589,33 +589,3 @@ class BrowserViewModel(
         const val WATCH_DEBOUNCE_MS = 350L
     }
 }
-
-// Translations between the stored settings and the types the UI and the core
-// use. Deliberately explicit rather than relying on matching ordinals, which
-// would break silently if either side gained a variant.
-
-private fun ViewModeSetting.toViewMode(): ViewMode = when (this) {
-    ViewModeSetting.LIST -> ViewMode.LIST
-    ViewModeSetting.DETAILED -> ViewMode.DETAILED
-    ViewModeSetting.GRID -> ViewMode.GRID
-}
-
-private fun ViewMode.toSetting(): ViewModeSetting = when (this) {
-    ViewMode.LIST -> ViewModeSetting.LIST
-    ViewMode.DETAILED -> ViewModeSetting.DETAILED
-    ViewMode.GRID -> ViewModeSetting.GRID
-}
-
-private fun SortKeySetting.toSortKey(): SortKey = when (this) {
-    SortKeySetting.NAME -> SortKey.NAME
-    SortKeySetting.SIZE -> SortKey.SIZE
-    SortKeySetting.MODIFIED -> SortKey.MODIFIED
-    SortKeySetting.TYPE -> SortKey.TYPE
-}
-
-private fun SortKey.toSetting(): SortKeySetting = when (this) {
-    SortKey.NAME -> SortKeySetting.NAME
-    SortKey.SIZE -> SortKeySetting.SIZE
-    SortKey.MODIFIED -> SortKeySetting.MODIFIED
-    SortKey.TYPE -> SortKeySetting.TYPE
-}

@@ -65,11 +65,12 @@ class SearchViewModel(
     private val roots: List<String>,
 ) : ViewModel() {
 
-    init {
-        _state.update { it.copy(viewMode = settings.viewMode.value.toViewMode()) }
-    }
-
-    private val _state = MutableStateFlow(SearchState())
+    // Seeded at construction rather than in an init block: properties are
+    // initialised in declaration order, and an init block above this line runs
+    // before _state exists.
+    private val _state = MutableStateFlow(
+        SearchState(viewMode = settings.viewMode.value.toViewMode()),
+    )
     val state: StateFlow<SearchState> = _state.asStateFlow()
 
     private var searchJob: Job? = null
