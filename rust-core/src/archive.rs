@@ -96,11 +96,33 @@ pub fn archive_create(
     Ok(done)
 }
 
+/// Whether any entry in the archive is encrypted.
+///
+/// Checked before extracting so the app can ask for a password up front,
+/// rather than starting, failing partway and leaving a half-unpacked folder.
+#[uniffi::export]
+pub fn archive_is_encrypted(archive_path: String) -> Result<bool> {
+    let file = File::open(&archive_path)
+        .map_err(|e| FileError::from_io(e, Path::new(&archive_path)))?;
+    let mut zip = ZipArchive::new(BufReader::new(file))?;
+
+    for i in 0..zip.len() {
+        if zip.by_index_raw(i)?.encrypted() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Extract an archive into `dest_dir`.
+///
+/// `password` is required for encrypted entries and ignored otherwise, so the
+/// caller can pass one speculatively without checking first.
 #[uniffi::export]
 pub fn archive_extract(
     archive_path: String,
     dest_dir: String,
+    password: Option<String>,
     listener: Option<Arc<dyn ProgressListener>>,
     cancel: Option<Arc<CancelToken>>,
 ) -> Result<u64> {
@@ -117,7 +139,19 @@ pub fn archive_extract(
         if let Some(ref token) = cancel {
             token.check()?;
         }
-        let mut entry = zip.by_index(i)?;
+        // by_index cannot read an encrypted entry at all, so the decrypting
+        // call is used whenever a password was supplied.
+        let mut entry = match password.as_deref() {
+            Some(pw) => zip.by_index_decrypt(i, pw.as_bytes())?,
+            None => {
+                // Fail with something the user can act on rather than the
+                // zip crate's generic unsupported-feature error.
+                if zip.by_index_raw(i)?.encrypted() {
+                    return Err(FileError::PasswordRequired);
+                }
+                zip.by_index(i)?
+            }
+        };
         let Some(rel) = sanitize_entry_name(entry.name()) else {
             // Zip-slip: an entry named "../../secret" would otherwise write
             // outside dest_dir. Skip it rather than failing the extraction.

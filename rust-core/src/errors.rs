@@ -27,6 +27,12 @@ pub enum FileError {
     #[error("archive error: {detail}")]
     Archive { detail: String },
 
+    #[error("this archive is protected")]
+    PasswordRequired,
+
+    #[error("wrong password")]
+    WrongPassword,
+
     #[error("operation cancelled")]
     Cancelled,
 
@@ -59,6 +65,11 @@ impl From<io::Error> for FileError {
 
 impl From<zip::result::ZipError> for FileError {
     fn from(err: zip::result::ZipError) -> Self {
-        FileError::Archive { detail: err.to_string() }
+        // A bad password has to be distinguishable from a corrupt archive, or
+        // the UI cannot tell the user to try again rather than give up.
+        match err {
+            zip::result::ZipError::InvalidPassword => FileError::WrongPassword,
+            other => FileError::Archive { detail: other.to_string() },
+        }
     }
 }

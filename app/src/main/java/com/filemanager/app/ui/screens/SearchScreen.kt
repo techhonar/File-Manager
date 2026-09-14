@@ -32,6 +32,16 @@ import androidx.compose.runtime.setValue
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import com.filemanager.app.ui.components.FileGridCell
+import com.filemanager.app.viewmodel.ViewMode
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -116,6 +126,9 @@ fun SearchScreen(
                     Icon(Icons.Default.DriveFileRenameOutline, "Rename")
                 }
             } else if (state.results.isNotEmpty()) {
+                // A category opens this screen, so the layout choice has to be
+                // reachable here - it was only ever in the browser.
+                ViewModeMenu(current = state.viewMode, onSelect = viewModel::setViewMode)
                 IconButton(onClick = viewModel::enterSelectionMode) {
                     Icon(Icons.Default.SelectAll, "Select items")
                 }
@@ -163,6 +176,25 @@ fun SearchScreen(
             when {
                 // Results render while the walk is still running - the list
                 // fills in rather than appearing all at once at the end.
+                state.results.isNotEmpty() && state.viewMode == ViewMode.GRID ->
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 108.dp),
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.results, key = { it.path }) { entry ->
+                            FileGridCell(
+                                entry = entry,
+                                isSelected = entry.path in state.selected,
+                                selectionMode = state.inSelectionMode,
+                                onClick = {
+                                    if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                    else onOpenFile(entry)
+                                },
+                                onLongClick = { viewModel.toggleSelection(entry.path) },
+                            )
+                        }
+                    }
+
                 state.results.isNotEmpty() -> LazyColumn(contentPadding = contentPadding) {
                     item {
                         Text(
@@ -329,3 +361,26 @@ private val FILTER_CATEGORIES = listOf(
     FileCategory.ARCHIVE,
     FileCategory.APK,
 )
+
+/** List or grid, for a screen a category tile lands on. */
+@Composable
+private fun ViewModeMenu(current: ViewMode, onSelect: (ViewMode) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+
+    IconButton(onClick = { expanded = true }) {
+        Icon(
+            if (current == ViewMode.GRID) Icons.Default.GridView else Icons.AutoMirrored.Filled.List,
+            "Change view",
+        )
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        listOf(ViewMode.LIST to "List", ViewMode.GRID to "Grid").forEach { (mode, label) ->
+            DropdownMenuItem(
+                text = { Text(label) },
+                trailingIcon = { if (current == mode) Icon(Icons.Default.Check, null) },
+                onClick = { onSelect(mode); expanded = false },
+            )
+        }
+    }
+}
+

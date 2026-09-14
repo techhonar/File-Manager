@@ -23,6 +23,7 @@ import uniffi.filemanager_core.TreeStats
 import uniffi.filemanager_core.analyzeStorage
 import uniffi.filemanager_core.archiveCreate
 import uniffi.filemanager_core.archiveExtract
+import uniffi.filemanager_core.archiveIsEncrypted
 import uniffi.filemanager_core.archiveList
 import uniffi.filemanager_core.copyPaths
 import uniffi.filemanager_core.deletePaths
@@ -304,9 +305,16 @@ class FileRepository(
     suspend fun extract(
         archive: String,
         destination: String,
+        password: String? = null,
         progress: ProgressListener? = null,
         cancel: CancelToken? = null,
-    ): ULong = withContext(io) { archiveExtract(archive, destination, progress, cancel) }
+    ): ULong = withContext(io) {
+        archiveExtract(archive, destination, password, progress, cancel)
+    }
+
+    /** Whether extracting this archive will need a password. */
+    suspend fun archiveNeedsPassword(archive: String): Boolean =
+        withContext(io) { runCatching { archiveIsEncrypted(archive) }.getOrDefault(false) }
 
     // --- Trash ---------------------------------------------------------------
 

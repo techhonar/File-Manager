@@ -53,6 +53,10 @@ data class BrowserState(
     val detailsTarget: FileEntry? = null,
     /** Null until the walk and the MediaStore lookup come back. */
     val details: FileDetails? = null,
+    /** Archive awaiting the user's confirmation before it is unpacked. */
+    val extractTarget: FileEntry? = null,
+    val extractNeedsPassword: Boolean = false,
+    val extractWrongPassword: Boolean = false,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     /**
@@ -316,22 +320,67 @@ class BrowserViewModel(
         }
     }
 
-    fun extract(archivePath: String) {
+    /**
+     * Ask before unpacking, rather than extracting on a single tap.
+     *
+     * Whether a password is needed is settled here, before anything is
+     * written - an encrypted archive discovered partway through would leave
+     * half a folder behind.
+     */
+    fun confirmExtract(entry: FileEntry) {
+        _state.update {
+            it.copy(
+                extractTarget = entry,
+                extractNeedsPassword = false,
+                extractWrongPassword = false,
+            )
+        }
+        viewModelScope.launch {
+            val needs = repository.archiveNeedsPassword(entry.path)
+            _state.update { current ->
+                if (current.extractTarget?.path != entry.path) current
+                else current.copy(extractNeedsPassword = needs)
+            }
+        }
+    }
+
+    fun dismissExtract() = _state.update {
+        it.copy(
+            extractTarget = null,
+            extractNeedsPassword = false,
+            extractWrongPassword = false,
+        )
+    }
+
+    fun extract(archivePath: String, password: String? = null) {
         val destination = File(
             File(archivePath).parentFile,
             File(archivePath).nameWithoutExtension,
         ).absolutePath
 
         viewModelScope.launch {
-            _state.update { it.copy(isLoading = true) }
-            runCatching { repository.extract(archivePath, destination) }
+            _state.update { it.copy(isLoading = true, extractTarget = null) }
+            runCatching { repository.extract(archivePath, destination, password) }
                 .onSuccess {
                     _messages.value = "Extracted $it files"
                     refresh()
                 }
-                .onFailure {
+                .onFailure { error ->
                     _state.update { s -> s.copy(isLoading = false) }
-                    _messages.value = it.message ?: "Could not extract"
+                    // A wrong password reopens the prompt; anything else is a
+                    // failure the user cannot retype their way out of.
+                    val wrongPassword = error.message?.contains("wrong password", true) == true
+                    if (wrongPassword) {
+                        _state.update { s ->
+                            s.copy(
+                                extractTarget = s.entries.firstOrNull { it.path == archivePath },
+                                extractNeedsPassword = true,
+                                extractWrongPassword = true,
+                            )
+                        }
+                    } else {
+                        _messages.value = error.message ?: "Could not extract"
+                    }
                 }
         }
     }

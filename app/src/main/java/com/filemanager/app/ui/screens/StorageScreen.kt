@@ -113,17 +113,14 @@ fun StorageScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(Modifier.height(20.dp))
+                    // Deliberately no file count: what is being examined is
+                    // the app's business, and a number racing upwards reads as
+                    // something being done to the user's files rather than to
+                    // a figure on screen.
                     Text(
-                        text = "Measuring storage…",
+                        text = "Loading storage usage…",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    // A whole-device walk takes real time; a count that keeps
-                    // moving is the difference between "working" and "hung".
-                    Text(
-                        text = state.scanProgress.ifEmpty { "Starting…" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

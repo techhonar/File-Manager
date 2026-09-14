@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
 import com.filemanager.app.data.ApkIconFetcher
+import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,8 @@ class FileManagerApp : Application(), ImageLoaderFactory {
     /** Shared by every screen: see FileClipboard for why it cannot live in a
      *  per-folder ViewModel. */
     val clipboard: FileClipboard by lazy { FileClipboard() }
+
+    val settings: AppSettings by lazy { AppSettings(this) }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

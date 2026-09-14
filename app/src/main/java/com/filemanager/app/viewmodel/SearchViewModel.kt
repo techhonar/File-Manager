@@ -35,6 +35,8 @@ data class SearchState(
      * first long-pressed a file, which is the wrong way round.
      */
     val selectionActive: Boolean = false,
+    /** Category results are often photos, so the layout matters here too. */
+    val viewMode: ViewMode = ViewMode.LIST,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
 
@@ -271,6 +273,8 @@ class SearchViewModel(
 
     /** Enter selection mode with nothing ticked, from the overflow menu. */
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
+
+    fun setViewMode(mode: ViewMode) = _state.update { it.copy(viewMode = mode) }
 
     /** Select everything, or clear it if everything is already selected. */
     fun toggleSelectAll() = _state.update { current ->
