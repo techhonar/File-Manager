@@ -15,7 +15,14 @@ data class FavoritesState(
     val entries: List<FileEntry> = emptyList(),
     val isLoading: Boolean = true,
     val missingCount: Int = 0,
-)
+    val selected: Set<String> = emptySet(),
+    val selectionActive: Boolean = false,
+    val message: String? = null,
+) {
+    val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
+    val allSelected: Boolean
+        get() = entries.isNotEmpty() && selected.size == entries.size
+}
 
 /**
  * The favourites list, resolved from stored paths each time it is shown.
@@ -52,15 +59,53 @@ class FavoritesViewModel(
         // silently every time it is opened.
         if (missing.isNotEmpty()) paths.forget(missing)
 
-        _state.value = FavoritesState(
-            entries = entries.sortedBy { it.name.lowercase() },
-            isLoading = false,
-            missingCount = missing.size,
-        )
+        _state.update { current ->
+            current.copy(
+                entries = entries.sortedBy { it.name.lowercase() },
+                isLoading = false,
+                missingCount = missing.size,
+                // Drop any tick whose file is no longer in the list.
+                selected = current.selected.intersect(found),
+            )
+        }
     }
 
-    fun remove(path: String) {
-        paths.toggleFavorite(listOf(path))
-        _state.update { it.copy(entries = it.entries.filterNot { e -> e.path == path }) }
+    fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
+
+    fun toggleSelection(path: String) = _state.update { current ->
+        val next = current.selected.toMutableSet()
+        if (!next.add(path)) next.remove(path)
+        current.copy(selected = next)
     }
+
+    fun toggleSelectAll() = _state.update { current ->
+        if (current.allSelected) current.copy(selected = emptySet())
+        else current.copy(selected = current.entries.map { it.path }.toSet())
+    }
+
+    fun clearSelection() =
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
+
+    /**
+     * Remove the selection from favourites.
+     *
+     * Only the mark goes - the files are left alone. Deleting from a list of
+     * favourites would be a surprising thing for it to do.
+     */
+    fun removeSelected() {
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+
+        paths.toggleFavorite(selected)
+        _state.update { current ->
+            current.copy(
+                entries = current.entries.filterNot { it.path in selected.toSet() },
+                selected = emptySet(),
+                selectionActive = false,
+                message = "Removed ${selected.size} from favourites",
+            )
+        }
+    }
+
+    fun consumeMessage() = _state.update { it.copy(message = null) }
 }

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +51,7 @@ fun FileRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isPinned: Boolean = false,
 ) {
     Row(
         modifier = modifier
@@ -83,6 +86,17 @@ fun FileRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+            )
+        }
+        // Pinned rows sit at the top regardless of sort, which is confusing
+        // without something saying why they are there.
+        if (isPinned) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = "Pinned",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
             )
         }
     }

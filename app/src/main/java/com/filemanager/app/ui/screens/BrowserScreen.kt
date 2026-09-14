@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -172,6 +173,10 @@ fun BrowserScreen(
                             allHidden = state.selected.isNotEmpty() && state.selected.all {
                                 it.substringAfterLast('/').startsWith(".")
                             },
+                            allFavorite = state.selected.isNotEmpty() &&
+                                state.selected.all { it in state.favorites },
+                            allPinned = state.selected.isNotEmpty() &&
+                                state.selected.all { it in state.pinned },
                             onRename = { renameTarget = it },
                             onDetails = viewModel::showDetails,
                             onFavorite = viewModel::toggleFavorite,
@@ -417,6 +422,7 @@ private fun FileList(
                             selectionMode = state.inSelectionMode,
                             onClick = { onEntryClick(entry) },
                             onLongClick = { viewModel.toggleSelection(entry.path) },
+                            isPinned = entry.path in state.pinned,
                         )
                     }
                 }
@@ -610,6 +616,8 @@ private fun MenuSectionLabel(text: String) {
 private fun SelectionOverflowMenu(
     single: FileEntry?,
     allHidden: Boolean,
+    allFavorite: Boolean,
+    allPinned: Boolean,
     onRename: (FileEntry) -> Unit,
     onDetails: (FileEntry) -> Unit,
     onFavorite: () -> Unit,
@@ -626,12 +634,15 @@ private fun SelectionOverflowMenu(
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         DropdownMenuItem(
-            text = { Text("Add to favourites") },
-            leadingIcon = { Icon(Icons.Default.StarOutline, null) },
+            // The action toggles, so the label has to say which way it will go.
+            text = { Text(if (allFavorite) "Remove from favourites" else "Add to favourites") },
+            leadingIcon = {
+                Icon(if (allFavorite) Icons.Default.Star else Icons.Default.StarOutline, null)
+            },
             onClick = { onFavorite(); expanded = false },
         )
         DropdownMenuItem(
-            text = { Text("Pin to top") },
+            text = { Text(if (allPinned) "Unpin" else "Pin to top") },
             leadingIcon = { Icon(Icons.Default.PushPin, null) },
             onClick = { onPin(); expanded = false },
         )

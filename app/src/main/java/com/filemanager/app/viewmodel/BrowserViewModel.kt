@@ -52,6 +52,10 @@ data class BrowserState(
     val showHidden: Boolean = false,
     val sort: SortOptions = SortOptions(SortKey.NAME, descending = false, dirsFirst = true),
     val viewMode: ViewMode = ViewMode.LIST,
+    /** Paths currently pinned, so rows can show the marker. */
+    val pinned: Set<String> = emptySet(),
+    /** Paths currently favourited, so the menu can offer the opposite. */
+    val favorites: Set<String> = emptySet(),
     /** Set while the details sheet is open. */
     val detailsTarget: FileEntry? = null,
     /** Null until the walk and the MediaStore lookup come back. */
@@ -122,8 +126,13 @@ class BrowserViewModel(
         // Re-sort when a pin changes, so the item moves without a reload.
         viewModelScope.launch {
             paths.pinned.collect { pinned ->
-                _state.update { it.copy(entries = applyPinning(it.entries, pinned)) }
+                _state.update {
+                    it.copy(pinned = pinned, entries = applyPinning(it.entries, pinned))
+                }
             }
+        }
+        viewModelScope.launch {
+            paths.favorites.collect { favorites -> _state.update { it.copy(favorites = favorites) } }
         }
     }
 

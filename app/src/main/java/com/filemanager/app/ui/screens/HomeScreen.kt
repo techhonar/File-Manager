@@ -33,6 +33,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,15 +83,6 @@ fun HomeScreen(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
-        item {
-            HomeRow(
-                icon = Icons.Outlined.Schedule,
-                title = "Recent files",
-                onClick = onRecentClick,
-            )
-            InsetDivider()
-        }
-
         item { SectionHeading("Categories") }
         item {
             Column(
@@ -180,9 +172,19 @@ fun HomeScreen(
         }
 
         if (state.recent.isNotEmpty()) {
-            item { SectionHeading("Recent") }
+            item { SectionHeading("Recent files") }
             items(state.recent.take(10), key = { it.path }) { entry ->
                 SearchResultRow(entry = entry, onClick = { onFileClick(entry) })
+            }
+            item {
+                // Only the newest few are listed here; the rest are a tap away
+                // rather than an endless home screen.
+                TextButton(
+                    onClick = onRecentClick,
+                    modifier = Modifier.padding(start = OneUi.ScreenPadding - 12.dp),
+                ) {
+                    Text("View all")
+                }
             }
         }
 
@@ -290,14 +292,18 @@ private fun StorageGauge(usedBytes: ULong, totalBytes: ULong) {
             .height(40.dp)
             .defaultMinSize(minWidth = 150.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            // The label sits across both the filled and unfilled parts, so
+            // neither may swallow it. A translucent fill over a neutral track
+            // keeps one text colour readable on both - white text on the pale
+            // light-mode container was invisible.
+            .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(
             Modifier
                 .fillMaxWidth(fraction)
                 .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.primary),
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
         )
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
@@ -307,12 +313,12 @@ private fun StorageGauge(usedBytes: ULong, totalBytes: ULong) {
                 text = formatSize(usedBytes),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 text = " / ${formatSize(totalBytes)}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.75f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -326,7 +332,7 @@ private fun StatusPill(text: String) {
             .height(40.dp)
             .defaultMinSize(minWidth = 150.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
         Text(
