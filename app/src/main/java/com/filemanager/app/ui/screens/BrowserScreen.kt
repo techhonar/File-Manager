@@ -68,6 +68,8 @@ import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
+import androidx.activity.compose.BackHandler
+import com.filemanager.app.ui.components.ExtractDialog
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.SelectAllToggle
@@ -115,6 +117,18 @@ fun BrowserScreen(
     }
 
     val folderName = state.path.substringAfterLast('/').ifEmpty { "Storage" }
+
+    // Entering a subfolder reuses this destination rather than pushing a new
+    // one, so without this the system back button pops the whole browser off
+    // the stack and lands on the home screen - however deep the user had
+    // navigated. Selection is unwound first, as elsewhere on Android.
+    BackHandler(enabled = true) {
+        when {
+            state.inSelectionMode -> viewModel.clearSelection()
+            viewModel.navigateUp() -> Unit
+            else -> onNavigateBack()
+        }
+    }
 
     if (state.inSelectionMode) {
         // Selection mode gets a plain compact bar plus a bottom action bar.
@@ -236,6 +250,17 @@ fun BrowserScreen(
         )
     }
 
+    state.extractTarget?.let { target ->
+        ExtractDialog(
+            archiveName = target.name,
+            destinationName = target.name.substringBeforeLast('.', target.name),
+            needsPassword = state.extractNeedsPassword,
+            wrongPassword = state.extractWrongPassword,
+            onExtract = { password -> viewModel.extract(target.path, password) },
+            onDismiss = viewModel::dismissExtract,
+        )
+    }
+
     state.detailsTarget?.let { target ->
         DetailsDialog(
             entry = target,
@@ -306,9 +331,9 @@ private fun FileList(
                 when {
                     state.inSelectionMode -> viewModel.toggleSelection(entry.path)
                     entry.isDir -> viewModel.load(entry.path)
-                    // Tapping a zip extracts it in place - the one file type
-                    // this app opens itself.
-                    entry.category == FileCategory.ARCHIVE -> viewModel.extract(entry.path)
+                    // Ask before unpacking: it is a lot of writing to do on a
+                    // single tap, and undoing it by hand is worse.
+                    entry.category == FileCategory.ARCHIVE -> viewModel.confirmExtract(entry)
                     else -> onOpenFile(entry)
                 }
             }

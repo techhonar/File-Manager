@@ -56,6 +56,8 @@ import com.filemanager.app.ui.screens.StorageScreen
 import com.filemanager.app.ui.screens.TrashScreen
 import com.filemanager.app.viewmodel.BrowserViewModel
 import com.filemanager.app.viewmodel.HomeViewModel
+import com.filemanager.app.ui.components.ThemeDialog
+import com.filemanager.app.viewmodel.RecentViewModel
 import com.filemanager.app.viewmodel.SearchViewModel
 import com.filemanager.app.viewmodel.StorageViewModel
 import com.filemanager.app.viewmodel.TrashViewModel
@@ -118,6 +120,8 @@ fun FileManagerRoot(
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
     val scope = rememberCoroutineScope()
+    var showThemeDialog by remember { mutableStateOf(false) }
+    val themeMode by app.settings.themeMode.collectAsState()
 
     /**
      * Share files, expanding any folder into the files it contains.
@@ -145,6 +149,14 @@ fun FileManagerRoot(
                     toast(context, "No app can receive these files")
             }
         }
+    }
+
+    if (showThemeDialog) {
+        ThemeDialog(
+            current = themeMode,
+            onSelect = app.settings::setThemeMode,
+            onDismiss = { showThemeDialog = false },
+        )
     }
 
     Surface(
@@ -179,6 +191,7 @@ fun FileManagerRoot(
                         HomeOverflowMenu(
                             onManageStorage = { navController.navigate(Routes.STORAGE) },
                             onTrash = { navController.navigate(Routes.TRASH) },
+                            onTheme = { showThemeDialog = true },
                             onAbout = { navController.navigate(Routes.ABOUT) },
                         )
                     },
@@ -202,18 +215,16 @@ fun FileManagerRoot(
             }
 
             composable(Routes.RECENT) {
-                val vm: HomeViewModel = viewModel(factory = factory)
-                val state by vm.state.collectAsState()
+            val vm: RecentViewModel = viewModel(factory = factory)
+            RecentScreen(
+                viewModel = vm,
+                onOpenFile = openFile,
+                onShare = shareFiles,
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
 
-                RecentScreen(
-                    entries = state.recent,
-                    isLoading = state.isLoading,
-                    onOpenFile = openFile,
-                    onNavigateBack = { navController.popBackStack() },
-                )
-            }
-
-            composable(Routes.BROWSE_PATTERN) { entry ->
+        composable(Routes.BROWSE_PATTERN) { entry ->
                 val encoded = entry.arguments?.getString("path").orEmpty()
                 val path = URLDecoder.decode(encoded, Charsets.UTF_8.name())
 
@@ -285,6 +296,7 @@ fun FileManagerRoot(
 private fun HomeOverflowMenu(
     onManageStorage: () -> Unit,
     onTrash: () -> Unit,
+    onTheme: () -> Unit,
     onAbout: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -300,6 +312,10 @@ private fun HomeOverflowMenu(
         DropdownMenuItem(
             text = { Text("Trash") },
             onClick = { onTrash(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Theme") },
+            onClick = { onTheme(); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("About") },

@@ -36,6 +36,9 @@ class ViewModelFactory(
         modelClass.isAssignableFrom(StorageViewModel::class.java) ->
             StorageViewModel(repository, primaryPath) as T
 
+        modelClass.isAssignableFrom(RecentViewModel::class.java) ->
+            RecentViewModel(repository, clipboard, primaryPath) as T
+
         modelClass.isAssignableFrom(TrashViewModel::class.java) ->
             TrashViewModel(repository) as T
 

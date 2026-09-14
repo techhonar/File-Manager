@@ -2,7 +2,7 @@
 //! logic is the same code that ships in the .so, so a bug caught here is a
 //! bug that never reaches the phone.
 
-use filemanager_core::archive::{archive_create, archive_extract, archive_list};
+use filemanager_core::archive::{archive_create, archive_extract, archive_is_encrypted, archive_list};
 use filemanager_core::categories::{categorize, files_in_category, recent_files};
 use filemanager_core::dedup::find_duplicates;
 use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tree_stats};
@@ -233,6 +233,7 @@ fn round_trips_a_zip_archive() {
         out.to_string_lossy().into_owned(),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(fs::read_to_string(out.join("data/sub/two.txt")).unwrap(), "second");
@@ -296,6 +297,7 @@ fn rejects_zip_slip_paths() {
     archive_extract(
         zip_path.to_string_lossy().into_owned(),
         out.to_string_lossy().into_owned(),
+        None,
         None,
         None,
     )
@@ -714,4 +716,84 @@ fn an_empty_query_lists_every_file_under_a_folder() {
         vec!["a.jpg", "b.jpg", "c.png"],
         "every depth is included, and the thumbnail cache is not",
     );
+}
+
+/// Build a zip whose single entry is AES-encrypted with `password`.
+fn encrypted_zip(path: &std::path::Path, password: &str, contents: &[u8]) {
+    use std::io::Write;
+    let file = fs::File::create(path).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .with_aes_encryption(zip::AesMode::Aes256, password);
+    writer.start_file("secret.txt", options).unwrap();
+    writer.write_all(contents).unwrap();
+    writer.finish().unwrap();
+}
+
+#[test]
+fn an_encrypted_archive_is_reported_as_such() {
+    let tree = TempTree::new("zip-encrypted-detect");
+    let locked = tree.path().join("locked.zip");
+    encrypted_zip(&locked, "hunter2", b"classified");
+
+    assert!(archive_is_encrypted(locked.to_string_lossy().into_owned()).unwrap());
+
+    // And a plain one is not, so the app does not prompt for nothing.
+    tree.file("plain/a.txt", b"open");
+    let plain = tree.path().join("plain.zip");
+    archive_create(
+        vec![tree.path().join("plain").to_string_lossy().into_owned()],
+        plain.to_string_lossy().into_owned(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(!archive_is_encrypted(plain.to_string_lossy().into_owned()).unwrap());
+}
+
+#[test]
+fn extracting_an_encrypted_archive_needs_the_right_password() {
+    let tree = TempTree::new("zip-encrypted-extract");
+    let locked = tree.path().join("locked.zip");
+    encrypted_zip(&locked, "hunter2", b"classified");
+    let out = tree.dir("out");
+
+    // No password at all must say so, not fail as a corrupt archive.
+    let err = archive_extract(
+        locked.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::PasswordRequired),
+        "expected PasswordRequired, got {err:?}",
+    );
+
+    // A wrong one must be distinguishable, so the user can be asked again.
+    let err = archive_extract(
+        locked.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        Some("wrong".into()),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::WrongPassword),
+        "expected WrongPassword, got {err:?}",
+    );
+
+    // And the right one works.
+    archive_extract(
+        locked.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+        Some("hunter2".into()),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(out.join("secret.txt")).unwrap(), "classified");
 }

@@ -22,8 +22,6 @@ data class StorageState(
     val isLoading: Boolean = true,
     val isScanningDuplicates: Boolean = false,
     val duplicateProgress: String = "",
-    /** Live count while the storage walk runs, shown under the spinner. */
-    val scanProgress: String = "",
     /** Paths ticked in the largest-files list. */
     val selected: Set<String> = emptySet(),
     val selectionActive: Boolean = false,
@@ -114,17 +112,12 @@ class StorageViewModel(
         val token = CancelToken()
         scan = token
 
-        _state.update { it.copy(isLoading = true, scanProgress = "") }
+        _state.update { it.copy(isLoading = true) }
         viewModelScope.launch {
-            // A whole-device walk takes real time, so report progress rather
-            // than showing a spinner that says nothing for a minute.
-            val progress = object : ProgressListener {
-                override fun onProgress(done: ULong, total: ULong, currentPath: String) {
-                    _state.update { it.copy(scanProgress = "Scanned $done files") }
-                }
-            }
-
-            runCatching { repository.analyze(rootPath, 50u, progress, token) }
+            // No progress listener: the screen no longer reports a file count,
+            // and a callback firing every few hundred files to update state
+            // nothing reads is a JNI hop for nothing.
+            runCatching { repository.analyze(rootPath, 50u, null, token) }
                 .onSuccess { analysis ->
                     _state.update {
                         it.copy(
@@ -136,14 +129,13 @@ class StorageViewModel(
                             ),
                             largest = analysis.largest,
                             isLoading = false,
-                            scanProgress = "",
                         )
                     }
                 }
                 .onFailure {
                     // A cancelled scan lands here too, which is the expected
                     // path when the user leaves the screen.
-                    _state.update { s -> s.copy(isLoading = false, scanProgress = "") }
+                    _state.update { s -> s.copy(isLoading = false) }
                 }
         }
     }
