@@ -96,7 +96,11 @@ fun FileRow(
  */
 @Composable
 private fun FileThumbnail(entry: FileEntry, size: Int = 46) {
-    val showsPreview = entry.category == FileCategory.IMAGE || entry.category == FileCategory.VIDEO
+    // Video frames and installer icons are loaded by decoders registered on
+    // the app's ImageLoader; without those this would draw nothing for them.
+    val showsPreview = entry.category == FileCategory.IMAGE ||
+        entry.category == FileCategory.VIDEO ||
+        entry.category == FileCategory.APK
 
     if (showsPreview) {
         Box(

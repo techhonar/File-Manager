@@ -111,6 +111,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.documentfile)
     implementation(libs.coil.compose)
+    implementation(libs.coil.video)
     implementation(libs.jna) { artifact { type = "aar" } }
 
     debugImplementation(libs.androidx.ui.tooling)

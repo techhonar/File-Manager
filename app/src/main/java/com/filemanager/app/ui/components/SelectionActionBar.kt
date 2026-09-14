@@ -44,10 +44,10 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun SelectionActionBar(
-    onCopy: () -> Unit,
-    onMove: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    onCopy: (() -> Unit)? = null,
+    onMove: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
     onDetails: (() -> Unit)? = null,
     onCompress: (() -> Unit)? = null,
@@ -62,8 +62,8 @@ fun SelectionActionBar(
                     .padding(vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                ActionItem(Icons.Default.ContentCopy, "Copy", onCopy)
-                ActionItem(Icons.Default.ContentCut, "Move", onMove)
+                onCopy?.let { ActionItem(Icons.Default.ContentCopy, "Copy", it) }
+                onMove?.let { ActionItem(Icons.Default.ContentCut, "Move", it) }
                 onShare?.let { ActionItem(Icons.Default.Share, "Share", it) }
                 onDetails?.let { ActionItem(Icons.Default.Info, "Details", it) }
                 onCompress?.let { ActionItem(Icons.Default.FolderZip, "Zip", it) }

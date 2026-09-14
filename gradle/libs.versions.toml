@@ -30,6 +30,9 @@ androidx-material-icons-extended = { group = "androidx.compose.material", name =
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+# Coil cannot decode a video frame on its own; this adds the decoder that
+# makes video thumbnails possible at all.
+coil-video = { group = "io.coil-kt", name = "coil-video", version.ref = "coil" }
 # UniFFI's Kotlin bindings call into the .so through JNA, so this is required
 # by the generated code -- the @aar variant is the one that works on Android.
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
