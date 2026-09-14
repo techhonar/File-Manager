@@ -38,6 +38,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
+import androidx.compose.runtime.rememberCoroutineScope
+import com.filemanager.app.data.MediaOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.filemanager.app.data.ShareFiles
 import com.filemanager.app.data.StorageVolumes
 import com.filemanager.app.ui.components.OneUiScreen
@@ -104,12 +109,35 @@ fun FileManagerRoot(
     val primaryPath = remember { StorageVolumes.primaryPath() }
     val navController = rememberNavController()
 
-    val factory = remember(volumes) {
-        ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath)
+    val ownerAppOf: suspend (String) -> String? = remember(context) {
+        { path -> withContext(Dispatchers.IO) { MediaOwner.ownerAppLabel(context, path) } }
+    }
+    val factory = remember(volumes, ownerAppOf) {
+        ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath, primaryPath, ownerAppOf)
     }
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
-    val shareFiles: (List<String>) -> Unit = { paths -> ShareFiles.share(context, paths) }
+    val scope = rememberCoroutineScope()
+
+    /**
+     * Share files, zipping first when any folder is involved.
+     *
+     * Android cannot pass a directory as a stream - not to Quick Share, not to
+     * anything - so a folder has to become one file first. Plain files are
+     * sent directly, since zipping them would only make the recipient unpack
+     * something they did not ask for.
+     */
+    val shareFiles: (List<String>) -> Unit = { paths ->
+        val hasFolder = paths.any { File(it).isDirectory }
+        if (!hasFolder) {
+            ShareFiles.share(context, paths)
+        } else {
+            scope.launch {
+                runCatching { app.repository.archiveForSharing(paths, context.cacheDir) }
+                    .onSuccess { ShareFiles.share(context, listOf(it)) }
+            }
+        }
+    }
 
     // Surface, not a bare NavHost: during the transition between destinations
     // both screens are briefly semi-transparent, and with nothing painted
@@ -188,7 +216,9 @@ fun FileManagerRoot(
                 // than reusing the previous folder's state.
                 val vm: BrowserViewModel = viewModel(
                     key = path,
-                    factory = ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath, path),
+                    factory = ViewModelFactory(
+                        app.repository, app.clipboard, volumes, primaryPath, path, ownerAppOf,
+                    ),
                 )
                 BrowserScreen(
                     viewModel = vm,
