@@ -3,6 +3,7 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,7 +51,7 @@ class TrashViewModel(private val repository: FileRepository) : ViewModel() {
                     // The usual cause is something new sitting at the original
                     // path, which is worth saying plainly.
                     _state.update { s ->
-                        s.copy(message = it.message ?: "Could not restore ${item.name}")
+                        s.copy(message = it.userMessage("Could not restore ${item.name}"))
                     }
                 }
         }

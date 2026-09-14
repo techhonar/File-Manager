@@ -1,6 +1,9 @@
 package com.filemanager.app.ui
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Build
 import android.content.Intent
 import android.webkit.MimeTypeMap
 import androidx.compose.foundation.layout.fillMaxSize
@@ -118,7 +121,27 @@ fun FileManagerRoot(
         ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath, primaryPath, ownerAppOf)
     }
 
-    val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry) }
+    val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry.path) }
+
+    /**
+     * Always shows the chooser, where opening normally goes straight to the
+     * user's default. That is the whole point of "open with".
+     */
+    val openWith: (String) -> Unit = { path ->
+        if (!openWithExternalApp(context, path, forceChooser = true)) {
+            toast(context, "No app can open this file")
+        }
+    }
+
+    val copyPath: (String) -> Unit = { path ->
+        val clip = context.getSystemService(ClipboardManager::class.java)
+        clip?.setPrimaryClip(ClipData.newPlainText("Path", path))
+        // Android 13 and up shows its own copy confirmation, so a second one
+        // here would be duplicate noise.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            toast(context, "Path copied")
+        }
+    }
     val scope = rememberCoroutineScope()
     var showThemeDialog by remember { mutableStateOf(false) }
     val themeMode by app.settings.themeMode.collectAsState()
@@ -268,6 +291,11 @@ fun FileManagerRoot(
                     viewModel = vm,
                     onOpenFile = openFile,
                     onShare = shareFiles,
+                    onOpenWith = openWith,
+                    onCopyPath = copyPath,
+                    onShowInFolder = { path ->
+                        navController.navigate(Routes.browse(path.substringBeforeLast('/')))
+                    },
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
                     autoFocus = categoryName == null,
@@ -328,32 +356,44 @@ private fun HomeOverflowMenu(
  * Hand a file to whichever app can open it.
  *
  * Goes through FileProvider because Android blocks file:// URIs across app
- * boundaries -- passing the raw path throws FileUriExposedException.
+ * boundaries - passing the raw path throws FileUriExposedException.
+ *
+ * With [forceChooser] the picker is always shown; without it the user's
+ * default opens directly, which is what tapping a file should do.
  */
-private fun openWithExternalApp(context: android.content.Context, entry: FileEntry) {
-    val file = File(entry.path)
-    val uri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file,
-    )
-    val extension = file.extension.lowercase()
-    val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-        ?: "*/*"
+private fun openWithExternalApp(
+    context: android.content.Context,
+    path: String,
+    forceChooser: Boolean = false,
+): Boolean {
+    val file = File(path)
+    if (!file.isFile) return false
 
-    val intent = Intent(Intent.ACTION_VIEW).apply {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val mimeType = MimeTypeMap.getSingleton()
+        .getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+
+    val view = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, mimeType)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    try {
+    val intent = if (forceChooser) {
+        Intent.createChooser(view, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    } else {
+        view
+    }
+
+    return try {
         context.startActivity(intent)
+        true
     } catch (_: ActivityNotFoundException) {
-        // Nothing installed handles this type; silently ignoring is better
-        // than crashing, and the user sees the file simply not open.
+        // Nothing installed handles this type. Silent for a plain tap; the
+        // caller decides whether to say so.
+        false
     }
 }
 
-/** Brief message for a share that could not proceed. */
+/** Brief message for an action that could not proceed. */
 private fun toast(context: android.content.Context, message: String) {
     android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import com.filemanager.app.ui.components.InlineResultActions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,6 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import com.filemanager.app.ui.components.FileDetailRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -79,6 +83,9 @@ fun SearchScreen(
     viewModel: SearchViewModel,
     onOpenFile: (FileEntry) -> Unit,
     onShare: (List<String>) -> Unit,
+    onOpenWith: (String) -> Unit,
+    onCopyPath: (String) -> Unit,
+    onShowInFolder: (String) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /**
@@ -93,6 +100,13 @@ fun SearchScreen(
     val state by viewModel.state.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    // Hoisted so switching layout or entering selection does not send the
+    // user back to the top of a long result list.
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    // Which result has its actions unfolded. One at a time, so the list does
+    // not turn into a column of expanded panels.
+    var expandedPath by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -179,6 +193,7 @@ fun SearchScreen(
                 state.results.isNotEmpty() && state.viewMode == ViewMode.GRID ->
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 108.dp),
+                        state = gridState,
                         contentPadding = contentPadding,
                     ) {
                         items(state.results, key = { it.path }) { entry ->
@@ -195,7 +210,42 @@ fun SearchScreen(
                         }
                     }
 
-                state.results.isNotEmpty() -> LazyColumn(contentPadding = contentPadding) {
+                state.results.isNotEmpty() && state.viewMode == ViewMode.DETAILED ->
+                    LazyColumn(state = listState, contentPadding = contentPadding) {
+                        items(state.results, key = { it.path }) { entry ->
+                            Column {
+                                FileDetailRow(
+                                    entry = entry,
+                                    isSelected = entry.path in state.selected,
+                                    selectionMode = state.inSelectionMode,
+                                    onClick = {
+                                        when {
+                                            state.inSelectionMode ->
+                                                viewModel.toggleSelection(entry.path)
+                                            expandedPath == entry.path -> expandedPath = null
+                                            else -> expandedPath = entry.path
+                                        }
+                                    },
+                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                )
+                                InlineResultActions(
+                                    visible = expandedPath == entry.path &&
+                                        !state.inSelectionMode,
+                                    onOpenWith = { onOpenWith(entry.path) },
+                                    onCopyPath = { onCopyPath(entry.path) },
+                                    onShowInFolder = {
+                                        expandedPath = null
+                                        onShowInFolder(entry.path)
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                state.results.isNotEmpty() -> LazyColumn(
+                    state = listState,
+                    contentPadding = contentPadding,
+                ) {
                     item {
                         Text(
                             text = "${state.results.size} results",
@@ -208,16 +258,34 @@ fun SearchScreen(
                         )
                     }
                     items(state.results, key = { it.path }) { entry ->
-                        SearchResultRow(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = {
-                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                                else onOpenFile(entry)
-                            },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                        )
+                        Column {
+                            SearchResultRow(
+                                entry = entry,
+                                isSelected = entry.path in state.selected,
+                                selectionMode = state.inSelectionMode,
+                                onClick = {
+                                    when {
+                                        state.inSelectionMode ->
+                                            viewModel.toggleSelection(entry.path)
+                                        // A result is usually somewhere the
+                                        // user was not expecting, so offer to
+                                        // locate it rather than only open it.
+                                        expandedPath == entry.path -> expandedPath = null
+                                        else -> expandedPath = entry.path
+                                    }
+                                },
+                                onLongClick = { viewModel.toggleSelection(entry.path) },
+                            )
+                            InlineResultActions(
+                                visible = expandedPath == entry.path && !state.inSelectionMode,
+                                onOpenWith = { onOpenWith(entry.path) },
+                                onCopyPath = { onCopyPath(entry.path) },
+                                onShowInFolder = {
+                                    expandedPath = null
+                                    onShowInFolder(entry.path)
+                                },
+                            )
+                        }
                     }
                 }
 
@@ -374,7 +442,11 @@ private fun ViewModeMenu(current: ViewMode, onSelect: (ViewMode) -> Unit) {
         )
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        listOf(ViewMode.LIST to "List", ViewMode.GRID to "Grid").forEach { (mode, label) ->
+        listOf(
+            ViewMode.LIST to "List",
+            ViewMode.DETAILED to "Detailed list",
+            ViewMode.GRID to "Grid",
+        ).forEach { (mode, label) ->
             DropdownMenuItem(
                 text = { Text(label) },
                 trailingIcon = { if (current == mode) Icon(Icons.Default.Check, null) },

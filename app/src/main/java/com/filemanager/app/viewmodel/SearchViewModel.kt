@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -308,7 +309,7 @@ class SearchViewModel(
             runCatching { repository.moveToTrash(paths) }
                 .onSuccess { removeFromResults(paths, "${paths.size} moved to trash") }
                 .onFailure { e ->
-                    _state.update { it.copy(message = e.message ?: "Could not delete") }
+                    _state.update { it.copy(message = e.userMessage("Could not delete")) }
                 }
         }
     }
