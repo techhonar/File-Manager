@@ -33,6 +33,11 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sort
@@ -100,6 +105,7 @@ fun BrowserScreen(
     viewModel: BrowserViewModel,
     onOpenFile: (FileEntry) -> Unit,
     onShare: (List<String>) -> Unit,
+    onOpenWith: (String) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -163,8 +169,15 @@ fun BrowserScreen(
                         SelectionOverflowMenu(
                             single = state.selected.singleOrNull()
                                 ?.let { p -> state.entries.firstOrNull { it.path == p } },
+                            allHidden = state.selected.isNotEmpty() && state.selected.all {
+                                it.substringAfterLast('/').startsWith(".")
+                            },
                             onRename = { renameTarget = it },
                             onDetails = viewModel::showDetails,
+                            onFavorite = viewModel::toggleFavorite,
+                            onPin = viewModel::togglePinned,
+                            onHide = viewModel::toggleSelectionHidden,
+                            onOpenWith = { path -> onOpenWith(path) },
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -219,7 +232,7 @@ fun BrowserScreen(
                     showHidden = state.showHidden,
                     viewMode = state.viewMode,
                     sort = state.sort,
-                    onToggleHidden = viewModel::toggleHidden,
+                    onToggleHidden = viewModel::toggleShowHidden,
                     onSetViewMode = viewModel::setViewMode,
                     onSetSort = viewModel::setSort,
                     onSelectItems = viewModel::enterSelectionMode,
@@ -596,23 +609,58 @@ private fun MenuSectionLabel(text: String) {
 @Composable
 private fun SelectionOverflowMenu(
     single: FileEntry?,
+    allHidden: Boolean,
     onRename: (FileEntry) -> Unit,
     onDetails: (FileEntry) -> Unit,
+    onFavorite: () -> Unit,
+    onPin: () -> Unit,
+    onHide: () -> Unit,
+    onOpenWith: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    IconButton(onClick = { expanded = true }, enabled = single != null) {
+    // Enabled for any selection: favourite, pin and hide all work on several
+    // at once. Only rename, details and open-with need exactly one.
+    IconButton(onClick = { expanded = true }) {
         Icon(Icons.Default.MoreVert, "More actions")
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         DropdownMenuItem(
+            text = { Text("Add to favourites") },
+            leadingIcon = { Icon(Icons.Default.StarOutline, null) },
+            onClick = { onFavorite(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Pin to top") },
+            leadingIcon = { Icon(Icons.Default.PushPin, null) },
+            onClick = { onPin(); expanded = false },
+        )
+        DropdownMenuItem(
+            // A name starting with a dot is what hidden means, so the label
+            // follows what the selection currently is.
+            text = { Text(if (allHidden) "Unhide" else "Hide") },
+            leadingIcon = {
+                Icon(if (allHidden) Icons.Default.Visibility else Icons.Default.VisibilityOff, null)
+            },
+            onClick = { onHide(); expanded = false },
+        )
+        HorizontalDivider()
+        DropdownMenuItem(
+            text = { Text("Open with") },
+            leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
+            enabled = single != null && !single.isDir,
+            onClick = { single?.let { onOpenWith(it.path) }; expanded = false },
+        )
+        DropdownMenuItem(
             text = { Text("Rename") },
             leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null) },
+            enabled = single != null,
             onClick = { single?.let(onRename); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("Details") },
             leadingIcon = { Icon(Icons.Default.Info, null) },
+            enabled = single != null,
             onClick = { single?.let(onDetails); expanded = false },
         )
     }

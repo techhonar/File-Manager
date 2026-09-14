@@ -108,7 +108,9 @@ fun StorageScreen(
             }
         },
     ) { padding ->
-        if (state.isLoading && state.summary == null) {
+        // Blocks only until capacity arrives, which is immediate. Everything
+        // after that renders with what is known and fills in.
+        if (state.summary == null) {
             Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
@@ -155,7 +157,15 @@ fun StorageScreen(
                         Spacer(Modifier.height(20.dp))
                         StorageBar(usage = summary.byCategory, totalBytes = summary.totalBytes)
                         Spacer(Modifier.height(24.dp))
-                        StorageLegend(summary.byCategory)
+                        if (summary.byCategory.isEmpty()) {
+                            Text(
+                                text = "Working out what is using the space…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            StorageLegend(summary.byCategory)
+                        }
                     }
                 }
             }

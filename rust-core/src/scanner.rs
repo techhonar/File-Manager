@@ -231,3 +231,22 @@ fn count_files(root: &Path) -> u64 {
         .filter(|e| e.file_type().is_file())
         .count() as u64
 }
+
+/// Resolve paths back into entries, skipping any that no longer exist.
+///
+/// Favourites and pinned items are stored as paths, so they have to be turned
+/// back into entries to be listed - and a remembered path is exactly the kind
+/// that goes stale, because the file behind it can be deleted or renamed at
+/// any time by anything. Missing ones are dropped rather than reported, since
+/// a favourite that no longer exists is not an error to show the user.
+#[uniffi::export]
+pub fn entries_for(paths: Vec<String>) -> Vec<FileEntry> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let p = Path::new(path);
+            let meta = std::fs::symlink_metadata(p).ok()?;
+            Some(FileEntry::from_metadata(p, &meta))
+        })
+        .collect()
+}

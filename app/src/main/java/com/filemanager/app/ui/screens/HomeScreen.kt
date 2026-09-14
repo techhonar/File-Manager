@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -71,6 +72,7 @@ fun HomeScreen(
     onRecentClick: () -> Unit,
     onVolumeClick: (StorageVolume) -> Unit,
     onTrashClick: () -> Unit,
+    onFavoritesClick: () -> Unit,
     onManageStorageClick: () -> Unit,
     onFileClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
@@ -149,6 +151,12 @@ fun HomeScreen(
 
         item { SectionHeading("Utilities") }
         item {
+            HomeRow(
+                icon = Icons.Outlined.StarOutline,
+                title = "Favourites",
+                onClick = onFavoritesClick,
+            )
+            InsetDivider()
             HomeRow(
                 icon = Icons.Outlined.Delete,
                 title = "Trash",

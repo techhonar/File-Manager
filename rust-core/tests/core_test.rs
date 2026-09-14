@@ -797,3 +797,21 @@ fn extracting_an_encrypted_archive_needs_the_right_password() {
     .unwrap();
     assert_eq!(fs::read_to_string(out.join("secret.txt")).unwrap(), "classified");
 }
+
+#[test]
+fn entries_for_skips_paths_that_have_gone() {
+    // Favourites and pinned items are remembered as paths, and the file behind
+    // one can be deleted by anything at any time. A stale entry should quietly
+    // disappear from the list rather than break it.
+    let tree = TempTree::new("entries-for");
+    let kept = tree.file("keep.txt", b"here");
+    let removed = tree.path().join("gone.txt");
+
+    let entries = filemanager_core::scanner::entries_for(vec![
+        kept.to_string_lossy().into_owned(),
+        removed.to_string_lossy().into_owned(),
+    ]);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "keep.txt");
+}

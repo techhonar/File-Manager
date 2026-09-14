@@ -231,7 +231,8 @@ fun SearchScreen(
                                 InlineResultActions(
                                     visible = expandedPath == entry.path &&
                                         !state.inSelectionMode,
-                                    onOpenWith = { onOpenWith(entry.path) },
+                                    onOpen = { onOpenFile(entry) },
+                                onOpenWith = { onOpenWith(entry.path) },
                                     onCopyPath = { onCopyPath(entry.path) },
                                     onShowInFolder = {
                                         expandedPath = null
@@ -278,6 +279,7 @@ fun SearchScreen(
                             )
                             InlineResultActions(
                                 visible = expandedPath == entry.path && !state.inSelectionMode,
+                                onOpen = { onOpenFile(entry) },
                                 onOpenWith = { onOpenWith(entry.path) },
                                 onCopyPath = { onCopyPath(entry.path) },
                                 onShowInFolder = {

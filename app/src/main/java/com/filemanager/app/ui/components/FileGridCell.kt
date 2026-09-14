@@ -51,7 +51,8 @@ fun FileGridCell(
     // the app's ImageLoader; without those this would draw nothing for them.
     val showsPreview = entry.category == FileCategory.IMAGE ||
         entry.category == FileCategory.VIDEO ||
-        entry.category == FileCategory.APK
+        entry.category == FileCategory.APK ||
+        entry.category == FileCategory.AUDIO
 
     Column(
         modifier = modifier

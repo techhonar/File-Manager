@@ -58,6 +58,8 @@ import com.filemanager.app.ui.screens.SearchScreen
 import com.filemanager.app.ui.screens.StorageScreen
 import com.filemanager.app.ui.screens.TrashScreen
 import com.filemanager.app.viewmodel.BrowserViewModel
+import com.filemanager.app.ui.screens.FavoritesScreen
+import com.filemanager.app.viewmodel.FavoritesViewModel
 import com.filemanager.app.viewmodel.HomeViewModel
 import com.filemanager.app.ui.components.ThemeDialog
 import com.filemanager.app.viewmodel.RecentViewModel
@@ -86,6 +88,7 @@ private object Routes {
     const val TRASH = "trash"
     const val RECENT = "recent"
     const val ABOUT = "about"
+    const val FAVORITES = "favorites"
 
     /** Paths contain slashes, so they must be encoded into the route. */
     fun browse(path: String): String =
@@ -118,7 +121,9 @@ fun FileManagerRoot(
         { path -> withContext(Dispatchers.IO) { MediaOwner.ownerAppLabel(context, path) } }
     }
     val factory = remember(volumes, ownerAppOf) {
-        ViewModelFactory(app.repository, app.clipboard, volumes, primaryPath, primaryPath, ownerAppOf)
+        ViewModelFactory(
+            app.repository, app.clipboard, app.paths, volumes, primaryPath, primaryPath, ownerAppOf,
+        )
     }
 
     val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry.path) }
@@ -230,6 +235,7 @@ fun FileManagerRoot(
                         onRecentClick = { navController.navigate(Routes.RECENT) },
                         onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
                         onTrashClick = { navController.navigate(Routes.TRASH) },
+                    onFavoritesClick = { navController.navigate(Routes.FAVORITES) },
                         onManageStorageClick = { navController.navigate(Routes.STORAGE) },
                         onFileClick = openFile,
                         modifier = Modifier.padding(padding),
@@ -256,13 +262,15 @@ fun FileManagerRoot(
                 val vm: BrowserViewModel = viewModel(
                     key = path,
                     factory = ViewModelFactory(
-                        app.repository, app.clipboard, volumes, primaryPath, path, ownerAppOf,
+                        app.repository, app.clipboard, app.paths, volumes, primaryPath, path,
+                        ownerAppOf,
                     ),
                 )
                 BrowserScreen(
                     viewModel = vm,
                     onOpenFile = openFile,
                     onShare = shareFiles,
+                    onOpenWith = openWith,
                     onNavigateBack = { navController.popBackStack() },
                 )
             }
@@ -307,7 +315,19 @@ fun FileManagerRoot(
                 StorageScreen(viewModel = vm, onOpenFile = openFile, onShare = shareFiles)
             }
 
-            composable(Routes.ABOUT) {
+            composable(Routes.FAVORITES) {
+            val vm: FavoritesViewModel = viewModel(factory = factory)
+            FavoritesScreen(
+                viewModel = vm,
+                onOpenFile = openFile,
+                onShowInFolder = { path ->
+                    navController.navigate(Routes.browse(path.substringBeforeLast('/')))
+                },
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.ABOUT) {
                 AboutScreen(onNavigateBack = { navController.popBackStack() })
             }
 
