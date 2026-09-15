@@ -87,6 +87,14 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default is "tools platform-tools". Google retired the
+          # "tools" package and removed it from the SDK repository, so
+          # sdkmanager now exits 1 on it and takes the whole action down with
+          # it - "Failed to find package 'tools'", then nothing else in the job
+          # runs. Nothing here ever used it: the build needs platforms and
+          # build-tools, which Gradle resolves itself.
+          packages: platform-tools
 
       # cargo-ndk needs ANDROID_NDK_HOME. Runners ship an NDK, but do not
       # rely on it being there - fall back to installing a pinned one.
