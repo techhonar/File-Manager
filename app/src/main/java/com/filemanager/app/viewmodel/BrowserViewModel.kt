@@ -514,11 +514,18 @@ class BrowserViewModel(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             runCatching { repository.compress(paths, destination, password) }
-                .onSuccess {
-                    _messages.value = if (password.isNullOrEmpty()) {
-                        "Compressed $it files"
-                    } else {
-                        "Compressed $it files, password protected"
+                .onSuccess { count ->
+                    // Read back rather than assume. Whether the archive really
+                    // came out encrypted is the one thing the user cannot
+                    // check without another tool, and an unprotected zip they
+                    // believe is protected is worse than a failure they can
+                    // see.
+                    _messages.value = when {
+                        password.isNullOrEmpty() -> "Compressed $count files"
+                        repository.archiveNeedsPassword(destination) ->
+                            "Compressed $count files, password protected"
+                        else ->
+                            "Compressed $count files, but the password was not applied"
                     }
                     clearSelection()
                     refresh()

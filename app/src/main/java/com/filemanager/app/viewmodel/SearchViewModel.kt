@@ -41,14 +41,13 @@ data class SearchState(
     /** Category results are often photos, so the layout matters here too. */
     val viewMode: ViewMode = ViewMode.LIST,
     /**
-     * Bumped whenever [results] is replaced wholesale rather than extended.
+     * Bumped whenever [results] is replaced rather than added to.
      *
-     * The screen watches this to put the list back at the top. A keyed
-     * LazyColumn holds its position by remembering which item was at the top
-     * and scrolling to wherever that item has moved to - so when the finished
-     * walk re-sorts everything by date, the file that happened to be first
-     * lands somewhere in the middle and the list jumps down to follow it. To
-     * the user, opening Videos scrolls itself to the bottom.
+     * The screen watches this to put the list back at the top. It is not
+     * enough on its own - a lazy list's scroll position is saved and restored
+     * across visits, so re-entering a category can land partway down a list
+     * that is still being filled - so the screen also holds the list at the
+     * top until the reader takes hold of it.
      */
     val resultsEpoch: Int = 0,
 ) {
@@ -101,9 +100,41 @@ class SearchViewModel(
      *  last walk was cancelled or hit the cap, in which case it is unusable. */
     private var cache: SearchCache? = null
 
-    /** Accumulates a running walk's results, which the cache is built from. */
+    /**
+     * A running walk's results, newest first. The cache is built from this.
+     *
+     * Held in order rather than sorted at the end so the list never re-orders
+     * under the reader. Call [mergeNewestFirst] to add to it, never `+=`.
+     */
     private val accumulated = mutableListOf<FileEntry>()
     private val accumulatedLock = Any()
+
+    /**
+     * Fold one batch into [accumulated], keeping it newest first.
+     *
+     * Caller must hold [accumulatedLock]; batches arrive on the walk's own
+     * threads.
+     */
+    private fun mergeNewestFirst(batch: List<FileEntry>): List<FileEntry> {
+        val incoming = batch.sortedByDescending { it.modifiedMs }
+        val merged = ArrayList<FileEntry>(accumulated.size + incoming.size)
+
+        var held = 0
+        var new = 0
+        while (held < accumulated.size && new < incoming.size) {
+            merged += if (accumulated[held].modifiedMs >= incoming[new].modifiedMs) {
+                accumulated[held++]
+            } else {
+                incoming[new++]
+            }
+        }
+        while (held < accumulated.size) merged += accumulated[held++]
+        while (new < incoming.size) merged += incoming[new++]
+
+        accumulated.clear()
+        accumulated.addAll(merged)
+        return merged
+    }
 
     /**
      * Every keystroke searches, as it should - but most keystrokes never
@@ -225,14 +256,23 @@ class SearchViewModel(
                 override fun onBatch(entries: List<FileEntry>) {
                     if (generation.get() != mine) return
 
-                    // Appended in arrival order, not re-sorted on every
-                    // batch: sorting the whole list each time is O(n log n)
-                    // per batch, and it makes rows the user is reading jump
-                    // around. New results simply arrive at the bottom, and
-                    // the list is ordered once the walk finishes.
+                    // Merged into date order as it arrives, so the newest file
+                    // found so far is always the top row.
+                    //
+                    // This used to append in walk order and sort the whole
+                    // list once at the end. That put an arbitrary file at the
+                    // top for the length of the scan and then reshuffled
+                    // everything underneath the reader - and because a keyed
+                    // lazy list holds its place by following whichever item
+                    // was on top, the view was dragged down to wherever that
+                    // item had moved to. Opening a category appeared to scroll
+                    // itself to the bottom.
+                    //
+                    // Merging two sorted lists costs a pass over what is
+                    // already held, which is what copying it for the UI cost
+                    // anyway.
                     val snapshot = synchronized(accumulatedLock) {
-                        accumulated += entries
-                        accumulated.toList()
+                        mergeNewestFirst(entries)
                     }
                     _state.update { it.copy(results = snapshot, hasSearched = true) }
                 }
@@ -242,18 +282,15 @@ class SearchViewModel(
                 override fun onFinished(matched: ULong, cancelled: Boolean) {
                     if (generation.get() != mine) return
 
-                    val ordered = synchronized(accumulatedLock) {
-                        accumulated.sortByDescending { it.modifiedMs }
-                        accumulated.toList()
-                    }
+                    // Nothing to re-order: every batch was merged into place,
+                    // so what is on screen is already the finished order. The
+                    // list simply stops growing.
+                    val ordered = synchronized(accumulatedLock) { accumulated.toList() }
                     _state.update {
                         it.copy(
                             results = ordered,
                             isSearching = false,
                             hasSearched = true,
-                            // The order just changed under the list, so
-                            // whatever it was anchored to has moved.
-                            resultsEpoch = it.resultsEpoch + 1,
                         )
                     }
 

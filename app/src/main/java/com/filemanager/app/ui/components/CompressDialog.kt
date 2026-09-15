@@ -1,6 +1,8 @@
 package com.filemanager.app.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -69,7 +71,10 @@ fun CompressDialog(
         shape = OneUi.CardShape,
         title = { Text("Compress") },
         text = {
-            Column {
+            // Scrollable because the content grows once the switch is on, and
+            // on a short screen with the keyboard up the confirm field would
+            // otherwise be clipped out of reach.
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = "Zip $itemCount items into \"$archiveName\"?",
                     style = MaterialTheme.typography.bodyMedium,

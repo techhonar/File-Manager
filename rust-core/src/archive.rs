@@ -22,6 +22,12 @@ pub struct ArchiveEntry {
 }
 
 /// List an archive's contents without extracting it.
+///
+/// Reads the index only, so an encrypted archive lists without a password -
+/// which is what the format allows, since a zip never encrypts its index. Done
+/// with the decrypting reader instead, listing a protected archive failed
+/// outright with "Password required to decrypt file", and the app had no way
+/// to show what was inside one it had just written.
 #[uniffi::export]
 pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
     let file = File::open(&archive_path)
@@ -30,7 +36,7 @@ pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
 
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
-        let entry = zip.by_index(i)?;
+        let entry = zip.by_index_raw(i)?;
         entries.push(ArchiveEntry {
             name: entry.name().to_string(),
             size: entry.size(),

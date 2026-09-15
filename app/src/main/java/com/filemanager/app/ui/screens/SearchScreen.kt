@@ -34,6 +34,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
@@ -108,12 +109,10 @@ fun SearchScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
 
-    // Whether the user has taken hold of the list since the last query. A
-    // keyed lazy list keeps its place by following whichever item was on top,
-    // so re-ordering the finished results drags the view down to wherever that
-    // item ended up - opening Videos would land the user in the middle of the
-    // list. Putting it back at the top is right unless they had already
-    // started scrolling, which is the one case where being moved is worse.
+    // Whether the reader has taken hold of the list since the last query.
+    // Everything below keeps the list showing its first row, and this is the
+    // one thing that stops it: once someone has scrolled somewhere on purpose,
+    // moving them is worse than anything it would be fixing.
     var userScrolled by remember { mutableStateOf(false) }
     LaunchedEffect(state.query, state.categories) { userScrolled = false }
     // Drags rather than isScrollInProgress, which is also true while the
@@ -125,14 +124,23 @@ fun SearchScreen(
             gridState.interactionSource.interactions,
         ).collect { if (it is DragInteraction.Start) userScrolled = true }
     }
-    LaunchedEffect(state.resultsEpoch) {
-        if (userScrolled) return@LaunchedEffect
-        // Both, because the layout can be switched while results are coming in
-        // and only one of them is on screen at a time.
-        runCatching {
-            listState.scrollToItem(0)
-            gridState.scrollToItem(0)
-        }
+    // Held at the top until the reader takes hold, rather than put back once
+    // per query. Scrolling once on a change was not enough: a lazy list saves
+    // its scroll position and restores it on the way back in, so re-opening a
+    // category resumed partway down a list that was still empty and stayed
+    // there as results filled in underneath. Re-asserting it on every change
+    // costs nothing when it is already at the top, which is the normal case.
+    LaunchedEffect(listState, gridState) {
+        snapshotFlow { Triple(state.resultsEpoch, state.results.size, state.viewMode) }
+            .collect {
+                if (userScrolled) return@collect
+                // Both, because the layout can be switched while results are
+                // coming in and only one of them is on screen at a time.
+                runCatching {
+                    listState.scrollToItem(0)
+                    gridState.scrollToItem(0)
+                }
+            }
     }
     // Which result has its actions unfolded. One at a time, so the list does
     // not turn into a column of expanded panels.
