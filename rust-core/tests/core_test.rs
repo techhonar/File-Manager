@@ -838,6 +838,14 @@ fn creates_an_archive_the_password_is_needed_to_read() {
     // archive we wrote has to answer the same way as one written elsewhere.
     assert!(archive_is_encrypted(locked.to_string_lossy().into_owned()).unwrap());
 
+    // And it can still be listed. A zip does not encrypt its index, so showing
+    // what is inside must not require the password.
+    let listed = archive_list(locked.to_string_lossy().into_owned()).unwrap();
+    assert!(
+        listed.iter().any(|e| e.name == "private/notes.txt"),
+        "listed {listed:?}",
+    );
+
     // Without the password there is nothing to read.
     let err = archive_extract(
         locked.to_string_lossy().into_owned(),
