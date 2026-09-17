@@ -24,6 +24,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Wifi
+import com.filemanager.app.data.remote.RemoteServer
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SdCard
@@ -76,6 +79,11 @@ fun HomeScreen(
     onFavoritesClick: () -> Unit,
     onManageStorageClick: () -> Unit,
     onFileClick: (FileEntry) -> Unit,
+    /** The saved network locations, shown between Storage and Utilities. */
+    remoteServers: List<RemoteServer>,
+    onRemoteServerClick: (RemoteServer) -> Unit,
+    onManageNetworkClick: () -> Unit,
+    onFtpServerClick: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
@@ -139,6 +147,34 @@ fun HomeScreen(
                     trailing = { StatusPill("Not inserted") },
                 )
             }
+        }
+
+        item { SectionHeading("Network") }
+        item {
+            // Each saved server first, then the two ways in. A server is what
+            // someone came here for; managing the list is the rarer thing.
+            remoteServers.forEach { server ->
+                HomeRow(
+                    icon = server.type.icon(),
+                    title = server.label,
+                    subtitle = server.summary,
+                    onClick = { onRemoteServerClick(server) },
+                )
+                InsetDivider()
+            }
+            HomeRow(
+                icon = Icons.Outlined.Storage,
+                title = if (remoteServers.isEmpty()) "Add network storage" else "Manage network storage",
+                subtitle = if (remoteServers.isEmpty()) "FTP, SFTP, SMB or WebDAV" else null,
+                onClick = onManageNetworkClick,
+            )
+            InsetDivider()
+            HomeRow(
+                icon = Icons.Outlined.Wifi,
+                title = "FTP server",
+                subtitle = "Share this phone's files over the network",
+                onClick = onFtpServerClick,
+            )
         }
 
         item { SectionHeading("Utilities") }
@@ -368,6 +404,9 @@ private fun HomeRow(
     title: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** A quiet second line. The network rows use it to show where a server
+     *  points, which the name alone rarely says. */
+    subtitle: String? = null,
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
@@ -392,14 +431,24 @@ private fun HomeRow(
             modifier = Modifier.size(26.dp),
         )
         Spacer(Modifier.width(24.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = tint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         if (trailing != null) {
             Spacer(Modifier.width(12.dp))
             trailing()

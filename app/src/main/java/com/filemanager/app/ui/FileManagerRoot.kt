@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Build
+import android.os.Environment
 import android.content.Intent
 import android.webkit.MimeTypeMap
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +42,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
+import com.filemanager.app.data.ftpd.FtpService
+import com.filemanager.app.data.remote.RemoteRepository
+import com.filemanager.app.ui.screens.FtpServerScreen
+import com.filemanager.app.ui.screens.RemoteBrowserScreen
+import com.filemanager.app.ui.screens.RemoteServersScreen
+import com.filemanager.app.viewmodel.FtpServerViewModel
+import com.filemanager.app.viewmodel.RemoteBrowserViewModel
+import com.filemanager.app.viewmodel.RemoteServersViewModel
 import androidx.compose.runtime.rememberCoroutineScope
 import com.filemanager.app.data.MediaOwner
 import kotlinx.coroutines.Dispatchers
@@ -89,6 +98,12 @@ private object Routes {
     const val RECENT = "recent"
     const val ABOUT = "about"
     const val FAVORITES = "favorites"
+    const val NETWORK = "network"
+    const val FTP_SERVER = "ftpserver"
+    const val REMOTE_PATTERN = "remote/{serverId}"
+
+    /** Ids are UUIDs, so they need no encoding. */
+    fun remote(serverId: String): String = "remote/$serverId"
 
     /** Paths contain slashes, so they must be encoded into the route. */
     fun browse(path: String, highlight: String? = null): String {
@@ -134,7 +149,25 @@ fun FileManagerRoot(
     // Named arguments throughout: this now takes eight parameters, several of
     // them adjacent strings, and a positional call would be one transposition
     // away from wiring the wrong folder to the wrong screen.
-    val factory = remember(volumes, ownerAppOf, hasRemovableSlot) {
+    // Where Download in the remote browser puts things. The public Downloads
+    // folder rather than somewhere app-private, so what comes off a server is
+    // reachable from every other app on the phone.
+    val downloadDirectory = remember {
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            .apply { mkdirs() }
+    }
+
+    // Watched rather than read once: adding a server from the Network screen
+    // has to show up on the home screen behind it.
+    val remoteServers by app.remoteServers.servers.collectAsState()
+
+    // One per process, not per screen: it holds the connection pool, and a
+    // second instance would open its own sockets to the same servers.
+    val remoteRepository = remember(context) {
+        RemoteRepository(app.remoteConnections, context.cacheDir)
+    }
+
+    val factory = remember(volumes, ownerAppOf, hasRemovableSlot, remoteRepository) {
         ViewModelFactory(
             repository = app.repository,
             clipboard = app.clipboard,
@@ -144,6 +177,12 @@ fun FileManagerRoot(
             primaryPath = primaryPath,
             ownerAppOf = ownerAppOf,
             hasRemovableSlot = hasRemovableSlot,
+            remoteServers = app.remoteServers,
+            remoteRepository = remoteRepository,
+            ftpSettings = app.ftpSettings,
+            ftpController = app.ftpServer,
+            startFtpService = { FtpService.start(context) },
+            stopFtpService = { FtpService.stop(context) },
         )
     }
 
@@ -259,6 +298,12 @@ fun FileManagerRoot(
                     onFavoritesClick = { navController.navigate(Routes.FAVORITES) },
                         onManageStorageClick = { navController.navigate(Routes.STORAGE) },
                         onFileClick = openFile,
+                        remoteServers = remoteServers,
+                        onRemoteServerClick = { server ->
+                            navController.navigate(Routes.remote(server.id))
+                        },
+                        onManageNetworkClick = { navController.navigate(Routes.NETWORK) },
+                        onFtpServerClick = { navController.navigate(Routes.FTP_SERVER) },
                         modifier = Modifier.padding(padding),
                     )
                 }
@@ -370,6 +415,55 @@ fun FileManagerRoot(
                 onNavigateBack = { navController.popBackStack() },
             )
         }
+
+            composable(Routes.NETWORK) {
+                val vm: RemoteServersViewModel = viewModel(factory = factory)
+                RemoteServersScreen(
+                    viewModel = vm,
+                    onOpenServer = { server -> navController.navigate(Routes.remote(server.id)) },
+                    onNavigateBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(Routes.FTP_SERVER) {
+                val vm: FtpServerViewModel = viewModel(factory = factory)
+                FtpServerScreen(
+                    viewModel = vm,
+                    onNavigateBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(Routes.REMOTE_PATTERN) { entry ->
+                val serverId = entry.arguments?.getString("serverId").orEmpty()
+                val server = app.remoteServers.byId(serverId)
+
+                if (server == null) {
+                    // Deleted while its screen was still on the back stack.
+                    LaunchedEffect(serverId) { navController.popBackStack() }
+                } else {
+                    // Keyed by id so each server gets its own ViewModel rather
+                    // than reusing the previous one's folder and selection.
+                    val vm: RemoteBrowserViewModel = viewModel(
+                        key = serverId,
+                        factory = ViewModelFactory(
+                            repository = app.repository,
+                            clipboard = app.clipboard,
+                            paths = app.paths,
+                            settings = app.settings,
+                            volumes = volumes,
+                            primaryPath = primaryPath,
+                            remoteRepository = remoteRepository,
+                            remoteServer = server,
+                        ),
+                    )
+                    RemoteBrowserScreen(
+                        viewModel = vm,
+                        onOpenDownloaded = { file -> openWithExternalApp(context, file.absolutePath) },
+                        downloadDirectory = downloadDirectory,
+                        onNavigateBack = { navController.popBackStack() },
+                    )
+                }
+            }
 
         composable(Routes.ABOUT) {
                 AboutScreen(onNavigateBack = { navController.popBackStack() })

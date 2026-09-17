@@ -210,6 +210,20 @@ jobs:
           KEY_PASSWORD: ${{ steps.keystore.outputs.kind == 'release' && secrets.KEY_PASSWORD || 'throwaway' }}
         run: gradle assembleRelease --no-daemon --stacktrace
 
+      # The protocol clients and the built-in server, tested against each
+      # other. They are plain JVM tests - no device, no emulator - and they run
+      # before the APK is published rather than after someone installs it.
+      - name: Run the unit tests
+        run: gradle testReleaseUnitTest --no-daemon --stacktrace
+
+      - name: Keep the test report when they fail
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/
+          retention-days: 7
+
       # Runs even when the build fails, so a bindings problem is visible in
       # the log instead of having to be inferred from Kotlin errors.
       - name: Show generated Rust output
