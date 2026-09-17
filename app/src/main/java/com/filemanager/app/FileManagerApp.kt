@@ -12,6 +12,10 @@ import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.ftpd.FtpServerController
+import com.filemanager.app.data.ftpd.FtpServerSettings
+import com.filemanager.app.data.remote.RemoteConnections
+import com.filemanager.app.data.remote.RemoteServers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,6 +40,27 @@ class FileManagerApp : Application(), ImageLoaderFactory {
 
     /** Favourites and pinned paths, shared by every screen that shows files. */
     val paths: PathPrefs by lazy { PathPrefs(this) }
+
+    /** Saved network locations, and the live connections to them. */
+    val remoteServers: RemoteServers by lazy { RemoteServers(this) }
+
+    /**
+     * Process-wide, because a connection is worth reusing across screens and
+     * costs a handshake to open. Closed when the process goes, which is the
+     * only lifecycle a socket pool can sensibly follow here.
+     */
+    val remoteConnections: RemoteConnections by lazy { RemoteConnections() }
+
+    /**
+     * The built-in FTP server and its settings.
+     *
+     * Held here rather than inside the service so the settings screen can read
+     * the running state without binding to it, and so stopping the service
+     * cannot leave a server running that nothing has a handle on.
+     */
+    val ftpServer: FtpServerController by lazy { FtpServerController() }
+
+    val ftpSettings: FtpServerSettings by lazy { FtpServerSettings(this) }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

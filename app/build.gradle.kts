@@ -95,6 +95,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests {
+            // The network code under test touches no Android APIs, but a class
+            // it shares a file with might - and an unstubbed framework call
+            // throws "Stub!" rather than doing nothing.
+            isReturnDefaultValues = true
+        }
+    }
+
     lint {
         // An API used above minSdk compiles fine and crashes at runtime, or -
         // as happened here - quietly narrows which phones can install at all.
@@ -123,6 +132,14 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // BouncyCastle, MINA and FtpServer each ship their own copy of these,
+        // and two files with the same path inside an APK is a packaging error
+        // rather than something the build can pick between.
+        resources.excludes += "/META-INF/{DEPENDENCIES,LICENSE,LICENSE.txt,NOTICE,NOTICE.txt}"
+        resources.excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        // Signature files from the signed jars. Left in, they would be checked
+        // against the repackaged classes and fail.
+        resources.excludes += "/META-INF/*.{SF,DSA,RSA}"
         // JNA ships .so files for every platform; keep only ours.
         jniLibs.useLegacyPackaging = false
     }
@@ -152,6 +169,14 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.documentfile)
+
+    // Network storage and the FTP server. Plain Java, no native code.
+    implementation(libs.commons.net)
+    implementation(libs.sshj)
+    implementation(libs.smbj)
+    implementation(libs.ftpserver.core)
+    implementation(libs.ftplet.api)
+    implementation(libs.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
     implementation(libs.jna) { artifact { type = "aar" } }

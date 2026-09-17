@@ -14,15 +14,34 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!--
-      Nothing else is declared on purpose.
+      Network storage talks to FTP, SFTP, SMB and WebDAV servers, and the
+      built-in server listens for them - both need a socket.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
-      READ_MEDIA_IMAGES / VIDEO / AUDIO were here as a fallback for when
-      all-files access is declined, but no such fallback was ever built - the
-      app gates every screen on MANAGE_EXTERNAL_STORAGE and never requests
-      them. FOREGROUND_SERVICE, FOREGROUND_SERVICE_DATA_SYNC and
-      POST_NOTIFICATIONS were declared for long copy/move jobs that would
-      survive the screen going off, but there is no Service and nothing posts
-      a notification.
+    <!--
+      The FTP server keeps running while the app is in the background, which is
+      the whole point of it: the phone sits on the desk serving files while the
+      user works on the laptop. Android only allows that for a foreground
+      service, and only one whose type is declared. DATA_SYNC is the documented
+      category for transferring files, and is required from API 34.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!--
+      A foreground service must show a notification, and from API 33 posting one
+      needs the user's agreement. Declined, the server still runs - Android
+      keeps the service alive either way - but nothing appears in the shade to
+      say so or to stop it.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      READ_MEDIA_IMAGES / VIDEO / AUDIO are still deliberately absent. They were
+      here as a fallback for when all-files access is declined, but no such
+      fallback was ever built - the app gates every screen on
+      MANAGE_EXTERNAL_STORAGE and never requests them.
 
       Asking for permissions the code never uses is worth avoiding on its own,
       and these are exactly the sensitive ones that draw extra scrutiny from
@@ -55,6 +74,17 @@
           Lets us hand a file to another app (share, open-with) without
           exposing a file:// URI, which Android has banned since Nougat.
         -->
+        <!--
+          Not exported: nothing outside the app may start the server. It is
+          started from its own screen and stopped from its notification, and an
+          exported service would let any app on the device open the user's
+          storage to the network.
+        -->
+        <service
+            android:name=".data.ftpd.FtpService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

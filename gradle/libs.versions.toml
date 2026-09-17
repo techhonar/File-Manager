@@ -11,6 +11,14 @@ navigation = "2.8.5"
 coil = "2.7.0"
 documentfile = "1.0.1"
 jna = "5.15.0"
+# Network storage. All four are plain Java with no native code, which is the
+# reason for choosing them: anything with a .so would need cross-compiling for
+# every ABI and could not be checked without a device.
+commonsNet = "3.11.1"
+sshj = "0.38.0"
+smbj = "0.14.0"
+ftpserver = "1.2.1"
+okhttp = "4.12.0"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
@@ -36,6 +44,20 @@ coil-video = { group = "io.coil-kt", name = "coil-video", version.ref = "coil" }
 # UniFFI's Kotlin bindings call into the .so through JNA, so this is required
 # by the generated code -- the @aar variant is the one that works on Android.
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+# FTP, and FTPS, for network storage.
+commons-net = { group = "commons-net", name = "commons-net", version.ref = "commonsNet" }
+# SFTP - file transfer over SSH, not FTP with TLS.
+sshj = { group = "com.hierynomus", name = "sshj", version.ref = "sshj" }
+# SMB2/SMB3, for Windows shares and most NAS boxes. SMB1 is not supported by
+# this library and is not wanted.
+smbj = { group = "com.hierynomus", name = "smbj", version.ref = "smbj" }
+# The built-in FTP server. ftplet-api carries the interfaces it is configured
+# through, and is a separate artifact from the server itself.
+ftpserver-core = { group = "org.apache.ftpserver", name = "ftpserver-core", version.ref = "ftpserver" }
+ftplet-api = { group = "org.apache.ftpserver", name = "ftplet-api", version.ref = "ftpserver" }
+# WebDAV is spoken directly over HTTP rather than through a WebDAV library.
+# Coil already pulls this in; declared explicitly because code here calls it.
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
