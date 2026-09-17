@@ -38,11 +38,19 @@
 -dontwarn org.apache.mina.**
 
 # smbj dispatches its internal events through mbassador, which finds handlers
-# by reflecting over annotated methods.
--keep class net.engio.mbassador.** { *; }
+# by reflecting over annotated methods. The artifact is net.engio:mbassador but
+# the package inside it is net.engio.mbassy -- a rule naming the artifact
+# matches nothing and silently protects none of it.
+-keep class net.engio.mbassy.** { *; }
 -keepclassmembers class * {
-    @net.engio.mbassador.listener.Handler *;
+    @net.engio.mbassy.listener.Handler *;
 }
+
+# mbassador can filter messages with Java EL expressions. Android has no EL
+# implementation, and nothing here uses filtered handlers, but the classes that
+# would call it are still reachable. Without this R8 stops with "Missing class
+# javax.el.BeanELResolver" and no APK is produced.
+-dontwarn javax.el.**
 
 # SLF4J finds its provider through ServiceLoader. Without a provider on the
 # classpath it falls back to doing nothing, which is what we want -- but the
@@ -59,5 +67,10 @@
 # Likewise for the optional pieces the network libraries reach for on a desktop
 # JVM: JCE providers we do not ship, and a JMX bean MINA registers when it can.
 -dontwarn javax.management.**
+
+# sshj can authenticate with Kerberos through JAAS. LoginContext is in the JDK
+# but not on Android, and this app only ever authenticates with a password.
+-dontwarn javax.security.auth.login.**
+-dontwarn javax.security.sasl.**
 -dontwarn org.bouncycastle.jce.provider.**
 -dontwarn net.i2p.crypto.eddsa.**
