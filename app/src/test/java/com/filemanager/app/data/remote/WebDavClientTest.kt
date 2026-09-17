@@ -1,7 +1,10 @@
 package com.filemanager.app.data.remote
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,8 +12,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.file.Files
@@ -33,7 +34,7 @@ import java.util.Locale
 class WebDavClientTest {
 
     private lateinit var root: File
-    private lateinit var http: HttpServer
+    private lateinit var http: MockWebServer
     private var port = 0
 
     private val credential = "Basic " + Base64.getEncoder()
@@ -42,15 +43,17 @@ class WebDavClientTest {
     @Before
     fun setUp() {
         root = Files.createTempDirectory("dav-test").toFile()
-        port = ServerSocket(0).use { it.localPort }
-        http = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
-        http.createContext("/") { handle(it) }
+        http = MockWebServer()
+        http.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = handle(request)
+        }
         http.start()
+        port = http.port
     }
 
     @After
     fun tearDown() {
-        http.stop(0)
+        http.shutdown()
         root.deleteRecursively()
     }
 
@@ -154,54 +157,68 @@ class WebDavClientTest {
     private fun local(rawPath: String): File =
         File(root, URLDecoder.decode(rawPath, "UTF-8").trimStart('/'))
 
-    private fun handle(exchange: HttpExchange) {
-        // Always read: a body left in the socket becomes the next request line
-        // on a keep-alive connection, and everything after it answers 400.
-        val body = exchange.requestBody.readBytes()
-
-        if (exchange.requestHeaders.getFirst("Authorization") != credential) {
-            exchange.responseHeaders.add("WWW-Authenticate", "Basic realm=\"test\"")
-            return send(exchange, 401, ByteArray(0))
+    private fun handle(request: RecordedRequest): MockResponse {
+        if (request.getHeader("Authorization") != credential) {
+            return MockResponse()
+                .setResponseCode(401)
+                .addHeader("WWW-Authenticate", "Basic realm=\"test\"")
         }
 
-        val target = local(exchange.requestURI.rawPath)
-        when (exchange.requestMethod) {
+        val target = local(request.path.orEmpty().substringBefore('?'))
+        return when (request.method) {
             "PROPFIND" ->
-                if (target.exists()) send(exchange, 207, propfind(target).toByteArray())
-                else send(exchange, 404, ByteArray(0))
+                if (target.exists()) {
+                    MockResponse()
+                        .setResponseCode(207)
+                        .addHeader("Content-Type", "application/xml; charset=utf-8")
+                        .setBody(propfind(target))
+                } else {
+                    MockResponse().setResponseCode(404)
+                }
 
             "GET" ->
-                if (target.isFile) send(exchange, 200, target.readBytes())
-                else send(exchange, 404, ByteArray(0))
+                if (target.isFile) {
+                    MockResponse()
+                        .setResponseCode(200)
+                        .setBody(Buffer().write(target.readBytes()))
+                } else {
+                    MockResponse().setResponseCode(404)
+                }
 
             "PUT" -> {
                 target.parentFile?.mkdirs()
-                target.writeBytes(body)
-                send(exchange, 201, ByteArray(0))
+                target.writeBytes(request.body.readByteArray())
+                MockResponse().setResponseCode(201)
             }
 
             "DELETE" -> {
-                if (!target.exists()) return send(exchange, 404, ByteArray(0))
-                if (target.isDirectory) target.deleteRecursively() else target.delete()
-                send(exchange, 204, ByteArray(0))
+                if (!target.exists()) {
+                    MockResponse().setResponseCode(404)
+                } else {
+                    if (target.isDirectory) target.deleteRecursively() else target.delete()
+                    MockResponse().setResponseCode(204)
+                }
             }
 
             "MKCOL" ->
                 if (target.exists()) {
-                    send(exchange, 405, ByteArray(0))
+                    MockResponse().setResponseCode(405)
                 } else {
                     target.mkdirs()
-                    send(exchange, 201, ByteArray(0))
+                    MockResponse().setResponseCode(201)
                 }
 
             "MOVE" -> {
-                val destination = exchange.requestHeaders.getFirst("Destination")
-                    ?: return send(exchange, 400, ByteArray(0))
-                target.renameTo(local(URI(destination).rawPath))
-                send(exchange, 201, ByteArray(0))
+                val destination = request.getHeader("Destination")
+                if (destination == null) {
+                    MockResponse().setResponseCode(400)
+                } else {
+                    target.renameTo(local(URI(destination).rawPath))
+                    MockResponse().setResponseCode(201)
+                }
             }
 
-            else -> send(exchange, 405, ByteArray(0))
+            else -> MockResponse().setResponseCode(405)
         }
     }
 
@@ -234,16 +251,5 @@ class WebDavClientTest {
             }
             append("</D:multistatus>")
         }
-    }
-
-    private fun send(exchange: HttpExchange, code: Int, body: ByteArray) {
-        if (body.isEmpty()) {
-            exchange.sendResponseHeaders(code, -1)
-        } else {
-            exchange.responseHeaders.add("Content-Type", "application/xml; charset=utf-8")
-            exchange.sendResponseHeaders(code, body.size.toLong())
-            exchange.responseBody.use { it.write(body) }
-        }
-        exchange.close()
     }
 }
