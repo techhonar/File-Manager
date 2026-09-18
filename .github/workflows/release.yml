@@ -383,13 +383,12 @@ jobs:
 
           # --- What changed -------------------------------------------------
           #
-          # Written from the commits rather than asked of GitHub. gh can
-          # generate notes itself, but it lists pull requests, and everything
-          # here is merged locally and pushed - so it would have nothing to
-          # say. The commit subjects are written to be read, which makes them
-          # the better source anyway.
+          # Built by tools/release_notes.py, which groups the commits by the
+          # branch each was merged from and quotes the reasoning out of their
+          # messages. It is a script in the repository rather than shell here
+          # so that it can be run and read on its own.
           #
-          # No pipelines below: this runs under pipefail, where `git log | head`
+          # No pipelines: this runs under pipefail, where `git tag | head`
           # fails the whole step when head closes the pipe early.
           PREVIOUS=""
           for candidate in $(git tag --sort=-v:refname --list 'v*'); do
@@ -398,37 +397,10 @@ jobs:
               break
             fi
           done
+          echo "Previous release: ${PREVIOUS:-none}"
 
-          if [ -n "$PREVIOUS" ]; then
-            RANGE="$PREVIOUS..HEAD"
-          else
-            RANGE="HEAD"
-          fi
-
-          COUNT=$(git rev-list --no-merges --count "$RANGE") || COUNT=0
-          echo "$COUNT commits in $RANGE"
-
-          {
-            echo "## What changed"
-            echo ""
-            if [ "$COUNT" -eq 0 ]; then
-              echo "Nothing since \`$PREVIOUS\` - this build is the same code."
-            else
-              git log --no-merges --max-count=40 --pretty=format:'- %s' "$RANGE"
-              echo ""
-              if [ "$COUNT" -gt 40 ]; then
-                echo ""
-                echo "_...and $((COUNT - 40)) more._"
-              fi
-            fi
-            echo ""
-            if [ -n "$PREVIOUS" ]; then
-              echo "**Full changelog:** $SERVER/$REPO/compare/$PREVIOUS...$TAG"
-              echo ""
-            fi
-            echo "---"
-            echo ""
-          } > release-notes.md
+          python3 tools/release_notes.py \
+            "$PREVIOUS" "$TAG" "$SERVER" "$REPO" > release-notes.md
 
           cat >> release-notes.md <<NOTES
           **SHA-256:** \`$SHA256\`
