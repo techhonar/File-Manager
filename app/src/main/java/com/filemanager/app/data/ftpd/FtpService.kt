@@ -9,10 +9,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Environment
 import android.os.IBinder
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.MainActivity
 import com.filemanager.app.R
+import java.io.File
 
 /**
  * Keeps the FTP server alive while the app is in the background.
@@ -88,7 +90,7 @@ class FtpService : Service() {
 
         val address = NetworkAddress.localIpv4()
         val notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Sharing files over FTP")
+            .setContentTitle("Sharing ${sharedLabel(config)} over FTP")
             .setContentText(
                 if (address != null) {
                     "ftp://$address:${config.port}"
@@ -111,6 +113,19 @@ class FtpService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    /**
+     * What is being shared, in the notification's title.
+     *
+     * The folder name alone, except at the top of internal storage where that
+     * name is "0" - which is the real directory but means nothing to anyone
+     * reading a notification.
+     */
+    private fun sharedLabel(config: FtpServerConfig): String {
+        val external = Environment.getExternalStorageDirectory()?.absolutePath
+        if (config.rootPath == external) return "internal storage"
+        return File(config.rootPath).name.ifEmpty { config.rootPath }
     }
 
     private fun createChannel() {

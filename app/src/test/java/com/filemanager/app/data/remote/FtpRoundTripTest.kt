@@ -40,7 +40,11 @@ class FtpRoundTripTest {
     /** A port nothing is on, rather than a fixed one that CI might be using. */
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
-    private fun start(readOnly: Boolean = false, anonymous: Boolean = false): Int {
+    private fun start(
+        readOnly: Boolean = false,
+        anonymous: Boolean = false,
+        rootPath: String = root.absolutePath,
+    ): Int {
         val port = freePort()
         controller.start(
             FtpServerConfig(
@@ -49,7 +53,7 @@ class FtpRoundTripTest {
                 password = "s3cret",
                 anonymous = anonymous,
                 readOnly = readOnly,
-                rootPath = root.absolutePath,
+                rootPath = rootPath,
             ),
         )
         return port
@@ -164,6 +168,45 @@ class FtpRoundTripTest {
         controller.stop()
         assertFalse(controller.isRunning)
         assertEquals(null, controller.running.value)
+    }
+
+    @Test
+    fun `serves only the folder it was pointed at`() {
+        File(root, "photos").mkdirs()
+        File(root, "photos/holiday.jpg").writeText("a photo")
+        File(root, "private.txt").writeText("not for sharing")
+
+        // The whole point of choosing a folder: sharing the camera roll must
+        // not also share everything beside it.
+        val port = start(rootPath = File(root, "photos").absolutePath)
+
+        client(port).use { ftp ->
+            assertEquals(listOf("holiday.jpg"), ftp.list("/").map { it.name })
+
+            // One level up is outside the share. The server roots the session
+            // there, so this name simply does not exist as far as it is
+            // concerned - which is what bounds it.
+            assertThrows {
+                ftp.download("/private.txt", File(root.parentFile, "leak-${System.nanoTime()}"))
+            }
+        }
+        assertEquals("not for sharing", File(root, "private.txt").readText())
+    }
+
+    @Test
+    fun `a folder that has gone is refused before the server starts`() {
+        val missing = File(root, "not-here").absolutePath
+        val config = FtpServerConfig(
+            port = freePort(),
+            username = "tester",
+            password = "s3cret",
+            rootPath = missing,
+        )
+        assertEquals("\"$missing\" is not a folder any more", config.validate())
+
+        // And starting with it fails rather than coming up serving nothing.
+        assertThrows { controller.start(config) }
+        assertFalse(controller.isRunning)
     }
 
     private fun assertThrows(body: () -> Unit) {

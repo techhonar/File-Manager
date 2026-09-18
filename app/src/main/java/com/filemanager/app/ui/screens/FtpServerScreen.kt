@@ -6,6 +6,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.text.style.TextOverflow
+import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.ui.components.FolderPickerDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -61,6 +67,8 @@ import com.filemanager.app.viewmodel.FtpServerViewModel
 @Composable
 fun FtpServerScreen(
     viewModel: FtpServerViewModel,
+    /** Offered as shortcuts in the folder picker. */
+    volumes: List<StorageVolume>,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -130,7 +138,6 @@ fun FtpServerScreen(
                     Text("1024 or above. Lower ports need root, which an app does not have.")
                 },
                 singleLine = true,
-                enabled = !state.isRunning,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Next,
@@ -145,7 +152,6 @@ fun FtpServerScreen(
                 onCheckedChange = { viewModel.updateDraft(state.draft.copy(anonymous = it)) },
                 title = "Allow anonymous",
                 subtitle = "Anyone on the network can connect without a password",
-                enabled = !state.isRunning,
             )
 
             if (!state.draft.anonymous) {
@@ -155,8 +161,7 @@ fun FtpServerScreen(
                     onValueChange = { viewModel.updateDraft(state.draft.copy(username = it.trim())) },
                     label = { Text("User name") },
                     singleLine = true,
-                    enabled = !state.isRunning,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -165,8 +170,7 @@ fun FtpServerScreen(
                     onValueChange = { viewModel.updateDraft(state.draft.copy(password = it)) },
                     label = { Text("Password") },
                     singleLine = true,
-                    enabled = !state.isRunning,
-                    visualTransformation = PasswordVisualTransformation(),
+                        visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -179,18 +183,46 @@ fun FtpServerScreen(
                 onCheckedChange = { viewModel.updateDraft(state.draft.copy(readOnly = it)) },
                 title = "Read only",
                 subtitle = "Clients can download but not upload, delete or rename",
-                enabled = !state.isRunning,
             )
 
             Spacer(Modifier.height(20.dp))
 
-            Text(
-                text = "Serving ${state.draft.rootPath}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // A row rather than a line of text: which folder is shared is the
+            // most consequential setting here, and until now it was the one
+            // thing that could not be changed.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.openFolderPicker() }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Folder,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Shared folder", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = state.draft.rootPath,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Change",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(12.dp))
 
             Text(
                 text = "FTP sends the password and the files themselves without " +
@@ -237,6 +269,17 @@ fun FtpServerScreen(
 
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    state.picker?.let { picker ->
+        FolderPickerDialog(
+            state = picker,
+            volumes = volumes,
+            onOpen = viewModel::pickerOpen,
+            onUp = viewModel::pickerUp,
+            onConfirm = viewModel::pickerConfirm,
+            onDismiss = viewModel::pickerCancel,
+        )
     }
 }
 
@@ -312,7 +355,7 @@ private fun SettingSwitch(
     onCheckedChange: (Boolean) -> Unit,
     title: String,
     subtitle: String,
-    enabled: Boolean,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),

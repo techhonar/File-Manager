@@ -5,6 +5,7 @@ import android.os.Environment
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 
 /**
  * How the built-in server is set up.
@@ -21,13 +22,25 @@ data class FtpServerConfig(
     /** Refuse uploads, deletes and renames. On by default: handing the whole
      *  of shared storage to anything on the network is the bigger surprise. */
     val readOnly: Boolean = true,
-    /** What the server shows as its root. */
+    /**
+     * What the server shows as its root. Clients see this as "/".
+     *
+     * Chosen by the user, so it can be a single folder rather than the whole
+     * of storage - which is the difference between sharing the camera roll and
+     * sharing everything on the phone.
+     */
     val rootPath: String = Environment.getExternalStorageDirectory().absolutePath,
 ) {
     fun validate(): String? = when {
         port !in 1024..65535 -> "Port must be between 1024 and 65535"
         !anonymous && username.isBlank() -> "Enter a user name, or allow anonymous access"
         !anonymous && password.isBlank() -> "Enter a password, or allow anonymous access"
+        // Checked here rather than left to the server, which reports a missing
+        // home directory as a failed login long after the folder was chosen -
+        // by which time a card could have been removed, or the folder deleted
+        // from the browser.
+        rootPath.isBlank() -> "Choose a folder to share"
+        !File(rootPath).isDirectory -> "\"$rootPath\" is not a folder any more"
         else -> null
     }
 

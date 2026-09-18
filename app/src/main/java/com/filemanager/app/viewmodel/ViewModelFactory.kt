@@ -87,6 +87,8 @@ class ViewModelFactory(
             FtpServerViewModel(
                 settings = requireNotNull(ftpSettings) { "ftpSettings not supplied" },
                 controller = requireNotNull(ftpController) { "ftpController not supplied" },
+                repository = repository,
+                volumes = volumes,
                 startService = startFtpService,
                 stopService = stopFtpService,
             ) as T
