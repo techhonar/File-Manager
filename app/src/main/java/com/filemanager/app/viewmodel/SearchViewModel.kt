@@ -231,6 +231,24 @@ class SearchViewModel(
             return
         }
 
+        // What the session holds is about to be replaced, so it can no longer
+        // answer for the query it was collected under. Without this, deleting
+        // a letter to start a new walk and then retyping it would narrow
+        // against that walk's half-finished results and show a fraction of
+        // the matches as though they were all of them.
+        searchedFor = null
+
+        // Marked as searching now, not after the debounce below. Opening a
+        // category from the home screen goes straight here with nothing to
+        // show, and for those first two hundred milliseconds the screen said
+        // "Search by name, or pick a category" - which is what it says when
+        // nothing is happening at all.
+        //
+        // The results are deliberately left alone until the walk actually
+        // starts: while someone is still typing, the previous list is better
+        // than an empty one.
+        _state.update { it.copy(isSearching = true) }
+
         val mine = generation.incrementAndGet()
 
         searchJob = viewModelScope.launch {
