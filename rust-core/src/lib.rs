@@ -15,6 +15,7 @@ pub mod dedup;
 pub mod errors;
 pub mod scanner;
 pub mod search;
+pub mod session;
 pub mod storage;
 pub mod trash;
 pub mod types;

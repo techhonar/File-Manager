@@ -13,7 +13,9 @@ import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.FilesystemStats
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.SearchFilter
-import uniffi.filemanager_core.SearchSink
+import uniffi.filemanager_core.SearchObserver
+import uniffi.filemanager_core.SearchPage
+import uniffi.filemanager_core.SearchSession
 import uniffi.filemanager_core.SortKey
 import uniffi.filemanager_core.SortOptions
 import uniffi.filemanager_core.StorageAnalysis
@@ -275,24 +277,27 @@ class FileRepository(
      * The sink is called from Rust worker threads, not the caller's - whatever
      * it touches has to be safe for that.
      */
-    suspend fun searchStreaming(
+    /**
+     * A search that keeps its results in Rust.
+     *
+     * One per search screen, cleared when it closes. See SearchSession: what
+     * crosses the boundary is a page of a few hundred, not everything the walk
+     * found, and nothing here has to merge or re-sort what arrives.
+     */
+    fun newSearchSession(): SearchSession = SearchSession()
+
+    suspend fun runSearch(
+        session: SearchSession,
         roots: List<String>,
         filter: SearchFilter,
-        sink: SearchSink,
+        pageSize: UInt,
+        observer: SearchObserver,
         cancel: CancelToken? = null,
-    ) = withContext(io) {
-        // Fully qualified for the same reason as `search` above: this member
-        // and the generated binding share a name, a member always wins over a
-        // top-level function, and the unqualified call would therefore invoke
-        // itself and recurse until the stack blows - compiling perfectly
-        // cleanly on the way.
-        uniffi.filemanager_core.searchStreaming(roots, filter, sink, cancel)
-    }
+    ) = withContext(io) { session.run(roots, filter, pageSize, observer, cancel) }
 
-    // --- Storage analysis ----------------------------------------------------
-
-    suspend fun summary(root: String, cancel: CancelToken? = null): StorageSummary =
-        withContext(io) { storageSummary(root, cancel) }
+    /** Filter what the last search found. No disk, so no cancellation. */
+    suspend fun narrowSearch(session: SearchSession, query: String, pageSize: UInt): SearchPage =
+        withContext(io) { session.narrow(query, pageSize) }
 
     /**
      * The category breakdown and the biggest files, from a single walk.

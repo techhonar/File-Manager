@@ -114,7 +114,7 @@ impl Compiled {
 /// `needle` must already be lowercase. The ASCII path covers almost every file
 /// name; anything else falls back to the allocating comparison, which is what
 /// this replaced and is still correct for names in other scripts.
-fn contains_ignoring_case(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ignoring_case(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
@@ -225,9 +225,6 @@ const FLUSH_AFTER: Duration = Duration::from_millis(120);
 /// be wasted work on a tree of millions.
 const CLOCK_CHECK_INTERVAL: u64 = 64;
 
-/// How often to report files examined, in files.
-const SCAN_REPORT_INTERVAL: u64 = 512;
-
 /// Receives results while the walk is still running.
 ///
 /// The plain [`search`] collects everything, sorts it and returns once, so the
@@ -251,7 +248,111 @@ pub trait SearchSink: Send + Sync {
     fn on_finished(&self, matched: u64, cancelled: bool);
 }
 
+/// Walk `roots` and hand every matching file to `on_batch`, in walk order.
+///
+/// The shared engine behind both the streaming search and [`SearchSession`].
+/// `on_batch` is called from several rayon threads at once and must cope with
+/// that; batches are whatever a thread has gathered when it flushes.
+pub(crate) fn walk_matching<F>(
+    roots: &[String],
+    filter: &SearchFilter,
+    cancel: Option<Arc<CancelToken>>,
+    on_batch: F,
+) -> Result<()>
+where
+    F: Fn(Vec<FileEntry>) + Sync + Send,
+{
+    // Compiled once here, not once per file. See Compiled.
+    let compiled = Compiled::new(filter);
+    let limit = if filter.limit == 0 { u64::MAX } else { filter.limit as u64 };
+    let matched = AtomicU64::new(0);
+    let hit_limit = AtomicBool::new(false);
+
+    // One task per top-level directory rather than one per root. A phone has a
+    // single root, so parallelism across roots left the whole device to one
+    // thread while the rest of the pool sat idle.
+    let units = crate::walk::units(roots, compiled.include_hidden);
+
+    units.par_iter().for_each(|unit| {
+        let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH_SIZE);
+        let mut last_flush = Instant::now();
+        let mut since_clock_check = 0u64;
+
+        let mut walk = WalkDir::new(&unit.path).follow_links(false);
+        if unit.shallow {
+            walk = walk.max_depth(1);
+        }
+        let walk = walk
+            .into_iter()
+            .filter_entry(|e| compiled.include_hidden || !is_hidden_dir(e));
+
+        for entry in walk {
+            if cancel.as_ref().is_some_and(|t| t.is_cancelled())
+                || hit_limit.load(Ordering::Relaxed)
+            {
+                break;
+            }
+            let Ok(entry) = entry else { continue };
+            // file_type() is free - the walk already knows it - where
+            // metadata() is a stat syscall.
+            if entry.file_type().is_dir() {
+                continue;
+            }
+
+            since_clock_check += 1;
+            if since_clock_check >= CLOCK_CHECK_INTERVAL {
+                since_clock_check = 0;
+                if !batch.is_empty() && last_flush.elapsed() >= FLUSH_AFTER {
+                    matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                    on_batch(std::mem::take(&mut batch));
+                    batch.reserve(BATCH_SIZE);
+                    last_flush = Instant::now();
+                }
+            }
+
+            // Name first, borrowed from the entry. Almost every file fails
+            // here, and failing costs nothing: no stat, no allocation.
+            let name = entry.file_name().to_string_lossy();
+            if !compiled.name_passes(&name) {
+                continue;
+            }
+
+            let Ok(meta) = entry.metadata() else { continue };
+            if !compiled.metadata_passes(meta.len(), crate::types::modified_millis(&meta)) {
+                continue;
+            }
+
+            batch.push(FileEntry::from_metadata(entry.path(), &meta));
+            if batch.len() >= BATCH_SIZE {
+                let count =
+                    matched.fetch_add(batch.len() as u64, Ordering::Relaxed) + batch.len() as u64;
+                on_batch(std::mem::take(&mut batch));
+                batch.reserve(BATCH_SIZE);
+                last_flush = Instant::now();
+                if count >= limit {
+                    hit_limit.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
+            on_batch(batch);
+        }
+    });
+
+    Ok(())
+}
+
 /// Search, delivering matches as they are found rather than all at once.
+///
+/// The app does not use this any more - the search screen drives
+/// [`crate::session::SearchSession`], which keeps the results on this side
+/// instead of sending every one of them across the boundary. It is kept
+/// because it is the public way in to [`walk_matching`], which both share and
+/// which the tests for the limit, cancellation, hidden pruning and streaming
+/// timing all go through.
 ///
 /// Returns when the walk is done; every result arrives through `sink`. The
 /// filter's `limit` still applies - the walk stops early once that many
@@ -263,107 +364,22 @@ pub fn search_streaming(
     sink: Arc<dyn SearchSink>,
     cancel: Option<Arc<CancelToken>>,
 ) -> Result<()> {
+    // The walk itself lives in walk_matching, which the session shares. This
+    // is the same search with a different shape of callback: every batch
+    // handed straight on rather than accumulated.
     let matched = AtomicU64::new(0);
-    let scanned = AtomicU64::new(0);
-    let hit_limit = AtomicBool::new(false);
-    let limit = if filter.limit == 0 { u64::MAX } else { filter.limit as u64 };
 
-    // Compiled once here, not once per file. See Compiled.
-    let filter = Compiled::new(&filter);
-
-    // One task per top-level directory rather than one per root.
-    //
-    // A phone has a single root, so par_iter over the roots put the whole
-    // device on one thread while the rest of the pool sat idle. The work here
-    // is dominated by waiting on the filesystem - getdents and stat - which is
-    // exactly what spreads well across threads, as long as they are walking
-    // different subtrees rather than contending over one directory.
-    let units = crate::walk::units(&roots, filter.include_hidden);
-
-    units.par_iter().for_each(|unit| {
-        let mut batch: Vec<FileEntry> = Vec::with_capacity(BATCH_SIZE);
-        let mut last_flush = Instant::now();
-        let mut since_clock_check = 0u64;
-
-        let mut walk = WalkDir::new(&unit.path).follow_links(false);
-        if unit.shallow {
-            // The root's own files only; its subdirectories are units of
-            // their own and would otherwise be walked twice.
-            walk = walk.max_depth(1);
-        }
-        let walk = walk
-            .into_iter()
-            .filter_entry(|e| filter.include_hidden || !is_hidden_dir(e));
-
-        for entry in walk {
-            if cancel.as_ref().is_some_and(|t| t.is_cancelled())
-                || hit_limit.load(Ordering::Relaxed)
-            {
-                break;
-            }
-            let Ok(entry) = entry else { continue };
-            // file_type() is free - the walk already knows it - where
-            // metadata() is a stat syscall. Directories are the majority of
-            // entries in a deep tree and none of them can match.
-            if entry.file_type().is_dir() {
-                continue;
-            }
-
-            let n = scanned.fetch_add(1, Ordering::Relaxed);
-            if n % SCAN_REPORT_INTERVAL == 0 {
-                sink.on_scanned(n);
-            }
-
-            // Time-based flush, checked while scanning rather than only on a
-            // match: a rare query would otherwise leave its handful of results
-            // sitting in the buffer for the rest of the walk.
-            since_clock_check += 1;
-            if since_clock_check >= CLOCK_CHECK_INTERVAL {
-                since_clock_check = 0;
-                if !batch.is_empty() && last_flush.elapsed() >= FLUSH_AFTER {
-                    matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
-                    sink.on_batch(std::mem::take(&mut batch));
-                    batch.reserve(BATCH_SIZE);
-                    last_flush = Instant::now();
-                }
-            }
-
-            // Name first, borrowed from the entry. Almost every file fails
-            // here, and failing costs nothing: no stat, no allocation.
-            let name = entry.file_name().to_string_lossy();
-            if !filter.name_passes(&name) {
-                continue;
-            }
-
-            // Only now is the metadata worth a syscall.
-            let Ok(meta) = entry.metadata() else { continue };
-            if !filter.metadata_passes(meta.len(), crate::types::modified_millis(&meta)) {
-                continue;
-            }
-
-            batch.push(FileEntry::from_metadata(entry.path(), &meta));
-            if batch.len() >= BATCH_SIZE {
-                let count = matched.fetch_add(batch.len() as u64, Ordering::Relaxed)
-                    + batch.len() as u64;
-                sink.on_batch(std::mem::take(&mut batch));
-                batch.reserve(BATCH_SIZE);
-                last_flush = Instant::now();
-                if count >= limit {
-                    hit_limit.store(true, Ordering::Relaxed);
-                    break;
-                }
-            }
-        }
-
-        // Whatever did not fill a batch still has to be delivered.
-        if !batch.is_empty() {
-            matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
-            sink.on_batch(batch);
-        }
-    });
+    walk_matching(&roots, &filter, cancel.clone(), |batch| {
+        matched.fetch_add(batch.len() as u64, Ordering::Relaxed);
+        sink.on_batch(batch);
+    })?;
 
     let was_cancelled = cancel.as_ref().is_some_and(|t| t.is_cancelled());
-    sink.on_scanned(scanned.load(Ordering::Relaxed));
-    sink.on_finished(matched.load(Ordering::Relaxed), was_cancelled);
+    let found = matched.load(Ordering::Relaxed);
+    // Scanned is no longer counted per file - the count cost an atomic add on
+    // every one of them and nothing displays it. The matched total is what
+    // callers use.
+    sink.on_scanned(found);
+    sink.on_finished(found, was_cancelled);
     Ok(())
 }

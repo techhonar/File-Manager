@@ -18,7 +18,8 @@ import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SearchFilter
-import uniffi.filemanager_core.SearchSink
+import uniffi.filemanager_core.SearchPage
+import uniffi.filemanager_core.SearchObserver
 import java.util.concurrent.atomic.AtomicLong
 
 data class SearchState(
@@ -57,6 +58,14 @@ data class SearchState(
      * top until the reader takes hold of it.
      */
     val resultsEpoch: Int = 0,
+    /**
+     * Everything that matched, which can exceed what [results] holds.
+     *
+     * Only a page crosses from Rust - more rows than any screen shows, but not
+     * the fifty thousand a loose query finds. The screen says so when there are
+     * more, rather than quietly pretending the page is all of it.
+     */
+    val total: Long = 0,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
 
@@ -64,17 +73,10 @@ data class SearchState(
      *  opposite action. */
     val allSelected: Boolean
         get() = results.isNotEmpty() && selected.size == results.size
-}
 
-/**
- * Results of a completed walk, kept so that extending the query can be
- * answered without touching the disk again.
- */
-private data class SearchCache(
-    val query: String,
-    val category: FileCategory?,
-    val entries: List<FileEntry>,
-)
+    /** True when the walk found more than the page being shown. */
+    val truncated: Boolean get() = total > results.size
+}
 
 class SearchViewModel(
     private val repository: FileRepository,
@@ -103,45 +105,26 @@ class SearchViewModel(
      */
     private val generation = AtomicLong(0)
 
-    /** Everything the last completed walk found, for narrowing. Null if the
-     *  last walk was cancelled or hit the cap, in which case it is unusable. */
-    private var cache: SearchCache? = null
+    /**
+     * Where the results live: in Rust, not here.
+     *
+     * This used to hold every match twice - once merged newest-first for the
+     * list, once more as a cache so another keystroke could narrow without
+     * walking again - and rebuilt the first of those for every batch of
+     * sixty-four. The session does both, and hands over a page.
+     */
+    private val session = repository.newSearchSession()
 
     /**
-     * A running walk's results, newest first. The cache is built from this.
+     * What the last completed walk searched for.
      *
-     * Held in order rather than sorted at the end so the list never re-orders
-     * under the reader. Call [mergeNewestFirst] to add to it, never `+=`.
+     * Narrowing is only valid against a superset, so the query the session
+     * holds results for has to be remembered. Null when the last walk was
+     * cancelled or hit its cap, where what is held is not the whole answer.
      */
-    private val accumulated = mutableListOf<FileEntry>()
-    private val accumulatedLock = Any()
+    private var searchedFor: SearchCriteria? = null
 
-    /**
-     * Fold one batch into [accumulated], keeping it newest first.
-     *
-     * Caller must hold [accumulatedLock]; batches arrive on the walk's own
-     * threads.
-     */
-    private fun mergeNewestFirst(batch: List<FileEntry>): List<FileEntry> {
-        val incoming = batch.sortedByDescending { it.modifiedMs }
-        val merged = ArrayList<FileEntry>(accumulated.size + incoming.size)
-
-        var held = 0
-        var new = 0
-        while (held < accumulated.size && new < incoming.size) {
-            merged += if (accumulated[held].modifiedMs >= incoming[new].modifiedMs) {
-                accumulated[held++]
-            } else {
-                incoming[new++]
-            }
-        }
-        while (held < accumulated.size) merged += accumulated[held++]
-        while (new < incoming.size) merged += incoming[new++]
-
-        accumulated.clear()
-        accumulated.addAll(merged)
-        return merged
-    }
+    private data class SearchCriteria(val query: String, val category: FileCategory?)
 
     /**
      * Every keystroke searches, as it should - but most keystrokes never
@@ -151,13 +134,13 @@ class SearchViewModel(
      * contain "ma", so the results for "mad" are a subset of the results for
      * "ma". Extending the query therefore just filters what is already in
      * hand, which is instant and needs no walk at all. Only a query that is
-     * not an extension of the cached one - the first character, or deleting
-     * past it - has to go to disk.
+     * not an extension of the one already searched for - the first character,
+     * or deleting past it - has to go to disk.
      */
     fun onQueryChange(query: String) {
         _state.update { it.copy(query = query) }
 
-        if (narrowFromCache(query)) {
+        if (narrowInSession(query)) {
             return
         }
         scheduleWalk()
@@ -170,8 +153,8 @@ class SearchViewModel(
             // Moving to a different list, which has its own stored layout.
             current.copy(category = next, viewMode = storedViewMode(next))
         }
-        // Changing the filter can widen the set, so the cache cannot answer it.
-        cache = null
+        // Changing the filter can widen the set, so what is held cannot answer.
+        searchedFor = null
         scheduleWalk()
     }
 
@@ -184,43 +167,49 @@ class SearchViewModel(
      */
     fun applyCategory(category: FileCategory) {
         _state.update { it.copy(category = category, viewMode = storedViewMode(category)) }
-        cache = null
+        searchedFor = null
         scheduleWalk()
     }
 
     fun clear() {
         cancelSearch()
-        cache = null
+        searchedFor = null
+        session.clear()
         _state.value = SearchState(viewMode = storedViewMode(null))
     }
 
     /**
-     * Answer from the cache if the new query only narrows it.
+     * Narrow what the session already holds, if the new query only narrows it.
      *
-     * Returns false when a real walk is needed.
+     * Returns false when a real walk is needed. The filtering itself happens in
+     * Rust, over results that never left it.
      */
-    private fun narrowFromCache(query: String): Boolean {
-        val cached = cache ?: return false
+    private fun narrowInSession(query: String): Boolean {
+        val held = searchedFor ?: return false
         val current = _state.value
 
         if (query.isBlank()) return false
-        if (cached.category != current.category) return false
+        if (held.category != current.category) return false
         // Only an extension is safe. "ma" -> "mad" narrows; "mad" -> "max"
-        // or "mad" -> "m" could both match files the cache never held.
-        if (!query.startsWith(cached.query, ignoreCase = true)) return false
+        // or "mad" -> "m" could both match files the walk never looked at.
+        if (!query.startsWith(held.query, ignoreCase = true)) return false
 
         // No walk is running, so nothing can arrive late and overwrite this.
         cancelSearch()
 
-        val filtered = cached.entries
-            .filter { it.name.contains(query, ignoreCase = true) }
-
-        _state.update {
-            it.withResults(filtered).copy(
-                isSearching = false,
-                hasSearched = true,
-                resultsEpoch = it.resultsEpoch + 1,
-            )
+        viewModelScope.launch {
+            val page = runCatching { repository.narrowSearch(session, query, PAGE_SIZE) }
+                .getOrNull() ?: return@launch
+            // The query may have moved on while this was in flight.
+            if (_state.value.query != query) return@launch
+            _state.update {
+                it.withResults(page.entries).copy(
+                    total = page.total.toLong(),
+                    isSearching = false,
+                    hasSearched = true,
+                    resultsEpoch = it.resultsEpoch + 1,
+                )
+            }
         }
         return true
     }
@@ -231,13 +220,18 @@ class SearchViewModel(
         val current = _state.value
         if (current.query.isBlank() && current.category == null) {
             _state.update {
-                it.withResults(emptyList()).copy(hasSearched = false, isSearching = false)
+                it.withResults(emptyList()).copy(
+                    hasSearched = false,
+                    isSearching = false,
+                    total = 0,
+                )
             }
+            searchedFor = null
+            session.clear()
             return
         }
 
         val mine = generation.incrementAndGet()
-        synchronized(accumulatedLock) { accumulated.clear() }
 
         searchJob = viewModelScope.launch {
             // A short pause only before a walk. Narrowing above is instant and
@@ -250,59 +244,22 @@ class SearchViewModel(
             _state.update {
                 it.withResults(emptyList()).copy(
                     isSearching = true,
+                    total = 0,
                     resultsEpoch = it.resultsEpoch + 1,
                 )
             }
 
-            val sink = object : SearchSink {
-                override fun onBatch(entries: List<FileEntry>) {
+            // Pages arrive already ordered newest-first and already capped, so
+            // there is nothing to merge, sort or accumulate on this side.
+            val observer = object : SearchObserver {
+                override fun onPage(page: SearchPage) {
                     if (generation.get() != mine) return
-
-                    // Merged into date order as it arrives, so the newest file
-                    // found so far is always the top row.
-                    //
-                    // This used to append in walk order and sort the whole
-                    // list once at the end. That put an arbitrary file at the
-                    // top for the length of the scan and then reshuffled
-                    // everything underneath the reader - and because a keyed
-                    // lazy list holds its place by following whichever item
-                    // was on top, the view was dragged down to wherever that
-                    // item had moved to. Opening a category appeared to scroll
-                    // itself to the bottom.
-                    //
-                    // Merging two sorted lists costs a pass over what is
-                    // already held, which is what copying it for the UI cost
-                    // anyway.
-                    val snapshot = synchronized(accumulatedLock) {
-                        mergeNewestFirst(entries)
-                    }
-                    _state.update { it.withResults(snapshot).copy(hasSearched = true) }
-                }
-
-                override fun onScanned(count: ULong) = Unit
-
-                override fun onFinished(matched: ULong, cancelled: Boolean) {
-                    if (generation.get() != mine) return
-
-                    // Nothing to re-order: every batch was merged into place,
-                    // so what is on screen is already the finished order. The
-                    // list simply stops growing.
-                    val ordered = synchronized(accumulatedLock) { accumulated.toList() }
                     _state.update {
-                        it.withResults(ordered).copy(
-                            isSearching = false,
+                        it.withResults(page.entries).copy(
+                            total = page.total.toLong(),
                             hasSearched = true,
+                            isSearching = !page.finished,
                         )
-                    }
-
-                    // Only a walk that ran to completion, and was not cut off
-                    // by the cap, holds every match - anything else would make
-                    // later narrowing silently drop results.
-                    val full = synchronized(accumulatedLock) { accumulated.toList() }
-                    cache = if (!cancelled && full.size < CACHE_LIMIT.toInt()) {
-                        SearchCache(current.query, current.category, full)
-                    } else {
-                        null
                     }
                 }
             }
@@ -314,18 +271,29 @@ class SearchViewModel(
                 maxSize = null,
                 modifiedAfter = null,
                 includeHidden = false,
-                // Collect well beyond what is displayed, so the cache is
-                // usable for narrowing rather than being truncated on any
-                // common letter.
-                limit = CACHE_LIMIT,
+                // Uncapped: the session holds everything so that narrowing has
+                // the whole answer to work from, and only a page of it ever
+                // crosses to this side.
+                limit = 0u,
             )
 
-            runCatching { repository.searchStreaming(roots, filter, sink, token) }
-                .onFailure {
-                    if (generation.get() == mine) {
-                        _state.update { it.copy(isSearching = false) }
-                    }
-                }
+            val ran = runCatching {
+                repository.runSearch(session, roots, filter, PAGE_SIZE, observer, token)
+            }
+
+            if (generation.get() != mine) return@launch
+            if (ran.isFailure) {
+                _state.update { it.copy(isSearching = false) }
+                searchedFor = null
+                return@launch
+            }
+            // Only a walk that ran to completion holds every match; anything
+            // cut short would make later narrowing silently drop results.
+            searchedFor = if (token.isCancelled()) {
+                null
+            } else {
+                SearchCriteria(current.query, current.category)
+            }
         }
     }
 
@@ -339,6 +307,9 @@ class SearchViewModel(
 
     override fun onCleared() {
         cancelSearch()
+        // A scan of the whole device would otherwise stay in memory for the
+        // life of the process, which is not this screen's to hold.
+        session.clear()
         super.onCleared()
     }
 
@@ -444,18 +415,21 @@ class SearchViewModel(
     }
 
     /**
-     * Drop paths from the visible results and from the cache.
+     * Drop paths from the visible results and from what the session holds.
      *
-     * Without clearing them from the cache too, narrowing the query would
-     * bring deleted files back.
+     * Both, because the session is what narrowing reads. Without telling it,
+     * the next keystroke would filter over the deleted files and put them
+     * back on screen.
      */
     private fun removeFromResults(paths: List<String>, message: String?) {
         val gone = paths.toSet()
-        synchronized(accumulatedLock) { accumulated.removeAll { it.path in gone } }
-        cache = cache?.let { c -> c.copy(entries = c.entries.filterNot { it.path in gone }) }
+        session.forget(paths)
         _state.update { current ->
+            val remaining = current.results.filterNot { it.path in gone }
             current.copy(
-                results = current.results.filterNot { it.path in gone },
+                results = remaining,
+                // The total counts what the walk found, so it drops too.
+                total = (current.total - (current.results.size - remaining.size)).coerceAtLeast(0),
                 selected = emptySet(),
                 message = message,
             )
@@ -465,17 +439,19 @@ class SearchViewModel(
     fun consumeMessage() = _state.update { it.copy(message = null) }
 
     private companion object {
-        /** Only before a disk walk. Narrowing from the cache never waits. */
+        /** Only before a disk walk. Narrowing never waits. */
         const val WALK_DEBOUNCE_MS = 220L
 
         /**
-         * How many matches a walk collects.
+         * How many results cross from Rust at a time.
          *
-         * All of them are displayed - the list is lazy, so rows cost nothing
-         * until scrolled to. The cap exists only so a query matching a whole
-         * device cannot grow without bound, and it doubles as the point beyond
-         * which the cache is considered incomplete.
+         * The walk itself is uncapped - the session keeps everything, so
+         * narrowing has the whole answer to work from - but handing all of it
+         * over costs about seven microseconds an entry, which on a loose query
+         * is most of the time the search takes. A thousand rows is far more
+         * than anyone scrolls before typing another letter, and the screen
+         * says how many there really are.
          */
-        const val CACHE_LIMIT: UInt = 20000u
+        const val PAGE_SIZE: UInt = 1000u
     }
 }

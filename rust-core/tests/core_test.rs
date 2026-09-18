@@ -1052,3 +1052,167 @@ fn collect(tree: &TempTree, query: &str, include_hidden: bool) -> Vec<FileEntry>
     .unwrap();
     sink.taken()
 }
+
+// --- The search session, which now owns the results ------------------------
+
+struct PageSink {
+    pages: std::sync::Mutex<Vec<filemanager_core::session::SearchPage>>,
+}
+
+impl PageSink {
+    fn new() -> std::sync::Arc<PageSink> {
+        std::sync::Arc::new(PageSink { pages: std::sync::Mutex::new(Vec::new()) })
+    }
+    fn pages(&self) -> Vec<filemanager_core::session::SearchPage> {
+        self.pages.lock().unwrap().clone()
+    }
+    fn last(&self) -> filemanager_core::session::SearchPage {
+        self.pages().last().expect("no page was delivered").clone()
+    }
+}
+
+impl filemanager_core::session::SearchObserver for PageSink {
+    fn on_page(&self, page: filemanager_core::session::SearchPage) {
+        self.pages.lock().unwrap().push(page);
+    }
+}
+
+fn plain_filter(query: &str) -> SearchFilter {
+    SearchFilter {
+        query: query.to_string(),
+        categories: vec![],
+        min_size: None,
+        max_size: None,
+        modified_after: None,
+        include_hidden: false,
+        limit: 0,
+    }
+}
+
+#[test]
+fn a_session_returns_a_page_newest_first_and_the_true_total() {
+    let tree = TempTree::new("session-order");
+    // Written oldest to newest so the order on disk is not the answer.
+    for i in 0..12 {
+        let path = tree.file(&format!("file{i:02}.txt"), b"x");
+        let when = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(1_700_000_000 + i as u64 * 60);
+        // std rather than a crate for the sake of one line in one test.
+        let handle = fs::File::options().write(true).open(&path).unwrap();
+        handle
+            .set_times(fs::FileTimes::new().set_modified(when))
+            .unwrap();
+    }
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            5,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+
+    let page = sink.last();
+    assert!(page.finished, "the last page should say so");
+    assert_eq!(page.total, 12, "the total counts everything, not the page");
+    assert_eq!(page.entries.len(), 5, "the page is capped at what was asked for");
+
+    // Newest first, and the newest five are the five it kept.
+    let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["file11.txt", "file10.txt", "file09.txt", "file08.txt", "file07.txt"]);
+}
+
+#[test]
+fn a_session_narrows_without_walking_again() {
+    let tree = TempTree::new("session-narrow");
+    tree.file("madison-one.txt", b"x");
+    tree.file("madison-two.txt", b"x");
+    tree.file("something-else.txt", b"x");
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter("ma"),
+            100,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(sink.last().total, 2);
+
+    // Narrowing happens against what is held, so deleting the files first
+    // proves the disk is not touched.
+    std::fs::remove_file(tree.path().join("madison-one.txt")).unwrap();
+    std::fs::remove_file(tree.path().join("madison-two.txt")).unwrap();
+
+    let narrowed = session.narrow("madison-t".to_string(), 100);
+    assert_eq!(narrowed.total, 1);
+    assert_eq!(narrowed.entries[0].name, "madison-two.txt");
+    assert!(narrowed.finished);
+
+    // Case-insensitively, the same as the walk matches.
+    assert_eq!(session.narrow("MADISON".to_string(), 100).total, 2);
+
+    session.clear();
+    assert_eq!(session.narrow("madison".to_string(), 100).total, 0);
+}
+
+#[test]
+fn a_session_delivers_something_before_the_walk_ends() {
+    let tree = TempTree::new("session-streaming");
+    for i in 0..300 {
+        tree.file(&format!("dir{}/file{i:03}.txt", i % 8), b"x");
+    }
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            50,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+
+    assert!(!sink.pages().is_empty(), "nothing was delivered at all");
+    assert_eq!(sink.last().total, 300);
+    // Only the last page is final; any earlier ones are progress.
+    let finals = sink.pages().iter().filter(|p| p.finished).count();
+    assert_eq!(finals, 1, "exactly one page should be marked finished");
+}
+
+#[test]
+fn a_session_forgets_files_that_have_been_deleted() {
+    let tree = TempTree::new("session-forget");
+    tree.file("madison-one.txt", b"x");
+    tree.file("madison-two.txt", b"x");
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter("madison"),
+            100,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(sink.last().total, 2);
+
+    let gone = tree.path().join("madison-one.txt").to_string_lossy().into_owned();
+    session.forget(vec![gone]);
+
+    // Narrowing must not bring it back, which is the whole reason this exists.
+    let narrowed = session.narrow("madison".to_string(), 100);
+    assert_eq!(narrowed.total, 1);
+    assert_eq!(narrowed.entries[0].name, "madison-two.txt");
+}
