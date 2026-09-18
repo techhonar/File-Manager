@@ -304,7 +304,15 @@ fun SearchScreen(
                 ) {
                     item {
                         Text(
-                            text = "${state.results.size} results",
+                            // The count is what the walk found; the list is
+                            // the page of it that crossed from Rust. Saying
+                            // only the page size would under-report a loose
+                            // query by an order of magnitude.
+                            text = if (state.truncated) {
+                                "${state.total} results, showing ${state.results.size}"
+                            } else {
+                                "${state.total} results"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(
