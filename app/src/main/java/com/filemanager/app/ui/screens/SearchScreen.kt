@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import com.filemanager.app.ui.components.InlineResultActions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -51,6 +52,7 @@ import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.viewmodel.ViewMode
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -240,6 +242,15 @@ fun SearchScreen(
                 }
             }
 
+            // A scan that is still running while results are already showing.
+            // The spinner below only appears when there is nothing at all, and
+            // without this a partial list looks like the whole answer.
+            if (state.isSearching && state.results.isNotEmpty()) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            } else {
+                Spacer(Modifier.height(4.dp))
+            }
+
             Spacer(Modifier.height(8.dp))
 
             when {
@@ -354,6 +365,12 @@ fun SearchScreen(
                     }
                 }
 
+                // Before "no files match": a walk that has not finished has
+                // not established that. A category opens onto an empty screen
+                // and stays that way until the first page arrives, which on a
+                // full device is a few seconds.
+                state.isSearching -> SearchingMessage()
+
                 state.hasSearched -> EmptyMessage("No files match")
 
                 else -> EmptyMessage("Search by name, or pick a category")
@@ -453,6 +470,23 @@ private fun CategoryChip(
             text = category.label(),
             style = MaterialTheme.typography.labelMedium,
             color = foreground,
+        )
+    }
+}
+
+@Composable
+private fun SearchingMessage() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        CircularProgressIndicator()
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = "Searching…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
