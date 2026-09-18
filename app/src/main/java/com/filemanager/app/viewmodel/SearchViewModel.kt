@@ -23,7 +23,14 @@ import java.util.concurrent.atomic.AtomicLong
 
 data class SearchState(
     val query: String = "",
-    val categories: Set<FileCategory> = emptySet(),
+    /**
+     * The one category being shown, or null for everything.
+     *
+     * One rather than a set: the chips read as filters that add up, but each
+     * one opens its own list with its own layout, and two at once had no
+     * layout of its own and no heading that described it.
+     */
+    val category: FileCategory? = null,
     val results: List<FileEntry> = emptyList(),
     val isSearching: Boolean = false,
     val hasSearched: Boolean = false,
@@ -65,7 +72,7 @@ data class SearchState(
  */
 private data class SearchCache(
     val query: String,
-    val categories: Set<FileCategory>,
+    val category: FileCategory?,
     val entries: List<FileEntry>,
 )
 
@@ -156,16 +163,14 @@ class SearchViewModel(
         scheduleWalk()
     }
 
+    /** Show this category, or show everything if it is already the one shown. */
     fun toggleCategory(category: FileCategory) {
         _state.update { current ->
-            val next = current.categories.toMutableSet()
-            if (!next.add(category)) next.remove(category)
-            // Ticking a chip moves to a different list, which has its own
-            // stored layout.
-            current.copy(categories = next, viewMode = storedViewMode(next))
+            val next = if (current.category == category) null else category
+            // Moving to a different list, which has its own stored layout.
+            current.copy(category = next, viewMode = storedViewMode(next))
         }
-        // Changing the category filter can widen the set, so the cache cannot
-        // answer it.
+        // Changing the filter can widen the set, so the cache cannot answer it.
         cache = null
         scheduleWalk()
     }
@@ -178,8 +183,7 @@ class SearchViewModel(
      * whatever was ticked last time.
      */
     fun applyCategory(category: FileCategory) {
-        val only = setOf(category)
-        _state.update { it.copy(categories = only, viewMode = storedViewMode(only)) }
+        _state.update { it.copy(category = category, viewMode = storedViewMode(category)) }
         cache = null
         scheduleWalk()
     }
@@ -187,7 +191,7 @@ class SearchViewModel(
     fun clear() {
         cancelSearch()
         cache = null
-        _state.value = SearchState(viewMode = storedViewMode(emptySet()))
+        _state.value = SearchState(viewMode = storedViewMode(null))
     }
 
     /**
@@ -200,7 +204,7 @@ class SearchViewModel(
         val current = _state.value
 
         if (query.isBlank()) return false
-        if (cached.categories != current.categories) return false
+        if (cached.category != current.category) return false
         // Only an extension is safe. "ma" -> "mad" narrows; "mad" -> "max"
         // or "mad" -> "m" could both match files the cache never held.
         if (!query.startsWith(cached.query, ignoreCase = true)) return false
@@ -226,7 +230,7 @@ class SearchViewModel(
         cancelSearch()
 
         val current = _state.value
-        if (current.query.isBlank() && current.categories.isEmpty()) {
+        if (current.query.isBlank() && current.category == null) {
             _state.update {
                 it.copy(results = emptyList(), hasSearched = false, isSearching = false)
             }
@@ -299,7 +303,7 @@ class SearchViewModel(
                     // later narrowing silently drop results.
                     val full = synchronized(accumulatedLock) { accumulated.toList() }
                     cache = if (!cancelled && full.size < CACHE_LIMIT.toInt()) {
-                        SearchCache(current.query, current.categories, full)
+                        SearchCache(current.query, current.category, full)
                     } else {
                         null
                     }
@@ -308,7 +312,7 @@ class SearchViewModel(
 
             val filter = SearchFilter(
                 query = current.query,
-                categories = current.categories.toList(),
+                categories = listOfNotNull(current.category),
                 minSize = null,
                 maxSize = null,
                 modifiedAfter = null,
@@ -355,17 +359,17 @@ class SearchViewModel(
     /**
      * Which stored layout this screen is currently showing.
      *
-     * One category is its own list and keeps its own layout; no category, or
-     * several at once, is a plain search and shares one.
+     * A category is its own list and keeps its own layout; no category is a
+     * plain search, which keeps one of its own.
      */
-    private fun scopeFor(categories: Set<FileCategory>): ViewScope =
-        categories.singleOrNull()?.let { ViewScope.category(it.name) } ?: ViewScope.Search
+    private fun scopeFor(category: FileCategory?): ViewScope =
+        category?.let { ViewScope.category(it.name) } ?: ViewScope.Search
 
-    private fun storedViewMode(categories: Set<FileCategory>): ViewMode =
-        settings.viewMode(scopeFor(categories)).value.toViewMode()
+    private fun storedViewMode(category: FileCategory?): ViewMode =
+        settings.viewMode(scopeFor(category)).value.toViewMode()
 
     fun setViewMode(mode: ViewMode) {
-        settings.setViewMode(scopeFor(_state.value.categories), mode.toSetting())
+        settings.setViewMode(scopeFor(_state.value.category), mode.toSetting())
         _state.update { it.copy(viewMode = mode) }
     }
 

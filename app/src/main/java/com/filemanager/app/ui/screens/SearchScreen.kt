@@ -114,7 +114,7 @@ fun SearchScreen(
     // one thing that stops it: once someone has scrolled somewhere on purpose,
     // moving them is worse than anything it would be fixing.
     var userScrolled by remember { mutableStateOf(false) }
-    LaunchedEffect(state.query, state.categories) { userScrolled = false }
+    LaunchedEffect(state.query, state.category) { userScrolled = false }
     // Drags rather than isScrollInProgress, which is also true while the
     // scroll below is running - that would set this on the first reset and
     // stop every later one.
@@ -160,7 +160,14 @@ fun SearchScreen(
     }
 
     OneUiScreen(
-        title = if (state.inSelectionMode) "${state.selected.size} selected" else "Search",
+        // Named after what is on screen. Opening Videos from the home screen
+        // landed on a page headed "Search", which is where it happens to be
+        // built but not what the user asked for.
+        title = when {
+            state.inSelectionMode -> "${state.selected.size} selected"
+            state.category != null -> state.category.label()
+            else -> "Search"
+        },
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
@@ -223,7 +230,7 @@ fun SearchScreen(
                 FILTER_CATEGORIES.forEach { category ->
                     CategoryChip(
                         category = category,
-                        selected = category in state.categories,
+                        selected = category == state.category,
                         onClick = { viewModel.toggleCategory(category) },
                     )
                 }

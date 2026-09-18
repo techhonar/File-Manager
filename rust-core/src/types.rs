@@ -89,7 +89,7 @@ impl Default for SortOptions {
     }
 }
 
-fn modified_millis(meta: &std::fs::Metadata) -> u64 {
+pub(crate) fn modified_millis(meta: &std::fs::Metadata) -> u64 {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())

@@ -18,6 +18,7 @@ pub mod search;
 pub mod storage;
 pub mod trash;
 pub mod types;
+pub mod walk;
 
 // Generates the FFI scaffolding for every exported item in the crate.
 uniffi::setup_scaffolding!();
