@@ -429,6 +429,7 @@ fun FileManagerRoot(
                 val vm: FtpServerViewModel = viewModel(factory = factory)
                 FtpServerScreen(
                     viewModel = vm,
+                    volumes = volumes,
                     onNavigateBack = { navController.popBackStack() },
                 )
             }
