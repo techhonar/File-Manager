@@ -163,10 +163,14 @@ fun SearchScreen(
         // Named after what is on screen. Opening Videos from the home screen
         // landed on a page headed "Search", which is where it happens to be
         // built but not what the user asked for.
-        title = when {
-            state.inSelectionMode -> "${state.selected.size} selected"
-            state.category != null -> state.category.label()
-            else -> "Search"
+        // A safe call rather than a null check and a member access: `state`
+        // comes from collectAsState, so it is a delegated property and reading
+        // it twice is two calls - which means no smart cast, and the second
+        // read is still nullable however the first one turned out.
+        title = if (state.inSelectionMode) {
+            "${state.selected.size} selected"
+        } else {
+            state.category?.label() ?: "Search"
         },
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
