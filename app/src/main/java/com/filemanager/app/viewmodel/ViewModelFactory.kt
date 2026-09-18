@@ -81,6 +81,7 @@ class ViewModelFactory(
                 server = requireNotNull(remoteServer) { "remoteServer not supplied" },
                 repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
                 clipboard = clipboard,
+                localFiles = repository,
             ) as T
 
         modelClass.isAssignableFrom(FtpServerViewModel::class.java) ->

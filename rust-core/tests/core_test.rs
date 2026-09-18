@@ -9,7 +9,7 @@ use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tr
 use filemanager_core::search::{search, search_streaming, SearchFilter, SearchSink};
 use filemanager_core::storage::{analyze_storage, largest_files, storage_summary};
 use filemanager_core::trash::{trash_list, trash_move, trash_restore, trash_purge_expired};
-use filemanager_core::types::{FileCategory, SortKey, SortOptions};
+use filemanager_core::types::{FileCategory, FileEntry, SortKey, SortOptions};
 use filemanager_core::format_size;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -919,4 +919,136 @@ fn an_empty_password_leaves_the_archive_unencrypted() {
     )
     .unwrap();
     assert_eq!(fs::read_to_string(out.join("open/a.txt")).unwrap(), "nothing secret");
+}
+
+/// The walk is split into one task per top-level directory. That split must be
+/// invisible: the same files, once each, however the tree is shaped.
+#[test]
+fn splitting_the_walk_finds_every_file_exactly_once() {
+    let tree = TempTree::new("walk-split");
+    // Files directly in the root, which belong to the shallow unit.
+    tree.file("top-level.txt", b"a");
+    tree.file("another.txt", b"b");
+    // And files under subdirectories, which are units of their own.
+    tree.file("one/deep/first.txt", b"c");
+    tree.file("one/second.txt", b"d");
+    tree.file("two/third.txt", b"e");
+    tree.file("two/nested/more/fourth.txt", b"f");
+
+    let found = collect(&tree, "", false);
+    let mut names: Vec<String> = found.iter().map(|e| e.name.clone()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "another.txt",
+            "first.txt",
+            "fourth.txt",
+            "second.txt",
+            "third.txt",
+            "top-level.txt",
+        ],
+    );
+
+    // Once each: a root walked both shallowly and as part of a subtree would
+    // report its files twice.
+    let mut paths: Vec<String> = found.iter().map(|e| e.path.clone()).collect();
+    paths.sort();
+    let unique = paths.len();
+    paths.dedup();
+    assert_eq!(unique, paths.len(), "a file was reported more than once");
+}
+
+#[test]
+fn splitting_the_walk_keeps_hidden_files_hidden() {
+    let tree = TempTree::new("walk-split-hidden");
+    tree.file("visible.txt", b"a");
+    tree.file(".hidden-file.txt", b"b");
+    tree.file(".hidden-dir/inside.txt", b"c");
+    tree.file("normal/.also-hidden.txt", b"d");
+
+    let shown: Vec<String> = collect(&tree, "", false).iter().map(|e| e.name.clone()).collect();
+    assert_eq!(shown, vec!["visible.txt"], "got {shown:?}");
+
+    let all = collect(&tree, "", true);
+    let mut names: Vec<String> = all.iter().map(|e| e.name.clone()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![".also-hidden.txt", ".hidden-file.txt", "inside.txt", "visible.txt"],
+    );
+}
+
+#[test]
+fn a_root_with_no_subdirectories_is_still_walked() {
+    let tree = TempTree::new("walk-split-flat");
+    tree.file("only.txt", b"a");
+    let found = collect(&tree, "", false);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name, "only.txt");
+}
+
+#[test]
+fn a_root_that_is_not_there_yields_nothing_rather_than_failing() {
+    let tree = TempTree::new("walk-split-missing");
+    let missing = tree.path().join("no-such-folder");
+    let sink = Collector::new();
+    search_streaming(
+        vec![missing.to_string_lossy().into_owned()],
+        SearchFilter {
+            query: String::new(),
+            categories: vec![],
+            min_size: None,
+            max_size: None,
+            modified_after: None,
+            include_hidden: false,
+            limit: 0,
+        },
+        sink.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(sink.taken().is_empty());
+}
+
+/// Shared harness for the walk-splitting tests.
+struct Collector {
+    entries: std::sync::Mutex<Vec<FileEntry>>,
+}
+
+impl Collector {
+    fn new() -> std::sync::Arc<Collector> {
+        std::sync::Arc::new(Collector { entries: std::sync::Mutex::new(Vec::new()) })
+    }
+    fn taken(&self) -> Vec<FileEntry> {
+        self.entries.lock().unwrap().clone()
+    }
+}
+
+impl SearchSink for Collector {
+    fn on_batch(&self, entries: Vec<FileEntry>) {
+        self.entries.lock().unwrap().extend(entries);
+    }
+    fn on_scanned(&self, _count: u64) {}
+    fn on_finished(&self, _matched: u64, _cancelled: bool) {}
+}
+
+fn collect(tree: &TempTree, query: &str, include_hidden: bool) -> Vec<FileEntry> {
+    let sink = Collector::new();
+    search_streaming(
+        vec![tree.path().to_string_lossy().into_owned()],
+        SearchFilter {
+            query: query.to_string(),
+            categories: vec![],
+            min_size: None,
+            max_size: None,
+            modified_after: None,
+            include_hidden,
+            limit: 0,
+        },
+        sink.clone(),
+        None,
+    )
+    .unwrap();
+    sink.taken()
 }

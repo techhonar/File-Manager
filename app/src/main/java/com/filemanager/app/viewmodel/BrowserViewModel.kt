@@ -225,8 +225,20 @@ class BrowserViewModel(
                 .onSuccess { entries ->
                     _state.update {
                         // Discard a result for a folder the user has left.
-                        if (it.path != path) it
-                        else it.copy(entries = applyPinning(entries, paths.pinned.value))
+                        if (it.path != path) {
+                            it
+                        } else {
+                            val next = applyPinning(entries, paths.pinned.value)
+                            // Ticks for files that have since gone are dropped.
+                            // This reload is not the user's doing - something
+                            // changed on disk - so a selection can outlive the
+                            // file it pointed at.
+                            val visible = next.mapTo(HashSet(next.size)) { e -> e.path }
+                            it.copy(
+                                entries = next,
+                                selected = it.selected.filterTo(HashSet()) { p -> p in visible },
+                            )
+                        }
                     }
                 }
         }

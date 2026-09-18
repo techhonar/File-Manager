@@ -3,6 +3,7 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
+import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
@@ -27,13 +28,15 @@ data class RemoteBrowserState(
     /** What long-running job is in flight, for the progress line. */
     val busy: String? = null,
     val message: String? = null,
+    /** Set by the view model, which normalises what the form stored. */
+    val basePath: String = "/",
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
 
     val allSelected: Boolean
         get() = entries.isNotEmpty() && selected.size == entries.size
 
-    val atRoot: Boolean get() = path == "/" || path == server.basePath
+    val atRoot: Boolean get() = path == "/" || path == basePath
 
     val selectedEntries: List<RemoteEntry>
         get() = entries.filter { it.path in selected }
@@ -53,10 +56,18 @@ class RemoteBrowserViewModel(
     server: RemoteServer,
     private val repository: RemoteRepository,
     private val clipboard: FileClipboard,
+    /** Only to finish a move: the originals are local files. */
+    private val localFiles: FileRepository,
 ) : ViewModel() {
 
+    // Normalised once. The folder is typed into a form, so it arrives with a
+    // trailing slash or a doubled one as often as not - and every path the
+    // clients return is normalised, so an un-normalised start never compares
+    // equal to anything and the screen thinks it is never at the top.
+    private val basePath = RemotePaths.normalise(server.basePath)
+
     private val _state = MutableStateFlow(
-        RemoteBrowserState(server = server, path = server.basePath),
+        RemoteBrowserState(server = server, path = basePath, basePath = basePath),
     )
     val state: StateFlow<RemoteBrowserState> = _state.asStateFlow()
 
@@ -74,7 +85,7 @@ class RemoteBrowserViewModel(
     val clipboardContents = clipboard.contents
 
     init {
-        load(server.basePath)
+        load(basePath)
     }
 
     fun load(path: String) {
@@ -199,11 +210,20 @@ class RemoteBrowserViewModel(
         }
     }
 
-    /** Upload whatever the local browser copied. Folders are skipped: this
-     *  screen has no recursive upload, and silently flattening one would be
-     *  worse than saying so. */
+    /**
+     * Upload whatever the local browser copied, or cut.
+     *
+     * A cut that only uploaded was the surprise here: the files appeared on the
+     * server and stayed on the phone, and nothing said so. The originals now go
+     * once their upload has been confirmed - and only those, so a transfer that
+     * failed half way leaves the rest where they are.
+     *
+     * Folders are skipped either way. There is no recursive upload here, and
+     * quietly flattening one would be worse than saying it was left.
+     */
     fun pasteFromClipboard() {
-        val paths = clipboard.contents.value?.paths.orEmpty()
+        val pending = clipboard.contents.value
+        val paths = pending?.paths.orEmpty()
         if (paths.isEmpty()) {
             _state.update { it.copy(message = "Nothing copied") }
             return
@@ -212,22 +232,40 @@ class RemoteBrowserViewModel(
         viewModelScope.launch {
             val files = paths.map(::File).filter { it.isFile }
             val skipped = paths.size - files.size
-            var done = 0
+            val uploaded = mutableListOf<String>()
             var failed = 0
 
             for (file in files) {
-                _state.update { it.copy(busy = "Uploading ${done + 1} of ${files.size}…") }
+                _state.update {
+                    it.copy(busy = "Uploading ${uploaded.size + failed + 1} of ${files.size}…")
+                }
                 val target = RemotePaths.join(_state.value.path, file.name)
                 runCatching { repository.upload(_state.value.server, file, target) }
-                    .onSuccess { done++ }
+                    .onSuccess { uploaded += file.absolutePath }
                     .onFailure { failed++ }
             }
 
-            _state.update { it.copy(busy = null) }
+            var moved = 0
+            if (pending?.isMove == true && uploaded.isNotEmpty()) {
+                _state.update { it.copy(busy = "Removing the originals…") }
+                // To the trash rather than deleted outright, which is what a
+                // move does everywhere else in the app and leaves a way back.
+                moved = runCatching { localFiles.moveToTrash(uploaded).size }.getOrDefault(0)
+            }
+
+            // Only once it has all been dealt with: leaving it would invite a
+            // second paste that moves nothing, having already moved it.
+            if (failed == 0) clipboard.clear()
+
             _state.update {
                 it.copy(
+                    busy = null,
                     message = buildString {
-                        append("Uploaded $done")
+                        append(if (pending?.isMove == true) "Moved " else "Uploaded ")
+                        append(uploaded.size)
+                        if (pending?.isMove == true && moved < uploaded.size) {
+                            append(" (originals kept)")
+                        }
                         if (failed > 0) append(", $failed failed")
                         if (skipped > 0) append(", $skipped folders skipped")
                     },
