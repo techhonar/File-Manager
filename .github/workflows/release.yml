@@ -352,42 +352,92 @@ jobs:
 
       # ---- Publish -------------------------------------------------------
       # Only for tag pushes; a manual run leaves the APK as an artifact.
+      #
+      # Done with the gh CLI rather than an action. softprops/action-gh-release
+      # created the release and then failed on the upload with "Error creating
+      # asset temp dir", leaving a release with no APK in it - the empty-release
+      # failure this workflow has already been through twice. It is also a
+      # floating major tag, so it changes underneath us, which is how the SDK
+      # setup broke as well. gh is preinstalled on the runner and every step
+      # below says plainly what it is doing.
       - name: Publish GitHub Release
+        id: publish
         if: >-
           (github.event_name == 'push' || inputs.publish)
           && steps.keystore.outputs.kind == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: File Manager ${{ steps.version.outputs.name }}
-          # Explicit, so a manual run creates the tag instead of failing for
-          # want of one.
-          tag_name: ${{ steps.version.outputs.tag }}
-          files: ${{ steps.apk.outputs.path }}
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.name, '-') }}
-          body: |
-            **SHA-256:** `${{ steps.apk.outputs.sha }}`
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
+          APK: ${{ steps.apk.outputs.path }}
+          SHA256: ${{ steps.apk.outputs.sha }}
+          SIZE: ${{ steps.apk.outputs.size }}
+        run: |
+          set -euo pipefail
 
-            **Size:** ${{ steps.apk.outputs.size }} bytes
+          cat > release-notes.md <<NOTES
+          **SHA-256:** \`$SHA256\`
 
-            ## Install
+          **Size:** $SIZE bytes
 
-            Download the APK below and open it on your phone. You will need to
-            allow installing from unknown sources.
+          ## Install
 
-            If the install fails with *"There was a problem parsing the
-            package"*, the download was almost certainly truncated - check the
-            file size against the figure above and download it again.
+          Download the APK below and open it on your phone. You will need to
+          allow installing from unknown sources.
 
-            Requires **Android 11 (API 30)** or newer, on an **arm64** device.
-            An older phone reports this as a parsing error rather than a
-            version mismatch, so check the Android version first if the
-            install fails.
+          If the install fails with *"There was a problem parsing the
+          package"*, the download was almost certainly truncated - check the
+          file size against the figure above and download it again.
 
-            After first launch the app asks for *All files access*, which it
-            needs to browse and search storage. Grant it in the Settings page
-            that opens, then return to the app.
+          Requires **Android 11 (API 30)** or newer, on an **arm64** device.
+          An older phone reports this as a parsing error rather than a
+          version mismatch, so check the Android version first if the
+          install fails.
+
+          After first launch the app asks for *All files access*, which it
+          needs to browse and search storage. Grant it in the Settings page
+          that opens, then return to the app.
+          NOTES
+
+          # A pre-release is anything whose version carries a suffix, such as
+          # 0.3.0-beta1.
+          PRERELEASE=""
+          case "$NAME" in *-*) PRERELEASE="--prerelease" ;; esac
+
+          # Created or updated, so a re-run after a failed upload finishes the
+          # job rather than stopping because the release already exists - which
+          # is exactly the state the last run left behind.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; updating it."
+            gh release edit "$TAG" \
+              --title "File Manager $NAME" \
+              --notes-file release-notes.md \
+              --draft=false
+          else
+            echo "Creating release $TAG."
+            # shellcheck disable=SC2086
+            gh release create "$TAG" \
+              --title "File Manager $NAME" \
+              --notes-file release-notes.md \
+              $PRERELEASE
+          fi
+
+          echo "Uploading $APK"
+          gh release upload "$TAG" "$APK" --clobber
+
+          # The whole point of this step. A release with no APK in it looks
+          # like success from the run page and is useless to anyone following
+          # the link, so it is checked rather than assumed.
+          echo "Verifying the asset is attached"
+          ATTACHED=$(gh release view "$TAG" --json assets \
+            --jq '.assets[].name' | tr '\n' ' ')
+          echo "Assets: $ATTACHED"
+          case "$ATTACHED" in
+            *"$APK"*) echo "Published $APK to $TAG" ;;
+            *)
+              echo "::error::The release was created but $APK is not attached to it."
+              exit 1 ;;
+          esac
 
       # Writes a panel at the top of the run page. Whether a release was
       # published has been non-obvious three times now; this states it
@@ -416,11 +466,23 @@ jobs:
               echo "one first."
             fi
             echo ""
-            if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
-              echo "Published as a release: <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}>"
-            else
-              echo "**Not published as a release.** This was a manual run with"
-              echo "*Publish a GitHub Release* unticked, so the APK is attached to this"
-              echo "run as a build artifact instead - see the Artifacts section below."
-            fi
+            # Reads what the publish step actually did, not what was asked
+            # for. This said "Published as a release" while the upload was
+            # failing, which is the most misleading thing it could have said:
+            # the link it printed led to a release with no APK in it.
+            case "${{ steps.publish.outcome }}" in
+              success)
+                echo "Published as a release: <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}>"
+                ;;
+              failure)
+                echo "**Publishing failed.** The APK was built and is attached to"
+                echo "this run as an artifact, but the release does not have it."
+                echo "See the Publish step above."
+                ;;
+              *)
+                echo "**Not published as a release.** This was a manual run with"
+                echo "*Publish a GitHub Release* unticked, so the APK is attached to this"
+                echo "run as a build artifact instead - see the Artifacts section below."
+                ;;
+            esac
           } >> "$GITHUB_STEP_SUMMARY"
