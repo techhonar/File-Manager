@@ -39,6 +39,12 @@ pub struct SearchPage {
     /// True for the last page of a walk, so the caller can stop showing
     /// progress without a second callback for it.
     pub finished: bool,
+    /// Whether everything that matched is still held.
+    ///
+    /// False once the retention cap is reached and the oldest matches start
+    /// being dropped. Narrowing is only sound while this is true: after that,
+    /// filtering what is held would quietly answer from a subset.
+    pub complete: bool,
 }
 
 /// Receives pages while the walk runs.
@@ -55,8 +61,21 @@ struct Accumulated {
     /// Unordered. Ordering happens when a page is taken, which is a handful of
     /// times per walk rather than once per batch.
     found: Vec<FileEntry>,
+    /// Everything that matched, including what has since been dropped.
+    total: u64,
+    /// Set once the cap has forced anything out.
+    trimmed: bool,
     last_page: Option<Instant>,
 }
+
+/// How many entries a session keeps.
+///
+/// Held results are what makes narrowing free, but they are also the largest
+/// thing this app keeps in memory: about a third of a kilobyte each once the
+/// path and name are counted. Unbounded, a query matching every photo on a
+/// full phone would hold tens of megabytes for as long as the screen is open.
+/// Twenty thousand is far more than is ever displayed and costs a few.
+const RETAIN_LIMIT: usize = 20_000;
 
 /// One search screen's worth of state.
 #[derive(uniffi::Object, Default)]
@@ -85,7 +104,9 @@ impl SearchSession {
     ) -> Result<()> {
         {
             let mut held = self.inner.lock().unwrap();
-            held.found.clear();
+            held.found = Vec::new();
+            held.total = 0;
+            held.trimmed = false;
             held.last_page = Some(Instant::now());
         }
 
@@ -94,7 +115,19 @@ impl SearchSession {
         crate::search::walk_matching(&roots, &filter, cancel.clone(), |batch| {
             let page = {
                 let mut held = self.inner.lock().unwrap();
+                held.total += batch.len() as u64;
                 held.found.extend(batch);
+
+                // Trimmed in bulk rather than on every batch: partitioning is
+                // linear, so doing it once per doubling keeps the amortised
+                // cost per entry constant.
+                if held.found.len() > RETAIN_LIMIT * 2 {
+                    let keep = RETAIN_LIMIT;
+                    held.found
+                        .select_nth_unstable_by(keep, |a, b| b.modified_ms.cmp(&a.modified_ms));
+                    held.found.truncate(keep);
+                    held.trimmed = true;
+                }
 
                 let due = held
                     .last_page
@@ -103,14 +136,24 @@ impl SearchSession {
                     return;
                 }
                 held.last_page = Some(Instant::now());
-                take_page(&mut held.found, page_size, false)
+                let (total, complete) = (held.total, !held.trimmed);
+                take_page(&mut held.found, page_size, false, total, complete)
             };
             deliver(page);
         })?;
 
         let final_page = {
             let mut held = self.inner.lock().unwrap();
-            take_page(&mut held.found, page_size, true)
+            // One last trim, so what is held afterwards is bounded whatever
+            // the walk found.
+            if held.found.len() > RETAIN_LIMIT {
+                held.found
+                    .select_nth_unstable_by(RETAIN_LIMIT, |a, b| b.modified_ms.cmp(&a.modified_ms));
+                held.found.truncate(RETAIN_LIMIT);
+                held.trimmed = true;
+            }
+            let (total, complete) = (held.total, !held.trimmed);
+            take_page(&mut held.found, page_size, true, total, complete)
         };
         deliver(final_page);
         Ok(())
@@ -132,7 +175,9 @@ impl SearchSession {
             .cloned()
             .collect();
 
-        take_page(&mut matches, page_size, true)
+        let total = matches.len() as u64;
+        let complete = !held.trimmed;
+        take_page(&mut matches, page_size, true, total, complete)
     }
 
     /// Drop entries for files that have gone.
@@ -155,6 +200,8 @@ impl SearchSession {
     pub fn clear(&self) {
         let mut held = self.inner.lock().unwrap();
         held.found = Vec::new();
+        held.total = 0;
+        held.trimmed = false;
         held.last_page = None;
     }
 }
@@ -164,8 +211,13 @@ impl SearchSession {
 /// `select_nth_unstable_by` partitions in linear time so only the page itself
 /// has to be sorted. Sorting all fifty thousand to show the first few hundred
 /// is most of the work for none of the benefit.
-fn take_page(all: &mut [FileEntry], page_size: u32, finished: bool) -> SearchPage {
-    let total = all.len() as u64;
+fn take_page(
+    all: &mut [FileEntry],
+    page_size: u32,
+    finished: bool,
+    total: u64,
+    complete: bool,
+) -> SearchPage {
     let wanted = (page_size as usize).min(all.len());
 
     if wanted < all.len() {
@@ -178,5 +230,6 @@ fn take_page(all: &mut [FileEntry], page_size: u32, finished: bool) -> SearchPag
         entries: page.to_vec(),
         total,
         finished,
+        complete,
     }
 }

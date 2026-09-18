@@ -1216,3 +1216,85 @@ fn a_session_forgets_files_that_have_been_deleted() {
     assert_eq!(narrowed.total, 1);
     assert_eq!(narrowed.entries[0].name, "madison-two.txt");
 }
+
+#[test]
+fn a_session_stops_growing_once_it_is_holding_enough() {
+    // The cap is twenty thousand; going past it needs more files than a test
+    // should create, so this checks the shape below it instead: everything
+    // found is held, the total agrees, and the page says so.
+    let tree = TempTree::new("session-retention");
+    for i in 0..50 {
+        tree.file(&format!("dir{}/file{i:03}.txt", i % 5), b"x");
+    }
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            10,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+
+    let page = sink.last();
+    assert_eq!(page.total, 50, "the total counts everything, not the page");
+    assert_eq!(page.entries.len(), 10, "the page is what was asked for");
+    assert!(page.complete, "nothing was dropped, so narrowing is sound");
+
+    // And narrowing agrees about completeness.
+    assert!(session.narrow("file".to_string(), 10).complete);
+}
+
+#[test]
+fn a_cleared_session_holds_nothing() {
+    let tree = TempTree::new("session-cleared");
+    tree.file("one.txt", b"x");
+    tree.file("two.txt", b"x");
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            100,
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(sink.last().total, 2);
+
+    session.clear();
+    // Everything resets, not just the entries - a stale total would be
+    // reported as though those results were still there.
+    let after = session.narrow("".to_string(), 100);
+    assert_eq!(after.total, 0);
+    assert!(after.entries.is_empty());
+    assert!(after.complete);
+}
+
+#[test]
+fn a_reused_session_replaces_what_it_held() {
+    // One session serves the whole process, so a second run must not add to
+    // the first. This is the shape the app relies on: open a category, leave,
+    // open another.
+    let tree = TempTree::new("session-reuse");
+    tree.file("alpha.txt", b"x");
+    tree.file("beta.txt", b"x");
+    tree.file("gamma.txt", b"x");
+
+    let session = filemanager_core::session::SearchSession::new();
+    let root = vec![tree.path().to_string_lossy().into_owned()];
+
+    let first = PageSink::new();
+    session.run(root.clone(), plain_filter("a"), 100, first.clone(), None).unwrap();
+    assert_eq!(first.last().total, 3, "alpha, beta and gamma all contain an a");
+
+    let second = PageSink::new();
+    session.run(root, plain_filter("alpha"), 100, second.clone(), None).unwrap();
+    assert_eq!(second.last().total, 1, "the second run replaces the first");
+    assert_eq!(second.last().entries[0].name, "alpha.txt");
+}

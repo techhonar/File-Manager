@@ -19,7 +19,9 @@ import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SearchPage
+import uniffi.filemanager_core.SearchSession
 import uniffi.filemanager_core.SearchObserver
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class SearchState(
@@ -83,6 +85,14 @@ class SearchViewModel(
     private val clipboard: FileClipboard,
     private val settings: AppSettings,
     private val roots: List<String>,
+    /**
+     * Shared with the process, not owned by this screen.
+     *
+     * See FileManagerApp: one was created per screen, each holding the
+     * results it found, and they were only released if the view model was
+     * cleared and a collector then got round to the object behind it.
+     */
+    private val session: SearchSession,
 ) : ViewModel() {
 
     // Seeded at construction rather than in an init block: properties are
@@ -104,16 +114,6 @@ class SearchViewModel(
      * results from the previous query would land in the new query's list.
      */
     private val generation = AtomicLong(0)
-
-    /**
-     * Where the results live: in Rust, not here.
-     *
-     * This used to hold every match twice - once merged newest-first for the
-     * list, once more as a cache so another keystroke could narrow without
-     * walking again - and rebuilt the first of those for every batch of
-     * sixty-four. The session does both, and hands over a page.
-     */
-    private val session = repository.newSearchSession()
 
     /**
      * What the last completed walk searched for.
@@ -269,9 +269,15 @@ class SearchViewModel(
 
             // Pages arrive already ordered newest-first and already capped, so
             // there is nothing to merge, sort or accumulate on this side.
+            // Atomic because pages are delivered from the walk's own threads.
+            // The last one comes from the calling thread, so a plain var would
+            // in practice be read correctly - but relying on that is the kind
+            // of reasoning that stops being true when the code moves.
+            val everythingHeld = AtomicBoolean(true)
             val observer = object : SearchObserver {
                 override fun onPage(page: SearchPage) {
                     if (generation.get() != mine) return
+                    everythingHeld.set(page.complete)
                     _state.update {
                         it.withResults(page.entries).copy(
                             total = page.total.toLong(),
@@ -307,7 +313,11 @@ class SearchViewModel(
             }
             // Only a walk that ran to completion holds every match; anything
             // cut short would make later narrowing silently drop results.
-            searchedFor = if (token.isCancelled()) {
+            // Only when the walk finished and the session still holds every
+            // match. Past its retention cap the oldest are dropped, and
+            // narrowing over what is left would answer from a subset while
+            // looking like the whole thing.
+            searchedFor = if (token.isCancelled() || !everythingHeld.get()) {
                 null
             } else {
                 SearchCriteria(current.query, current.category)
@@ -325,8 +335,10 @@ class SearchViewModel(
 
     override fun onCleared() {
         cancelSearch()
-        // A scan of the whole device would otherwise stay in memory for the
-        // life of the process, which is not this screen's to hold.
+        // Emptied, not destroyed: the session outlives this screen, but what
+        // it found does not need to. Leaving several megabytes of results
+        // behind every time a category is closed is what made the app slower
+        // the more it was used.
         session.clear()
         super.onCleared()
     }

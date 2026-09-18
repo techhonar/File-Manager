@@ -16,6 +16,7 @@ import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.remote.RemoteConnections
 import com.filemanager.app.data.remote.RemoteServers
+import uniffi.filemanager_core.SearchSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +41,22 @@ class FileManagerApp : Application(), ImageLoaderFactory {
 
     /** Favourites and pinned paths, shared by every screen that shows files. */
     val paths: PathPrefs by lazy { PathPrefs(this) }
+
+    /**
+     * The one search session for the process.
+     *
+     * Held here rather than made per screen. A session keeps the results it
+     * found so that narrowing costs no disk, which is several megabytes on a
+     * full device, and one was being created every time a category was
+     * opened. Releasing them depended on the view model being cleared and on
+     * a garbage collector getting round to the Rust object behind it, so
+     * opening and closing categories left memory behind and the app grew
+     * slower the longer it was used.
+     *
+     * There is only ever one search screen, and starting a search replaces
+     * whatever the session held, so one is all that is needed.
+     */
+    val searchSession: SearchSession by lazy { SearchSession() }
 
     /** Saved network locations, and the live connections to them. */
     val remoteServers: RemoteServers by lazy { RemoteServers(this) }

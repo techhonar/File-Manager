@@ -12,6 +12,7 @@ import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.data.remote.RemoteServer
 import com.filemanager.app.data.remote.RemoteServers
+import uniffi.filemanager_core.SearchSession
 
 /**
  * Constructs ViewModels that need arguments (a start path, the volume list).
@@ -33,6 +34,8 @@ class ViewModelFactory(
     private val hasRemovableSlot: Boolean = false,
     /** Null on screens that have nothing to do with network storage, which is
      *  most of them - constructing the clients costs a socket. */
+    /** The process-wide search session; see FileManagerApp. */
+    private val searchSession: SearchSession? = null,
     private val remoteServers: RemoteServers? = null,
     private val remoteRepository: RemoteRepository? = null,
     /** Which server the remote browser should open. */
@@ -56,7 +59,13 @@ class ViewModelFactory(
             ) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
-            SearchViewModel(repository, clipboard, settings, volumes.map { it.path }) as T
+            SearchViewModel(
+                repository = repository,
+                clipboard = clipboard,
+                settings = settings,
+                roots = volumes.map { it.path },
+                session = requireNotNull(searchSession) { "searchSession not supplied" },
+            ) as T
 
         modelClass.isAssignableFrom(StorageViewModel::class.java) ->
             StorageViewModel(repository, primaryPath) as T

@@ -277,15 +277,6 @@ class FileRepository(
      * The sink is called from Rust worker threads, not the caller's - whatever
      * it touches has to be safe for that.
      */
-    /**
-     * A search that keeps its results in Rust.
-     *
-     * One per search screen, cleared when it closes. See SearchSession: what
-     * crosses the boundary is a page of a few hundred, not everything the walk
-     * found, and nothing here has to merge or re-sort what arrives.
-     */
-    fun newSearchSession(): SearchSession = SearchSession()
-
     suspend fun runSearch(
         session: SearchSession,
         roots: List<String>,
