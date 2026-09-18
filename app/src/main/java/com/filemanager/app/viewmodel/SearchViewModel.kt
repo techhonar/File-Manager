@@ -216,8 +216,7 @@ class SearchViewModel(
             .filter { it.name.contains(query, ignoreCase = true) }
 
         _state.update {
-            it.copy(
-                results = filtered,
+            it.withResults(filtered).copy(
                 isSearching = false,
                 hasSearched = true,
                 resultsEpoch = it.resultsEpoch + 1,
@@ -232,7 +231,7 @@ class SearchViewModel(
         val current = _state.value
         if (current.query.isBlank() && current.category == null) {
             _state.update {
-                it.copy(results = emptyList(), hasSearched = false, isSearching = false)
+                it.withResults(emptyList()).copy(hasSearched = false, isSearching = false)
             }
             return
         }
@@ -249,9 +248,8 @@ class SearchViewModel(
             val token = CancelToken()
             cancelToken = token
             _state.update {
-                it.copy(
+                it.withResults(emptyList()).copy(
                     isSearching = true,
-                    results = emptyList(),
                     resultsEpoch = it.resultsEpoch + 1,
                 )
             }
@@ -278,7 +276,7 @@ class SearchViewModel(
                     val snapshot = synchronized(accumulatedLock) {
                         mergeNewestFirst(entries)
                     }
-                    _state.update { it.copy(results = snapshot, hasSearched = true) }
+                    _state.update { it.withResults(snapshot).copy(hasSearched = true) }
                 }
 
                 override fun onScanned(count: ULong) = Unit
@@ -291,8 +289,7 @@ class SearchViewModel(
                     // list simply stops growing.
                     val ordered = synchronized(accumulatedLock) { accumulated.toList() }
                     _state.update {
-                        it.copy(
-                            results = ordered,
+                        it.withResults(ordered).copy(
                             isSearching = false,
                             hasSearched = true,
                         )
@@ -355,6 +352,27 @@ class SearchViewModel(
 
     /** Enter selection mode with nothing ticked, from the overflow menu. */
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
+
+    /**
+     * Replace the results, dropping ticks for anything no longer among them.
+     *
+     * The selection used to survive a change of query untouched. Ticking three
+     * files, typing another letter, and pressing Delete deleted the three that
+     * were no longer on screen - and the count in the title claimed they were.
+     *
+     * The emptiness check is not only tidiness: this runs on every batch of a
+     * walk that can deliver hundreds, and building the set of visible paths
+     * costs a pass over everything found so far.
+     */
+    private fun SearchState.withResults(next: List<FileEntry>): SearchState = copy(
+        results = next,
+        selected = if (selected.isEmpty()) {
+            selected
+        } else {
+            val visible = next.mapTo(HashSet(next.size)) { it.path }
+            selected.filterTo(HashSet()) { it in visible }
+        },
+    )
 
     /**
      * Which stored layout this screen is currently showing.
