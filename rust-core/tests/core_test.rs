@@ -1111,6 +1111,7 @@ fn a_session_returns_a_page_newest_first_and_the_true_total() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter(""),
             5,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1140,6 +1141,7 @@ fn a_session_narrows_without_walking_again() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter("ma"),
             100,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1177,6 +1179,7 @@ fn a_session_delivers_something_before_the_walk_ends() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter(""),
             50,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1202,6 +1205,7 @@ fn a_session_forgets_files_that_have_been_deleted() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter("madison"),
             100,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1234,6 +1238,7 @@ fn a_session_stops_growing_once_it_is_holding_enough() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter(""),
             10,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1261,6 +1266,7 @@ fn a_cleared_session_holds_nothing() {
             vec![tree.path().to_string_lossy().into_owned()],
             plain_filter(""),
             100,
+            String::new(),
             sink.clone(),
             None,
         )
@@ -1290,11 +1296,138 @@ fn a_reused_session_replaces_what_it_held() {
     let root = vec![tree.path().to_string_lossy().into_owned()];
 
     let first = PageSink::new();
-    session.run(root.clone(), plain_filter("a"), 100, first.clone(), None).unwrap();
+    session.run(root.clone(), plain_filter("a"), 100, String::new(), first.clone(), None)
+        .unwrap();
     assert_eq!(first.last().total, 3, "alpha, beta and gamma all contain an a");
 
     let second = PageSink::new();
-    session.run(root, plain_filter("alpha"), 100, second.clone(), None).unwrap();
+    session.run(root, plain_filter("alpha"), 100, String::new(), second.clone(), None)
+        .unwrap();
     assert_eq!(second.last().total, 1, "the second run replaces the first");
     assert_eq!(second.last().entries[0].name, "alpha.txt");
+}
+
+#[test]
+fn a_finished_walk_is_remembered_for_next_time() {
+    let tree = TempTree::new("session-cache");
+    tree.file("one.jpg", b"x");
+    tree.file("two.jpg", b"x");
+    let root = vec![tree.path().to_string_lossy().into_owned()];
+
+    let session = filemanager_core::session::SearchSession::new();
+    assert!(session.cached("images".into()).is_none(), "nothing yet");
+
+    let sink = PageSink::new();
+    session
+        .run(root.clone(), plain_filter(""), 100, "images".into(), sink.clone(), None)
+        .unwrap();
+
+    let remembered = session.cached("images".into()).expect("should be cached");
+    assert_eq!(remembered.total, 2);
+    assert_eq!(remembered.entries.len(), 2);
+    assert!(remembered.finished);
+
+    // It outlives the results themselves. Closing the screen empties those;
+    // the point of the cache is that the next visit still has something.
+    session.clear();
+    assert_eq!(session.narrow("".into(), 100).total, 0, "results are gone");
+    assert_eq!(
+        session.cached("images".into()).map(|p| p.total),
+        Some(2),
+        "but what to show next time is not",
+    );
+
+    // A different key is a different list.
+    assert!(session.cached("video".into()).is_none());
+
+    session.forget_cached();
+    assert!(session.cached("images".into()).is_none());
+}
+
+#[test]
+fn an_empty_key_is_not_cached() {
+    // Free-text searches are not remembered: there is no bound on how many
+    // different ones get typed, and the cache would grow without one.
+    let tree = TempTree::new("session-cache-unkeyed");
+    tree.file("one.txt", b"x");
+
+    let session = filemanager_core::session::SearchSession::new();
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            100,
+            String::new(),
+            sink.clone(),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(sink.last().total, 1, "the walk still ran");
+    assert!(session.cached(String::new()).is_none(), "but nothing was filed");
+}
+
+#[test]
+fn a_cancelled_walk_is_not_remembered() {
+    let tree = TempTree::new("session-cache-cancelled");
+    for i in 0..40 {
+        tree.file(&format!("dir{}/f{i:02}.txt", i % 4), b"x");
+    }
+    let session = filemanager_core::session::SearchSession::new();
+    let token = filemanager_core::cancel::CancelToken::new();
+    token.cancel();
+
+    let sink = PageSink::new();
+    session
+        .run(
+            vec![tree.path().to_string_lossy().into_owned()],
+            plain_filter(""),
+            100,
+            "images".into(),
+            sink.clone(),
+            Some(token),
+        )
+        .unwrap();
+
+    // Whatever it happened to reach before stopping is not the answer, and
+    // showing it next time as though it were would be worse than nothing.
+    assert!(session.cached("images".into()).is_none());
+}
+
+#[test]
+fn files_sharing_a_timestamp_come_back_in_the_same_order_every_time() {
+    // Bulk-copied files share a timestamp to the millisecond. Picking the
+    // newest few of those is a tie, and a tie broken differently each time
+    // makes the list reshuffle on every refresh - visibly, because the cached
+    // rows are replaced by fresh ones that disagree about the order.
+    let tree = TempTree::new("session-stable-order");
+    let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    // Enough files across enough directories that the parallel walk delivers
+    // them in a different order each run, which is what exposes an unstable
+    // tie-break. A handful in one directory arrives the same way every time
+    // and proves nothing.
+    for i in 0..600 {
+        let path = tree.file(&format!("dir{}/file{i:03}.txt", i % 16), b"x");
+        let handle = fs::File::options().write(true).open(&path).unwrap();
+        handle.set_times(fs::FileTimes::new().set_modified(when)).unwrap();
+    }
+
+    let session = filemanager_core::session::SearchSession::new();
+    let root = vec![tree.path().to_string_lossy().into_owned()];
+
+    let orders: Vec<Vec<String>> = (0..6)
+        .map(|_| {
+            let sink = PageSink::new();
+            session
+                .run(root.clone(), plain_filter(""), 10, String::new(), sink.clone(), None)
+                .unwrap();
+            sink.last().entries.iter().map(|e| e.path.clone()).collect()
+        })
+        .collect();
+
+    for (index, order) in orders.iter().enumerate().skip(1) {
+        assert_eq!(&orders[0], order, "walk {index} disagreed with the first");
+    }
+    assert_eq!(orders[0].len(), 10);
 }
