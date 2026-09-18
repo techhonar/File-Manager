@@ -282,9 +282,21 @@ class FileRepository(
         roots: List<String>,
         filter: SearchFilter,
         pageSize: UInt,
+        cacheKey: String,
         observer: SearchObserver,
         cancel: CancelToken? = null,
-    ) = withContext(io) { session.run(roots, filter, pageSize, observer, cancel) }
+    ) = withContext(io) { session.run(roots, filter, pageSize, cacheKey, observer, cancel) }
+
+    /**
+     * What a category last showed, if it has been opened before.
+     *
+     * Dispatched rather than read inline: the entries have to be carried
+     * across the FFI, which is a couple of milliseconds here and several on a
+     * phone - enough to drop the frame the tap happens in, which is the one
+     * thing this was supposed to stop.
+     */
+    suspend fun cachedSearch(session: SearchSession, cacheKey: String): SearchPage? =
+        withContext(io) { session.cached(cacheKey) }
 
     /** Filter what the last search found. No disk, so no cancellation. */
     suspend fun narrowSearch(session: SearchSession, query: String, pageSize: UInt): SearchPage =

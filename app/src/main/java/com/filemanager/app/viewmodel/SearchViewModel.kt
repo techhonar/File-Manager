@@ -155,6 +155,7 @@ class SearchViewModel(
         }
         // Changing the filter can widen the set, so what is held cannot answer.
         searchedFor = null
+        showCached(_state.value.category, _state.value.query)
         scheduleWalk()
     }
 
@@ -168,6 +169,7 @@ class SearchViewModel(
     fun applyCategory(category: FileCategory) {
         _state.update { it.copy(category = category, viewMode = storedViewMode(category)) }
         searchedFor = null
+        showCached(category, _state.value.query)
         scheduleWalk()
     }
 
@@ -259,12 +261,19 @@ class SearchViewModel(
 
             val token = CancelToken()
             cancelToken = token
-            _state.update {
-                it.withResults(emptyList()).copy(
-                    isSearching = true,
-                    total = 0,
-                    resultsEpoch = it.resultsEpoch + 1,
-                )
+            // Cleared only when there is nothing worth keeping. With a
+            // cached list already on screen, emptying it here would produce
+            // the blank moment the cache exists to remove.
+            _state.update { current ->
+                if (current.results.isEmpty()) {
+                    current.withResults(emptyList()).copy(
+                        isSearching = true,
+                        total = 0,
+                        resultsEpoch = current.resultsEpoch + 1,
+                    )
+                } else {
+                    current.copy(isSearching = true)
+                }
             }
 
             // Pages arrive already ordered newest-first and already capped, so
@@ -302,7 +311,15 @@ class SearchViewModel(
             )
 
             val ran = runCatching {
-                repository.runSearch(session, roots, filter, PAGE_SIZE, observer, token)
+                repository.runSearch(
+                    session = session,
+                    roots = roots,
+                    filter = filter,
+                    pageSize = PAGE_SIZE,
+                    cacheKey = cacheKeyFor(current.category, current.query),
+                    observer = observer,
+                    cancel = token,
+                )
             }
 
             if (generation.get() != mine) return@launch
@@ -381,6 +398,49 @@ class SearchViewModel(
      * A category is its own list and keeps its own layout; no category is a
      * plain search, which keeps one of its own.
      */
+    /**
+     * Where a category's last results are filed, or empty for a free-text
+     * search.
+     *
+     * Only categories are remembered. They are a fixed handful and each is
+     * opened over and over; typed queries are unbounded in number and mostly
+     * typed once.
+     */
+    private fun cacheKeyFor(category: FileCategory?, query: String): String =
+        if (category != null && query.isBlank()) "category:${category.name}" else ""
+
+    /**
+     * Show what this category showed last time, while a fresh walk runs.
+     *
+     * These results are however old the last visit was, which is the trade:
+     * the screen starts with files on it instead of a spinner, and corrects
+     * itself a moment later. On a full device that spinner was several
+     * seconds of every visit to the same category.
+     */
+    private fun showCached(category: FileCategory?, query: String) {
+        val key = cacheKeyFor(category, query)
+        if (key.isEmpty()) return
+
+        viewModelScope.launch {
+            val page = repository.cachedSearch(session, key) ?: return@launch
+            _state.update { current ->
+                // Only into an empty list. The walk may have got there first -
+                // it is faster than this on a small folder - and replacing
+                // fresh results with remembered ones would be going backwards.
+                if (current.results.isNotEmpty()) return@update current
+                // And only if the screen is still showing what was asked for.
+                if (current.category != category || current.query != query) {
+                    return@update current
+                }
+                current.withResults(page.entries).copy(
+                    total = page.total.toLong(),
+                    hasSearched = true,
+                    resultsEpoch = current.resultsEpoch + 1,
+                )
+            }
+        }
+    }
+
     private fun scopeFor(category: FileCategory?): ViewScope =
         category?.let { ViewScope.category(it.name) } ?: ViewScope.Search
 

@@ -19,6 +19,7 @@ use crate::cancel::CancelToken;
 use crate::errors::Result;
 use crate::search::SearchFilter;
 use crate::types::FileEntry;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -77,10 +78,29 @@ struct Accumulated {
 /// Twenty thousand is far more than is ever displayed and costs a few.
 const RETAIN_LIMIT: usize = 20_000;
 
+/// How many keys the cache holds.
+///
+/// One per category and nothing else - free-text searches are not cached,
+/// because there is no bound on how many different ones someone types. Eight
+/// leaves room for the categories that exist with a little spare.
+const CACHE_KEYS: usize = 8;
+
+/// How many entries are remembered per key.
+///
+/// Smaller than a page on purpose. This one is read on the way into a screen,
+/// and every entry costs about seven microseconds to hand over - a full page
+/// of a thousand is a dropped frame on the tap. Two hundred fills any screen
+/// with room to scroll, and the fresh walk replaces it within the second.
+const CACHE_PAGE: usize = 200;
+
 /// One search screen's worth of state.
 #[derive(uniffi::Object, Default)]
 pub struct SearchSession {
     inner: Mutex<Accumulated>,
+    /// The last page shown for a category, kept so that opening it again has
+    /// something to show at once. Outlives the screen deliberately: it is the
+    /// screen closing and opening that this exists for.
+    cache: Mutex<HashMap<String, SearchPage>>,
 }
 
 #[uniffi::export]
@@ -93,12 +113,16 @@ impl SearchSession {
     /// Walk, collecting matches and handing over pages as they accumulate.
     ///
     /// Replaces anything a previous run found. Returns when the walk is done;
-    /// the last page arrives through `observer` with `finished` set.
+    /// the last page arrives through `observer` with `finished` set, and is
+    /// filed under `cache_key` unless that is empty.
     pub fn run(
         &self,
         roots: Vec<String>,
         filter: SearchFilter,
         page_size: u32,
+        // cache_key: where to file the finished page so the next visit has
+        // something to show at once. Empty means do not cache this one.
+        cache_key: String,
         observer: Arc<dyn SearchObserver>,
         cancel: Option<Arc<CancelToken>>,
     ) -> Result<()> {
@@ -122,10 +146,7 @@ impl SearchSession {
                 // linear, so doing it once per doubling keeps the amortised
                 // cost per entry constant.
                 if held.found.len() > RETAIN_LIMIT * 2 {
-                    let keep = RETAIN_LIMIT;
-                    held.found
-                        .select_nth_unstable_by(keep, |a, b| b.modified_ms.cmp(&a.modified_ms));
-                    held.found.truncate(keep);
+                    trim_to(&mut held.found, RETAIN_LIMIT);
                     held.trimmed = true;
                 }
 
@@ -147,16 +168,45 @@ impl SearchSession {
             // One last trim, so what is held afterwards is bounded whatever
             // the walk found.
             if held.found.len() > RETAIN_LIMIT {
-                held.found
-                    .select_nth_unstable_by(RETAIN_LIMIT, |a, b| b.modified_ms.cmp(&a.modified_ms));
-                held.found.truncate(RETAIN_LIMIT);
+                trim_to(&mut held.found, RETAIN_LIMIT);
                 held.trimmed = true;
             }
             let (total, complete) = (held.total, !held.trimmed);
             take_page(&mut held.found, page_size, true, total, complete)
         };
+        // Cached only on a walk that finished. A cancelled one holds
+        // whatever it happened to reach, and showing that next time as though
+        // it were the answer would be worse than showing nothing.
+        if !cache_key.is_empty() && cancel.as_ref().map_or(true, |t| !t.is_cancelled()) {
+            let mut cache = self.cache.lock().unwrap();
+            if cache.len() >= CACHE_KEYS && !cache.contains_key(&cache_key) {
+                // Nothing clever: the keys are categories, so this only ever
+                // fires if that set grows, and any of them is as good to drop.
+                if let Some(victim) = cache.keys().next().cloned() {
+                    cache.remove(&victim);
+                }
+            }
+            let mut remembered = final_page.clone();
+            remembered.entries.truncate(CACHE_PAGE);
+            cache.insert(cache_key, remembered);
+        }
+
         deliver(final_page);
         Ok(())
+    }
+
+    /// What was last shown for this key, if anything.
+    ///
+    /// Stale by definition - it is whatever the last walk found, which may
+    /// have been a while ago. The caller shows it while a fresh walk runs, so
+    /// that opening a category does not start with an empty screen every time.
+    pub fn cached(&self, cache_key: String) -> Option<SearchPage> {
+        self.cache.lock().unwrap().get(&cache_key).cloned()
+    }
+
+    /// Drop everything remembered for every key.
+    pub fn forget_cached(&self) {
+        self.cache.lock().unwrap().clear();
     }
 
     /// Narrow what the last run found, without touching the disk.
@@ -206,6 +256,14 @@ impl SearchSession {
     }
 }
 
+/// Keep the newest `keep` entries, dropping the rest.
+fn trim_to(all: &mut Vec<FileEntry>, keep: usize) {
+    all.select_nth_unstable_by(keep, |a, b| {
+        b.modified_ms.cmp(&a.modified_ms).then_with(|| a.path.cmp(&b.path))
+    });
+    all.truncate(keep);
+}
+
 /// The newest `page_size` of `all`, ordered, without sorting the rest.
 ///
 /// `select_nth_unstable_by` partitions in linear time so only the page itself
@@ -220,11 +278,19 @@ fn take_page(
 ) -> SearchPage {
     let wanted = (page_size as usize).min(all.len());
 
+    // Newest first, and by path where that ties. The tie-break is not
+    // cosmetic: bulk-copied files share a timestamp to the millisecond, and
+    // without it two runs over the same unchanged folder pick different
+    // members of the tie and the list visibly reshuffles on every refresh.
+    let newest_first = |a: &FileEntry, b: &FileEntry| {
+        b.modified_ms.cmp(&a.modified_ms).then_with(|| a.path.cmp(&b.path))
+    };
+
     if wanted < all.len() {
-        all.select_nth_unstable_by(wanted, |a, b| b.modified_ms.cmp(&a.modified_ms));
+        all.select_nth_unstable_by(wanted, newest_first);
     }
     let page = &mut all[..wanted];
-    page.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.modified_ms));
+    page.sort_unstable_by(newest_first);
 
     SearchPage {
         entries: page.to_vec(),
