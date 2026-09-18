@@ -177,6 +177,7 @@ fun FileManagerRoot(
             primaryPath = primaryPath,
             ownerAppOf = ownerAppOf,
             hasRemovableSlot = hasRemovableSlot,
+            searchSession = app.searchSession,
             remoteServers = app.remoteServers,
             remoteRepository = remoteRepository,
             ftpSettings = app.ftpSettings,
