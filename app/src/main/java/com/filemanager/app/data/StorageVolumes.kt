@@ -60,6 +60,18 @@ object StorageVolumes {
         return volumes
     }
 
+    /**
+     * Whether the storage [path] lives on is mounted right now.
+     *
+     * Asked at the moment it matters rather than read from [list], which is
+     * taken once at startup and cannot know that a card has since come out.
+     * A path on no known volume reports false.
+     */
+    fun isMounted(path: String): Boolean = when (Environment.getExternalStorageState(File(path))) {
+        Environment.MEDIA_MOUNTED, Environment.MEDIA_MOUNTED_READ_ONLY -> true
+        else -> false
+    }
+
     /** The path everything defaults to: /storage/emulated/0. */
     fun primaryPath(): String = Environment.getExternalStorageDirectory().absolutePath
 

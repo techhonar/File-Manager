@@ -156,16 +156,19 @@ class StorageViewModel(
             // and a callback firing every few hundred files to update state
             // nothing reads is a JNI hop for nothing.
             runCatching { repository.analyze(rootPath, 50u, null, token) }
-                .onSuccess { analysis ->
+                .onSuccess { result ->
+                    // A scan that has since been replaced says nothing about
+                    // whether the current one is still loading.
+                    if (analysis !== token) return@onSuccess
                     _state.update {
                         it.copy(
                             summary = StorageSummary(
-                                totalBytes = analysis.totalBytes,
-                                freeBytes = analysis.freeBytes,
-                                scannedBytes = analysis.scannedBytes,
-                                byCategory = analysis.byCategory,
+                                totalBytes = result.totalBytes,
+                                freeBytes = result.freeBytes,
+                                scannedBytes = result.scannedBytes,
+                                byCategory = result.byCategory,
                             ),
-                            largest = analysis.largest,
+                            largest = result.largest,
                             isLoading = false,
                         )
                     }
@@ -173,6 +176,7 @@ class StorageViewModel(
                 .onFailure {
                     // A cancelled scan lands here too, which is the expected
                     // path when the user leaves the screen.
+                    if (analysis !== token) return@onFailure
                     _state.update { s -> s.copy(isLoading = false) }
                 }
         }
@@ -193,12 +197,14 @@ class StorageViewModel(
         viewModelScope.launch {
             val progress = object : ProgressListener {
                 override fun onProgress(done: ULong, total: ULong, currentPath: String) {
+                    if (duplicateScan !== token) return
                     _state.update { it.copy(duplicateProgress = "Checking $done of $total groups") }
                 }
             }
 
             runCatching { repository.duplicates(rootPath, MIN_DUPLICATE_SIZE, progress, token) }
                 .onSuccess { groups ->
+                    if (duplicateScan !== token) return@onSuccess
                     _state.update {
                         it.copy(
                             duplicates = groups,
@@ -208,6 +214,7 @@ class StorageViewModel(
                     }
                 }
                 .onFailure {
+                    if (duplicateScan !== token) return@onFailure
                     _state.update { s -> s.copy(isScanningDuplicates = false, duplicateProgress = "") }
                 }
         }

@@ -56,11 +56,15 @@ class RecentViewModel(
         viewModelScope.launch {
             runCatching { repository.recent(rootPath, days = 7u, limit = 200u, cancel = token) }
                 .onSuccess { entries ->
+                    // A scan that has since been replaced says nothing about
+                    // whether the current one is still loading.
+                    if (scan !== token) return@onSuccess
                     _state.update { it.copy(entries = entries, isLoading = false) }
                 }
                 .onFailure {
                     // Cancellation lands here too, which is the expected path
                     // when the user leaves the screen.
+                    if (scan !== token) return@onFailure
                     _state.update { it.copy(isLoading = false) }
                 }
         }

@@ -7,6 +7,7 @@ import com.filemanager.app.data.SortKeySetting
 import com.filemanager.app.data.ViewModeSetting
 import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.FolderWatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
@@ -189,6 +190,14 @@ class BrowserViewModel(
         return top + rest
     }
 
+    /**
+     * The listing in flight, loud or quiet. A newer one replaces it rather
+     * than racing it: pressing Up while a large folder was still being read
+     * let that folder's contents land last, under the parent's name, and a
+     * reload started before a change could land after one started after it.
+     */
+    private var listing: Job? = null
+
     fun load(path: String) {
         watch(path)
         _state.update {
@@ -201,9 +210,12 @@ class BrowserViewModel(
                 selectionActive = false,
             )
         }
-        viewModelScope.launch {
+        listing?.cancel()
+        listing = viewModelScope.launch {
             runCatching {
                 repository.list(path, _state.value.showHidden, _state.value.sort)
+            }.onFailure {
+                if (it is CancellationException) throw it
             }.onSuccess { entries ->
                 _state.update {
                     it.copy(
@@ -230,8 +242,21 @@ class BrowserViewModel(
      */
     private fun reloadQuietly() {
         val path = _state.value.path
-        viewModelScope.launch {
+        listing?.cancel()
+        listing = viewModelScope.launch {
             runCatching { repository.list(path, _state.value.showHidden, _state.value.sort) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    // It may have replaced a load that was still showing the
+                    // spinner, which then has to end somewhere.
+                    _state.update { current ->
+                        if (current.path != path || !current.isLoading) current
+                        else current.copy(
+                            isLoading = false,
+                            error = it.userMessage("Could not open folder"),
+                        )
+                    }
+                }
                 .onSuccess { entries ->
                     _state.update {
                         // Discard a result for a folder the user has left.
@@ -246,6 +271,7 @@ class BrowserViewModel(
                             val visible = next.mapTo(HashSet(next.size)) { e -> e.path }
                             it.copy(
                                 entries = next,
+                                isLoading = false,
                                 selected = it.selected.filterTo(HashSet()) { p -> p in visible },
                             )
                         }
