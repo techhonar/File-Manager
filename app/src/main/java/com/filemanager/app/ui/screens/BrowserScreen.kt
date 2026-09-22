@@ -307,9 +307,11 @@ fun BrowserScreen(
         val first = state.selected.firstOrNull()?.substringAfterLast('/').orEmpty()
         CompressDialog(
             itemCount = state.selected.size,
-            // Matches what the view model names the file, so the dialog is not
-            // promising one thing and writing another.
-            archiveName = first.substringBeforeLast('.', first) + ".zip",
+            // Asked of the view model, which writes it - so the dialog cannot
+            // promise one name and write another, and never names a zip that
+            // is already there.
+            archiveName = viewModel.compressDestination()?.name
+                ?: (first.substringBeforeLast('.', first) + ".zip"),
             onCompress = { password ->
                 viewModel.compressSelected(password)
                 showCompressDialog = false
@@ -349,7 +351,10 @@ fun BrowserScreen(
     state.extractTarget?.let { target ->
         ExtractDialog(
             archiveName = target.name,
-            destinationName = target.name.substringBeforeLast('.', target.name),
+            // From the view model, which checked the name is free. Worked out
+            // here it could promise a folder that already existed.
+            destinationName = state.extractDestination?.substringAfterLast('/')
+                ?: target.name.substringBeforeLast('.', target.name),
             needsPassword = state.extractNeedsPassword,
             wrongPassword = state.extractWrongPassword,
             onExtract = { password -> viewModel.extract(target.path, password) },

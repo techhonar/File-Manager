@@ -19,6 +19,7 @@ fun Throwable.userMessage(fallback: String): String = when (this) {
     is FileException.NotADirectory -> "That is not a folder"
     is FileException.Archive -> "This archive could not be read"
     is FileException.Cancelled -> "Cancelled"
+    is FileException.IntoItself -> "A folder cannot be copied or moved into itself"
     is FileException.Io -> message?.takeIf { it.isNotBlank() } ?: fallback
     else -> message?.takeIf { it.isNotBlank() } ?: fallback
 }

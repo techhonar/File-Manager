@@ -6,7 +6,6 @@
 //!   2. hash the first 16 KB   -- kills most same-size-different-content pairs
 //!   3. hash the whole file    -- only for what survives
 
-use std::cmp::Reverse;
 use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::Result;
 use crate::types::FileEntry;
@@ -46,7 +45,17 @@ pub fn find_duplicates(
     // Pass 1: bucket by size.
     let mut by_size: HashMap<u64, Vec<FileEntry>> = HashMap::new();
 
-    for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+    // Hidden folders pruned, the same as every other scan. Without it the
+    // walk went into the app's own trash, so a copy already deleted was
+    // offered as a duplicate of the one still in use - and trashing the
+    // "extra" could send the last live copy after it.
+    let walk = WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !crate::types::is_hidden_dir(e))
+        .filter_map(|e| e.ok());
+
+    for entry in walk {
         if let Some(ref token) = cancel {
             token.check()?;
         }
@@ -80,7 +89,18 @@ pub fn find_duplicates(
         .collect();
 
     let mut groups = groups;
-    groups.sort_by_key(|g| Reverse(g.wasted_bytes));
+    for group in &mut groups {
+        // The caller keeps the first file and trashes the rest, so which is
+        // first is a decision, not an accident of hash-map order. The oldest
+        // is the likeliest original; the path settles a tie so the same scan
+        // always gives the same answer.
+        group.files.sort_by(|a, b| {
+            a.modified_ms.cmp(&b.modified_ms).then_with(|| a.path.cmp(&b.path))
+        });
+    }
+    groups.sort_by(|a, b| {
+        b.wasted_bytes.cmp(&a.wasted_bytes).then_with(|| a.hash.cmp(&b.hash))
+    });
     Ok(groups)
 }
 
@@ -130,10 +150,14 @@ fn group_by_content(size: u64, files: &[FileEntry]) -> Vec<DuplicateGroup> {
 }
 
 fn hash_head(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let mut buffer = vec![0u8; HEAD_BYTES];
-    let read = file.read(&mut buffer).ok()?;
-    buffer.truncate(read);
+    let file = File::open(path).ok()?;
+    // Read until the sample is full or the file ends. A single read() may
+    // legally return less than asked for - Android's shared storage is a FUSE
+    // mount, where that is not hypothetical - and for a file no larger than
+    // the sample, this hash is treated as the hash of the whole file, so a
+    // short read there would call two different files identical.
+    let mut buffer = Vec::with_capacity(HEAD_BYTES);
+    file.take(HEAD_BYTES as u64).read_to_end(&mut buffer).ok()?;
     Some(blake3::hash(&buffer).to_hex().to_string())
 }
 

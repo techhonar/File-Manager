@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.freeName
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.isWrongPassword
 import com.filemanager.app.data.userMessage
@@ -77,6 +78,13 @@ data class BrowserState(
     val details: FileDetails? = null,
     /** Archive awaiting the user's confirmation before it is unpacked. */
     val extractTarget: FileEntry? = null,
+    /**
+     * The folder it will be unpacked into, decided when the dialog opens.
+     *
+     * Held so the dialog and the extraction agree - they used to work the
+     * name out separately, and neither checked whether it was taken.
+     */
+    val extractDestination: String? = null,
     val extractNeedsPassword: Boolean = false,
     val extractWrongPassword: Boolean = false,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
@@ -515,13 +523,23 @@ class BrowserViewModel(
      * empty string when the field is left alone, and that is a request for no
      * encryption rather than for encryption with nothing.
      */
+    /**
+     * Where compressing the selection would write, or null with nothing ticked.
+     *
+     * Named after the first item, the way most file managers do, and moved
+     * aside with a number if that is taken. Public so the confirmation dialog
+     * shows the name that will actually be written.
+     */
+    fun compressDestination(): File? {
+        val first = _state.value.selected.firstOrNull() ?: return null
+        return freeName(File(_state.value.path), File(first).nameWithoutExtension, "zip")
+    }
+
     fun compressSelected(password: String? = null) {
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
 
-        // Name the zip after the first item, the way most file managers do.
-        val base = File(paths.first()).nameWithoutExtension
-        val destination = File(_state.value.path, "$base.zip").absolutePath
+        val destination = compressDestination()?.absolutePath ?: return
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
@@ -560,6 +578,9 @@ class BrowserViewModel(
         _state.update {
             it.copy(
                 extractTarget = entry,
+                // Decided now, so the dialog names the folder that will
+                // actually be written. A couple of stat calls at most.
+                extractDestination = extractDestinationFor(entry.path).absolutePath,
                 extractNeedsPassword = false,
                 extractWrongPassword = false,
             )
@@ -576,25 +597,41 @@ class BrowserViewModel(
     fun dismissExtract() = _state.update {
         it.copy(
             extractTarget = null,
+            extractDestination = null,
             extractNeedsPassword = false,
             extractWrongPassword = false,
         )
     }
 
+    /** A folder beside the archive, named after it, that does not exist yet. */
+    private fun extractDestinationFor(archivePath: String): File {
+        val archive = File(archivePath)
+        return freeName(archive.parentFile ?: File("/"), archive.nameWithoutExtension)
+    }
+
     fun extract(archivePath: String, password: String? = null) {
-        val destination = File(
-            File(archivePath).parentFile,
-            File(archivePath).nameWithoutExtension,
-        ).absolutePath
+        // The folder the dialog promised. Worked out again only if the dialog
+        // was skipped, and never the plain archive name when that is taken.
+        val destination = _state.value.extractDestination
+            ?: extractDestinationFor(archivePath).absolutePath
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, extractTarget = null) }
             runCatching { repository.extract(archivePath, destination, password) }
                 .onSuccess {
+                    _state.update { s -> s.copy(extractDestination = null) }
                     _messages.value = "Extracted $it files"
                     refresh()
                 }
                 .onFailure { error ->
+                    // The folder is made before the first entry is read, so a
+                    // wrong password left an empty one behind - and the next
+                    // attempt, finding it taken, would have unpacked into
+                    // "name (1)" beside it. A folder with anything in it is a
+                    // partial extraction and stays, so it can be seen.
+                    File(destination).let { dir ->
+                        if (dir.isDirectory && dir.list()?.isEmpty() == true) dir.delete()
+                    }
                     _state.update { s -> s.copy(isLoading = false) }
                     // Matched on the exception type, not its text: a variant
                     // with no fields has an empty message, so a string test
@@ -608,6 +645,7 @@ class BrowserViewModel(
                             )
                         }
                     } else {
+                        _state.update { s -> s.copy(extractDestination = null) }
                         _messages.value = error.userMessage("Could not extract")
                     }
                 }
