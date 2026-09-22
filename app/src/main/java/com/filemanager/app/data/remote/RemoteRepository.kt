@@ -21,7 +21,7 @@ class RemoteRepository(
 
     suspend fun list(server: RemoteServer, path: String): List<RemoteEntry> =
         withContext(io) {
-            connections.connect(server).list(path)
+            connections.use(server) { it.list(path) }
                 // Folders first, then by name, which is what the local browser
                 // does and what the sort settings there default to.
                 .sortedWith(compareByDescending<RemoteEntry> { it.isDir }
@@ -46,28 +46,28 @@ class RemoteRepository(
             if (target.isFile && target.length() == entry.size && entry.size > 0) {
                 return@withContext target
             }
-            connections.connect(server).download(entry.path, target)
+            connections.use(server) { it.download(entry.path, target) }
             target
         }
 
     suspend fun download(server: RemoteServer, entry: RemoteEntry, to: File): Unit =
-        withContext(io) { connections.connect(server).download(entry.path, to) }
+        withContext(io) { connections.use(server) { it.download(entry.path, to) } }
 
     suspend fun upload(server: RemoteServer, from: File, toPath: String): Unit =
-        withContext(io) { connections.connect(server).upload(from, toPath) }
+        withContext(io) { connections.use(server) { it.upload(from, toPath) } }
 
     suspend fun delete(server: RemoteServer, entry: RemoteEntry): Unit =
-        withContext(io) { connections.connect(server).delete(entry.path, entry.isDir) }
+        withContext(io) { connections.use(server) { it.delete(entry.path, entry.isDir) } }
 
     suspend fun makeDirectory(server: RemoteServer, parent: String, name: String): Unit =
         withContext(io) {
-            connections.connect(server).makeDirectory(RemotePaths.join(parent, name))
+            connections.use(server) { it.makeDirectory(RemotePaths.join(parent, name)) }
         }
 
     suspend fun rename(server: RemoteServer, entry: RemoteEntry, newName: String): Unit =
         withContext(io) {
             val target = RemotePaths.join(RemotePaths.parent(entry.path), newName)
-            connections.connect(server).rename(entry.path, target)
+            connections.use(server) { it.rename(entry.path, target) }
         }
 
     /** Opens a throwaway connection and lists the base path. See

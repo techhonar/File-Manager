@@ -10,6 +10,8 @@ import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.data.remote.RemoteServer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -90,10 +92,20 @@ class RemoteBrowserViewModel(
         load(basePath)
     }
 
+    /**
+     * The listing in flight. Each new one replaces it: a folder opened and
+     * backed out of before its listing arrived used to land after the parent's,
+     * leaving the user in the folder they had just left.
+     */
+    private var loadJob: Job? = null
+
     fun load(path: String) {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null, selected = emptySet()) }
             runCatching { repository.list(_state.value.server, path) }
+                // A superseded listing is not a failure to report.
+                .onFailure { if (it is CancellationException) throw it }
                 .onSuccess { entries ->
                     _state.update {
                         it.copy(path = path, entries = entries, isLoading = false, error = null)
