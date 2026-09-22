@@ -112,10 +112,24 @@ class VideoThumbFetcher(
         }
     }
 
+    /**
+     * Written beside the destination and renamed into place. A truncated JPEG
+     * still decodes - with its lower part grey - so writing in place would let
+     * a process killed mid-write, or two tiles fetching the same video, leave
+     * a broken thumbnail that the read above never discards.
+     */
     private fun writeCache(destination: File, bitmap: Bitmap) {
-        destination.parentFile?.mkdirs()
-        destination.outputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        val dir = destination.parentFile ?: return
+        dir.mkdirs()
+        val partial = File.createTempFile(destination.nameWithoutExtension, ".part", dir)
+        try {
+            partial.outputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+            }
+            if (!partial.renameTo(destination)) partial.delete()
+        } catch (e: Exception) {
+            partial.delete()
+            throw e
         }
     }
 
@@ -161,7 +175,9 @@ class VideoThumbFetcher(
          */
         fun trimCache(context: Context, maxBytes: Long = 32L * 1024 * 1024) {
             val dir = File(context.cacheDir, "video-thumbs")
-            val files = dir.listFiles() ?: return
+            val (partials, files) = (dir.listFiles() ?: return).partition { it.extension == "part" }
+            // Left by a write the process did not live to finish.
+            partials.forEach { it.delete() }
             var total = files.sumOf { it.length() }
             if (total <= maxBytes) return
 

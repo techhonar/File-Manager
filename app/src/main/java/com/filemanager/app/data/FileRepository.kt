@@ -46,6 +46,7 @@ import uniffi.filemanager_core.trashRestore
 import uniffi.filemanager_core.trashSize
 import uniffi.filemanager_core.treeStats
 import java.io.File
+import java.nio.file.Files
 
 /**
  * The single place Kotlin talks to the Rust core.
@@ -147,7 +148,25 @@ class FileRepository(
     suspend fun rename(path: String, newName: String): Boolean = withContext(io) {
         val from = File(path)
         val to = File(from.parentFile, newName)
-        if (to.exists()) false else from.renameTo(to)
+        if (from.name == newName) return@withContext true
+        if (!to.exists()) return@withContext from.renameTo(to)
+
+        // Android's shared storage is case-insensitive, so renaming
+        // "photo.jpg" to "Photo.jpg" finds the new name already taken - by
+        // the file being renamed - and was refused as a clash. A different
+        // file really is a clash; the same file is a change of case.
+        val sameFile = runCatching {
+            Files.isSameFile(from.toPath(), to.toPath())
+        }.getOrDefault(false)
+        if (!sameFile) return@withContext false
+
+        // In two steps, because some case-insensitive filesystems treat a
+        // direct case-only rename as having nothing to do.
+        val step = File(from.parentFile, ".renaming-${System.nanoTime()}")
+        if (!from.renameTo(step)) return@withContext false
+        if (step.renameTo(to)) return@withContext true
+        step.renameTo(from) // put it back rather than leave it half-renamed
+        false
     }
 
     /**
@@ -165,6 +184,11 @@ class FileRepository(
         paths.mapNotNull { path ->
             val file = File(path)
             val name = file.name
+            // Hiding a mixed selection leaves the already-hidden ones alone.
+            // They used to get a second dot - ".notes" became "..notes" - and
+            // unhiding later took only one of them off, so the file stayed
+            // hidden however many times it was revealed.
+            if (!allHidden && name.startsWith(".")) return@mapNotNull path
             val newName = if (allHidden) name.removePrefix(".") else ".$name"
             // Refuse to strip a file down to nothing, and skip a rename that
             // would collide with something already there.

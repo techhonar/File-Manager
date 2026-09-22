@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.data.userMessage
 import com.filemanager.app.data.ftpd.FtpServerConfig
 import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
@@ -202,7 +203,10 @@ class FtpServerViewModel(
                         current.copy(
                             picker = current.picker.copy(
                                 isLoading = false,
-                                error = failure.message ?: "Could not open that folder",
+                                // userMessage: this listing comes from the
+                                // core, whose errors often have an empty
+                                // message - and `?:` catches null, not "".
+                                error = failure.userMessage("Could not open that folder"),
                             ),
                         )
                     }

@@ -40,21 +40,32 @@ object ShareFiles {
         // can act on rather than failing obscurely.
         if (files.size > MAX_FILES) return Result.TooMany(files.size)
 
-        val uris = files.map { file ->
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        // Guarded for the same reason as opening: FileProvider throws for a
+        // file outside its roots, and uncaught that closes the app. A file it
+        // cannot share is left out rather than failing the rest.
+        // Kept in pairs, so the type is always worked out from a file that is
+        // actually being sent.
+        val shared = files.mapNotNull { file ->
+            runCatching {
+                file to FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            }.getOrNull()
         }
+        if (shared.isEmpty()) return Result.NoFiles
 
-        val intent = if (uris.size == 1) {
+        val intent = if (shared.size == 1) {
             Intent(Intent.ACTION_SEND).apply {
-                type = mimeTypeOf(files.first())
-                putExtra(Intent.EXTRA_STREAM, uris.first())
+                type = mimeTypeOf(shared.first().first)
+                putExtra(Intent.EXTRA_STREAM, shared.first().second)
             }
         } else {
             Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                 // A mixed selection has no single type, so fall back to the
                 // wildcard rather than claiming one of them.
-                type = files.map(::mimeTypeOf).distinct().singleOrNull() ?: "*/*"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList<Uri>(uris))
+                type = shared.map { mimeTypeOf(it.first) }.distinct().singleOrNull() ?: "*/*"
+                putParcelableArrayListExtra(
+                    Intent.EXTRA_STREAM,
+                    ArrayList<Uri>(shared.map { it.second }),
+                )
             }
         }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

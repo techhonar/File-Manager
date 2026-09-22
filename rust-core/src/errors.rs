@@ -36,6 +36,14 @@ pub enum FileError {
     #[error("operation cancelled")]
     Cancelled,
 
+    /// A folder copied or moved into itself or one of its own subfolders.
+    ///
+    /// Its own variant rather than an Io string, because it is the user's
+    /// mistake to correct rather than the filesystem's failure to report, and
+    /// the message for it should say which.
+    #[error("cannot copy a folder into itself: {path}")]
+    IntoItself { path: String },
+
     #[error("io error: {detail}")]
     Io { detail: String },
 }

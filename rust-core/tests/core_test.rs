@@ -1431,3 +1431,350 @@ fn files_sharing_a_timestamp_come_back_in_the_same_order_every_time() {
     }
     assert_eq!(orders[0].len(), 10);
 }
+
+// --- Audit: things that could lose or mangle files ------------------------
+
+#[test]
+fn copying_a_folder_into_itself_is_refused_rather_than_recursing() {
+    // Pasting a folder into one of its own subfolders used to recurse forever:
+    // each level of the copy was itself inside the source, so it was copied
+    // again, nesting deeper until the path grew too long - filling storage on
+    // the way.
+    let tree = TempTree::new("copy-into-self");
+    tree.file("album/photo.jpg", b"a photo");
+    tree.dir("album/sub");
+    let source = tree.path().join("album").to_string_lossy().into_owned();
+    let inside = tree.path().join("album/sub").to_string_lossy().into_owned();
+
+    let result = copy_paths(vec![source.clone()], inside.clone(), false, None, None);
+    assert!(result.is_err(), "copying a folder into itself must fail, got {result:?}");
+
+    // And nothing was created on the way to failing.
+    assert!(
+        !tree.path().join("album/sub/album").exists(),
+        "a partial nested copy was left behind",
+    );
+    // A folder into itself directly is the same mistake.
+    assert!(copy_paths(vec![source.clone()], source, false, None, None).is_err());
+}
+
+#[test]
+fn a_copy_keeps_the_original_modified_time() {
+    // Copied photos used to take the time of the copy, so a whole album pasted
+    // somewhere jumped to the top of every date-sorted list as brand new.
+    let tree = TempTree::new("copy-keeps-mtime");
+    let original = tree.file("from/old.jpg", b"taken years ago");
+    let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000);
+    fs::File::options()
+        .write(true)
+        .open(&original)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(when))
+        .unwrap();
+    let dest = tree.dir("to");
+
+    copy_paths(
+        vec![original.to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        false,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let copied = fs::metadata(dest.join("old.jpg")).unwrap().modified().unwrap();
+    assert_eq!(copied, when, "the copy should carry the original's date");
+}
+
+#[test]
+fn a_trashed_folder_reports_what_it_holds_not_its_inode() {
+    // The trash showed a folder of photos as 4 KB - the size of the directory
+    // entry itself - which made "empty the trash to free space" look pointless.
+    let tree = TempTree::new("trash-folder-size");
+    tree.file("album/one.jpg", &vec![0u8; 50_000]);
+    tree.file("album/two.jpg", &vec![0u8; 30_000]);
+    let trash = tree.dir("trash").to_string_lossy().into_owned();
+
+    trash_move(trash.clone(), tree.path().join("album").to_string_lossy().into_owned()).unwrap();
+
+    let items = trash_list(trash, 30).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].is_dir);
+    assert_eq!(items[0].size, 80_000, "a folder's size is what is inside it");
+}
+
+#[test]
+fn duplicates_ignore_hidden_folders_including_the_trash() {
+    // The scan walked into the app's own trash, so a copy already deleted was
+    // offered as a duplicate of the one still in use - and which of them got
+    // kept depended on hash-map order.
+    let tree = TempTree::new("dedup-hidden");
+    let body = vec![7u8; 200_000];
+    tree.file("Pictures/photo.jpg", &body);
+    tree.file(".FileManagerTrash/files/abc123", &body);
+    tree.file(".thumbnails/cache.bin", &body);
+
+    let groups = find_duplicates(tree.str(), 100_000, None, None).unwrap();
+    assert!(groups.is_empty(), "nothing hidden should count, got {groups:?}");
+}
+
+#[test]
+fn the_copy_to_keep_is_chosen_the_same_way_every_time() {
+    // Keep-the-first only means something if "first" is decided on purpose.
+    // The oldest is the one most likely to be the original.
+    let tree = TempTree::new("dedup-order");
+    let body = vec![9u8; 200_000];
+    let names = ["b/copy.jpg", "a/original.jpg", "c/another.jpg"];
+    let ages = [1_700_000_300u64, 1_700_000_000, 1_700_000_600];
+    for (name, age) in names.iter().zip(ages) {
+        let path = tree.file(name, &body);
+        let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(age);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(when))
+            .unwrap();
+    }
+
+    for _ in 0..5 {
+        let groups = find_duplicates(tree.str(), 100_000, None, None).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(
+            groups[0].files[0].path.ends_with("a/original.jpg"),
+            "the oldest copy should come first, got {:?}",
+            groups[0].files.iter().map(|f| &f.path).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn a_trash_move_that_fails_leaves_no_record_behind() {
+    // The record is written first now, so a move that then fails must take
+    // its record back out - or the trash lists a file that was never moved.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("trash-move-fails");
+    let target = tree.file("keep.txt", b"still here");
+    let trash = tree.dir("trash");
+    let trash_str = trash.to_string_lossy().into_owned();
+
+    // Make the stored-files folder impossible to write into.
+    trash_list(trash_str.clone(), 30).unwrap(); // creates the layout
+    let files = trash.join("files");
+    fs::set_permissions(&files, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = trash_move(trash_str.clone(), target.to_string_lossy().into_owned());
+    fs::set_permissions(&files, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the move should have failed");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "still here", "the file must be untouched");
+    assert!(trash_list(trash_str, 30).unwrap().is_empty(), "no record for a file never moved");
+}
+
+#[test]
+fn trashing_many_files_at_once_keeps_every_one() {
+    // Ids used to be the wall-clock time alone. Each file here must get its
+    // own, or the later ones would be renamed over the earlier ones.
+    let tree = TempTree::new("trash-many");
+    let trash = tree.dir("trash").to_string_lossy().into_owned();
+    let paths: Vec<String> = (0..200)
+        .map(|i| tree.file(&format!("f{i:03}.txt"), format!("file {i}").as_bytes()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
+    let ids = filemanager_core::trash::trash_move_many(trash.clone(), paths.clone()).unwrap();
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), 200, "every file needs its own id");
+    assert_eq!(trash_list(trash.clone(), 30).unwrap().len(), 200);
+
+    // And every one comes back with its own contents.
+    for (i, id) in ids.iter().enumerate() {
+        let restored = trash_restore(trash.clone(), id.clone()).unwrap();
+        assert_eq!(fs::read_to_string(&restored).unwrap(), format!("file {i}"));
+    }
+}
+
+#[test]
+fn a_folder_into_itself_says_so() {
+    // Its own error, so the app can tell the user what they did rather than
+    // show a four-thousand-character path.
+    let tree = TempTree::new("into-itself-error");
+    tree.dir("album/sub");
+    let err = copy_paths(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        tree.path().join("album/sub").to_string_lossy().into_owned(),
+        false,
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, filemanager_core::errors::FileError::IntoItself { .. }),
+        "got {err:?}",
+    );
+
+    // A sibling whose name merely starts the same way is not inside it.
+    tree.dir("album-2");
+    tree.file("album/x.txt", b"x");
+    copy_paths(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        tree.path().join("album-2").to_string_lossy().into_owned(),
+        false,
+        None,
+        None,
+    )
+    .expect("album-2 is next to album, not inside it");
+    assert!(tree.path().join("album-2/album/x.txt").exists());
+}
+
+#[test]
+fn a_record_that_cannot_be_written_leaves_the_file_where_it_was() {
+    // The original bug. The file was moved first and the record written
+    // after, so a failed write - full storage, the usual reason to be emptying
+    // things into the trash - left the file in the trash with nothing pointing
+    // at it: gone from where it was, and never listed, restored or purged.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("trash-record-fails");
+    let target = tree.file("precious.txt", b"do not lose me");
+    let trash = tree.dir("trash");
+    let trash_str = trash.to_string_lossy().into_owned();
+
+    trash_list(trash_str.clone(), 30).unwrap(); // creates the layout
+    let meta = trash.join("meta");
+    fs::set_permissions(&meta, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = trash_move(trash_str.clone(), target.to_string_lossy().into_owned());
+    fs::set_permissions(&meta, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the record could not be written, so this should fail");
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "do not lose me",
+        "the file must still be where the user left it",
+    );
+    let orphans = fs::read_dir(trash.join("files")).unwrap().count();
+    assert_eq!(orphans, 0, "nothing may be stored without a record");
+}
+
+#[test]
+fn the_largest_files_leave_out_hidden_ones_but_the_totals_do_not() {
+    // "Largest files" is a list to pick deletions from. A trashed file turned
+    // up in it under its trash id, unrecognisable - and deleting it from there
+    // moved a file already in the trash into the trash again, leaving its
+    // original record pointing at nothing. The space it takes is still used,
+    // though, so the totals keep counting it.
+    let tree = TempTree::new("largest-hidden");
+    tree.file(".FileManagerTrash/files/18a2b3c-1f-0", &vec![0u8; 400_000]);
+    tree.file(".thumbnails/big.cache", &vec![0u8; 300_000]);
+    tree.file("Movies/.secret.mp4", &vec![0u8; 250_000]);
+    tree.file("Movies/holiday.mp4", &vec![0u8; 100_000]);
+
+    let analysis = analyze_storage(tree.str(), 10, None, None).unwrap();
+    let names: Vec<&str> = analysis.largest.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["holiday.mp4"], "only the visible file should be offered");
+    assert_eq!(
+        analysis.scanned_bytes, 1_050_000,
+        "every byte on the disk still counts towards what is used",
+    );
+}
+
+#[test]
+fn an_archive_that_cannot_read_a_folder_fails_rather_than_leaving_it_out() {
+    // Compress-then-delete is how people free space. An archive that quietly
+    // skipped the one folder it could not read reported success, and the
+    // originals went with nothing to restore them from.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("zip-unreadable-folder");
+    tree.file("album/one.jpg", b"one");
+    tree.file("album/locked/two.jpg", b"two");
+    let locked = tree.path().join("album/locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let dest = tree.path().join("album.zip");
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "reported success with a folder missing: {result:?}");
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn an_archive_that_fails_partway_leaves_nothing_behind() {
+    // A half-written zip is not an archive of anything, and leaving it meant
+    // the next attempt was named "album (1).zip" beside a broken one.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("zip-partial");
+    tree.file("album/one.jpg", b"one");
+    let unreadable = tree.file("album/two.jpg", b"two");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let dest = tree.path().join("album.zip");
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    );
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(result.is_err());
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn a_cancelled_archive_leaves_nothing_behind() {
+    use filemanager_core::cancel::{CancelToken, ProgressListener};
+    use std::sync::Arc;
+
+    struct CancelAfterFirst(Arc<CancelToken>);
+    impl ProgressListener for CancelAfterFirst {
+        fn on_progress(&self, _done: u64, _total: u64, _current: String) {
+            self.0.cancel();
+        }
+    }
+
+    let tree = TempTree::new("zip-cancelled");
+    for i in 0..5 {
+        tree.file(&format!("album/{i}.jpg"), b"picture");
+    }
+    let dest = tree.path().join("album.zip");
+    let token = CancelToken::new();
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        Some(Arc::new(CancelAfterFirst(token.clone()))),
+        Some(token),
+    );
+
+    assert!(result.is_err());
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn listing_an_archive_gives_each_entry_its_own_time() {
+    let tree = TempTree::new("zip-list-times");
+    let zip_path = tree.path().join("old.zip");
+    {
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let stamp = zip::DateTime::from_date_and_time(2020, 1, 2, 3, 4, 6).unwrap();
+        let options = zip::write::SimpleFileOptions::default().last_modified_time(stamp);
+        zip.start_file("old.txt", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"from before").unwrap();
+        zip.finish().unwrap();
+    }
+
+    let listed = archive_list(zip_path.to_string_lossy().into_owned()).unwrap();
+
+    // 2020-01-02 03:04:06, the wall-clock time the entry carries.
+    assert_eq!(listed[0].modified_ms, 1_577_934_246_000);
+}

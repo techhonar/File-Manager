@@ -55,6 +55,10 @@ class HomeViewModel(
     private var scan: CancelToken? = null
 
     init {
+        // The screen also asks on every resume, including the first, so this
+        // usually starts a scan that is cancelled a frame later. Kept anyway:
+        // if the screen ever stopped asking, Home would come up empty, and a
+        // wasted start is a cheap price against that.
         refresh()
     }
 
@@ -91,6 +95,9 @@ class HomeViewModel(
                 val trash = repository.trashBytes()
                 recent to trash
             }.onSuccess { (recent, trash) ->
+                // A scan that has since been replaced says nothing about
+                // whether the current one is still loading.
+                if (scan !== token) return@onSuccess
                 _state.update {
                     it.copy(
                         recent = recent,
@@ -101,6 +108,7 @@ class HomeViewModel(
             }.onFailure {
                 // A cancelled scan is the expected path when the user
                 // navigates away, not an error worth showing.
+                if (scan !== token) return@onFailure
                 _state.update { state -> state.copy(isLoading = false) }
             }
         }

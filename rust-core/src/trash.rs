@@ -45,10 +45,17 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
     let meta = std::fs::symlink_metadata(src).map_err(|e| FileError::from_io(e, src))?;
 
     let (files_dir, meta_dir) = trash_layout(&trash_dir)?;
-    let id = new_id();
-    let dest = files_dir.join(&id);
 
-    move_path(src, &dest)?;
+    // An id nothing is already using. The id names the stored file, and a
+    // rename onto an existing file replaces it without a word - so a repeated
+    // id would silently destroy whatever was trashed under it first.
+    let (id, dest) = loop {
+        let id = new_id();
+        let dest = files_dir.join(&id);
+        if !dest.exists() && !meta_dir.join(format!("{id}.json")).exists() {
+            break (id, dest);
+        }
+    };
 
     let record = TrashMeta {
         id: id.clone(),
@@ -58,13 +65,31 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| id.clone()),
         deleted_at_ms: now_millis(),
-        size: meta.len(),
+        // For a folder, what is inside it. `len()` on a directory is the size
+        // of the directory entry itself, which is how a trashed album of
+        // photos came to be listed as 4 KB.
+        size: if meta.is_dir() {
+            crate::scanner::dir_size(path.clone(), None).unwrap_or(0)
+        } else {
+            meta.len()
+        },
         is_dir: meta.is_dir(),
     };
     let json = serde_json::to_string_pretty(&record)
         .map_err(|e| FileError::Io { detail: e.to_string() })?;
     let meta_path = meta_dir.join(format!("{id}.json"));
+
+    // The record first, then the move. The other way round, a record that
+    // failed to write - storage full is the likely reason, and full storage
+    // is when people empty things into the trash - left the file stored with
+    // nothing pointing at it: never listed, never restorable, never purged.
+    // This way a failure leaves at worst a record for a file still where it
+    // was, which is refused on restore rather than lost.
     std::fs::write(&meta_path, json).map_err(|e| FileError::from_io(e, &meta_path))?;
+    if let Err(error) = move_path(src, &dest) {
+        let _ = std::fs::remove_file(&meta_path);
+        return Err(error);
+    }
 
     Ok(id)
 }
@@ -145,8 +170,10 @@ pub fn trash_delete(trash_dir: String, id: String) -> Result<()> {
 pub fn trash_purge_expired(trash_dir: String, retention_days: u32) -> Result<u32> {
     let mut purged = 0;
     for item in trash_list(trash_dir.clone(), retention_days)? {
-        if item.days_remaining <= 0 {
-            trash_delete(trash_dir.clone(), item.id)?;
+        // One item that cannot be removed must not keep the rest past their
+        // time. This runs at startup, unattended; stopping at the first
+        // failure meant everything after it stayed in the trash indefinitely.
+        if item.days_remaining <= 0 && trash_delete(trash_dir.clone(), item.id).is_ok() {
             purged += 1;
         }
     }
@@ -157,11 +184,23 @@ pub fn trash_purge_expired(trash_dir: String, retention_days: u32) -> Result<u32
 #[uniffi::export]
 pub fn trash_empty(trash_dir: String) -> Result<u32> {
     let mut count = 0;
+    let mut first_failure = None;
     for item in trash_list(trash_dir.clone(), u32::MAX)? {
-        trash_delete(trash_dir.clone(), item.id)?;
-        count += 1;
+        // Everything that can go, goes. Stopping at the first failure left the
+        // rest behind and reported nothing about what had been deleted.
+        match trash_delete(trash_dir.clone(), item.id) {
+            Ok(()) => count += 1,
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
+        }
     }
-    Ok(count)
+    // Reported only after trying all of them, so the caller learns something
+    // was left rather than the trash quietly not being empty.
+    match first_failure {
+        Some(error) if count == 0 => Err(error),
+        _ => Ok(count),
+    }
 }
 
 /// Total bytes the trash is holding, for the "Trash (1.2 GB)" label.
@@ -209,9 +248,13 @@ pub fn copy_exact(src: &Path, dest: &Path) -> Result<()> {
     if meta.is_dir() {
         std::fs::create_dir_all(dest).map_err(|e| FileError::from_io(e, dest))?;
         let read = std::fs::read_dir(src).map_err(|e| FileError::from_io(e, src))?;
-        for child in read.flatten() {
+        for child in read {
+            // Every entry or none. The source is deleted once this returns,
+            // so an entry skipped here is an entry lost.
+            let child = child.map_err(|e| FileError::from_io(e, src))?;
             copy_exact(&child.path(), &dest.join(child.file_name()))?;
         }
+        crate::scanner::keep_modified_time(src, dest);
         return Ok(());
     }
 
@@ -219,6 +262,8 @@ pub fn copy_exact(src: &Path, dest: &Path) -> Result<()> {
         std::fs::create_dir_all(parent).map_err(|e| FileError::from_io(e, parent))?;
     }
     std::fs::copy(src, dest).map_err(|e| FileError::from_io(e, src))?;
+    // A file trashed from an SD card and restored came back dated today.
+    crate::scanner::keep_modified_time(src, dest);
     Ok(())
 }
 
@@ -242,15 +287,25 @@ fn trash_layout(trash_dir: &str) -> Result<(PathBuf, PathBuf)> {
     Ok((files, meta))
 }
 
-/// Collision-resistant id without pulling in a uuid dependency: the current
-/// time in nanos, plus a hash of it, is unique enough for one device's trash.
+/// A new trash id.
+///
+/// The time alone was the whole of it before, with a hash of that same time
+/// appended - which adds no uniqueness, since it is a function of the value it
+/// is meant to disambiguate. The wall clock can be stepped backwards by a
+/// network time sync, and an id repeated after that lands on a file already in
+/// the trash. A counter for the life of the process, and the process id,
+/// settle it; `trash_move` still checks, because correctness should not rest
+/// on an argument about clocks.
 fn new_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let hash = blake3::hash(&nanos.to_le_bytes());
-    format!("{nanos:x}-{}", &hash.to_hex()[..8])
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:x}-{:x}-{count:x}", std::process::id())
 }
 
 /// Convenience for the browser: trash several paths at once, collecting the

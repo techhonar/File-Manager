@@ -1,12 +1,14 @@
 package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
+import java.io.File
 import androidx.lifecycle.ViewModelProvider
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.data.StorageVolumes
 import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.remote.RemoteRepository
@@ -32,10 +34,10 @@ class ViewModelFactory(
     /** See BrowserViewModel: passed in so no ViewModel holds a Context. */
     private val ownerAppOf: suspend (String) -> String? = { null },
     private val hasRemovableSlot: Boolean = false,
-    /** Null on screens that have nothing to do with network storage, which is
-     *  most of them - constructing the clients costs a socket. */
     /** The process-wide search session; see FileManagerApp. */
     private val searchSession: SearchSession? = null,
+    /** Null on screens that have nothing to do with network storage, which is
+     *  most of them - constructing the clients costs a socket. */
     private val remoteServers: RemoteServers? = null,
     private val remoteRepository: RemoteRepository? = null,
     /** Which server the remote browser should open. */
@@ -55,7 +57,14 @@ class ViewModelFactory(
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
             BrowserViewModel(
-                repository, clipboard, paths, settings, startPath, highlightPath, ownerAppOf,
+                repository = repository,
+                clipboard = clipboard,
+                paths = paths,
+                settings = settings,
+                startPath = startPath,
+                highlightPath = highlightPath,
+                ownerAppOf = ownerAppOf,
+                volumeRoots = volumes.map { File(it.path).absolutePath },
             ) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
@@ -64,6 +73,7 @@ class ViewModelFactory(
                 clipboard = clipboard,
                 settings = settings,
                 roots = volumes.map { it.path },
+                paths = paths,
                 session = requireNotNull(searchSession) { "searchSession not supplied" },
             ) as T
 
@@ -71,7 +81,7 @@ class ViewModelFactory(
             StorageViewModel(repository, primaryPath) as T
 
         modelClass.isAssignableFrom(FavoritesViewModel::class.java) ->
-            FavoritesViewModel(repository, paths, settings) as T
+            FavoritesViewModel(repository, paths, settings, StorageVolumes::isMounted) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
             RecentViewModel(repository, clipboard, primaryPath) as T

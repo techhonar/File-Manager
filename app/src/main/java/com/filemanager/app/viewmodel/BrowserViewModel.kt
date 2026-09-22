@@ -7,10 +7,12 @@ import com.filemanager.app.data.SortKeySetting
 import com.filemanager.app.data.ViewModeSetting
 import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.FolderWatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.freeName
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.isWrongPassword
 import com.filemanager.app.data.userMessage
@@ -77,6 +79,13 @@ data class BrowserState(
     val details: FileDetails? = null,
     /** Archive awaiting the user's confirmation before it is unpacked. */
     val extractTarget: FileEntry? = null,
+    /**
+     * The folder it will be unpacked into, decided when the dialog opens.
+     *
+     * Held so the dialog and the extraction agree - they used to work the
+     * name out separately, and neither checked whether it was taken.
+     */
+    val extractDestination: String? = null,
     val extractNeedsPassword: Boolean = false,
     val extractWrongPassword: Boolean = false,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
@@ -124,6 +133,8 @@ class BrowserViewModel(
      * ViewModel holding one is how activities get leaked.
      */
     private val ownerAppOf: suspend (String) -> String? = { null },
+    /** The storage volumes' top folders, which Up must not go above. */
+    private val volumeRoots: List<String> = emptyList(),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
@@ -179,6 +190,14 @@ class BrowserViewModel(
         return top + rest
     }
 
+    /**
+     * The listing in flight, loud or quiet. A newer one replaces it rather
+     * than racing it: pressing Up while a large folder was still being read
+     * let that folder's contents land last, under the parent's name, and a
+     * reload started before a change could land after one started after it.
+     */
+    private var listing: Job? = null
+
     fun load(path: String) {
         watch(path)
         _state.update {
@@ -191,9 +210,12 @@ class BrowserViewModel(
                 selectionActive = false,
             )
         }
-        viewModelScope.launch {
+        listing?.cancel()
+        listing = viewModelScope.launch {
             runCatching {
                 repository.list(path, _state.value.showHidden, _state.value.sort)
+            }.onFailure {
+                if (it is CancellationException) throw it
             }.onSuccess { entries ->
                 _state.update {
                     it.copy(
@@ -220,8 +242,21 @@ class BrowserViewModel(
      */
     private fun reloadQuietly() {
         val path = _state.value.path
-        viewModelScope.launch {
+        listing?.cancel()
+        listing = viewModelScope.launch {
             runCatching { repository.list(path, _state.value.showHidden, _state.value.sort) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    // It may have replaced a load that was still showing the
+                    // spinner, which then has to end somewhere.
+                    _state.update { current ->
+                        if (current.path != path || !current.isLoading) current
+                        else current.copy(
+                            isLoading = false,
+                            error = it.userMessage("Could not open folder"),
+                        )
+                    }
+                }
                 .onSuccess { entries ->
                     _state.update {
                         // Discard a result for a folder the user has left.
@@ -236,6 +271,7 @@ class BrowserViewModel(
                             val visible = next.mapTo(HashSet(next.size)) { e -> e.path }
                             it.copy(
                                 entries = next,
+                                isLoading = false,
                                 selected = it.selected.filterTo(HashSet()) { p -> p in visible },
                             )
                         }
@@ -272,7 +308,14 @@ class BrowserViewModel(
 
     /** Navigate up one level, stopping at the volume root. */
     fun navigateUp(): Boolean {
-        val parent = File(_state.value.path).parentFile ?: return false
+        val here = File(_state.value.path).absolutePath
+        // At a volume's top folder, Up leaves the browser. It used to stop only
+        // where the parent could not be read - which happens to hold for
+        // internal storage, whose parent is locked, but not for an SD card,
+        // whose parent is /storage: readable, full of mount points, and a dead
+        // end nobody meant to reach.
+        if (here in volumeRoots) return false
+        val parent = File(here).parentFile ?: return false
         if (!parent.canRead()) return false
         load(parent.absolutePath)
         return true
@@ -342,17 +385,7 @@ class BrowserViewModel(
      * a file has to carry them across or the mark is silently lost - which
      * looks to the user like the app forgetting on its own.
      */
-    private fun carryMarks(from: String, to: String) {
-        if (from == to) return
-        if (paths.isFavorite(from)) {
-            paths.toggleFavorite(listOf(from))
-            paths.toggleFavorite(listOf(to))
-        }
-        if (paths.isPinned(from)) {
-            paths.togglePinned(listOf(from))
-            paths.togglePinned(listOf(to))
-        }
-    }
+    private fun carryMarks(from: String, to: String) = paths.move(from, to)
 
     fun toggleFavorite() {
         val selected = _state.value.selected.toList()
@@ -482,7 +515,15 @@ class BrowserViewModel(
     fun rename(path: String, newName: String) {
         viewModelScope.launch {
             val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
-            _messages.value = if (ok) null else "A file named \"$newName\" already exists"
+            // "Already exists" only when something does. A rename refused for
+            // want of permission said so too, and sent people looking for a
+            // file that was not there.
+            _messages.value = when {
+                ok -> null
+                File(File(path).parentFile, newName).exists() ->
+                    "A file named \"$newName\" already exists"
+                else -> "Could not rename \"${File(path).name}\""
+            }
             if (ok) {
                 carryMarks(path, File(File(path).parentFile, newName).absolutePath)
                 refresh()
@@ -515,13 +556,23 @@ class BrowserViewModel(
      * empty string when the field is left alone, and that is a request for no
      * encryption rather than for encryption with nothing.
      */
+    /**
+     * Where compressing the selection would write, or null with nothing ticked.
+     *
+     * Named after the first item, the way most file managers do, and moved
+     * aside with a number if that is taken. Public so the confirmation dialog
+     * shows the name that will actually be written.
+     */
+    fun compressDestination(): File? {
+        val first = _state.value.selected.firstOrNull() ?: return null
+        return freeName(File(_state.value.path), File(first).nameWithoutExtension, "zip")
+    }
+
     fun compressSelected(password: String? = null) {
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
 
-        // Name the zip after the first item, the way most file managers do.
-        val base = File(paths.first()).nameWithoutExtension
-        val destination = File(_state.value.path, "$base.zip").absolutePath
+        val destination = compressDestination()?.absolutePath ?: return
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
@@ -560,6 +611,9 @@ class BrowserViewModel(
         _state.update {
             it.copy(
                 extractTarget = entry,
+                // Decided now, so the dialog names the folder that will
+                // actually be written. A couple of stat calls at most.
+                extractDestination = extractDestinationFor(entry.path).absolutePath,
                 extractNeedsPassword = false,
                 extractWrongPassword = false,
             )
@@ -576,25 +630,41 @@ class BrowserViewModel(
     fun dismissExtract() = _state.update {
         it.copy(
             extractTarget = null,
+            extractDestination = null,
             extractNeedsPassword = false,
             extractWrongPassword = false,
         )
     }
 
+    /** A folder beside the archive, named after it, that does not exist yet. */
+    private fun extractDestinationFor(archivePath: String): File {
+        val archive = File(archivePath)
+        return freeName(archive.parentFile ?: File("/"), archive.nameWithoutExtension)
+    }
+
     fun extract(archivePath: String, password: String? = null) {
-        val destination = File(
-            File(archivePath).parentFile,
-            File(archivePath).nameWithoutExtension,
-        ).absolutePath
+        // The folder the dialog promised. Worked out again only if the dialog
+        // was skipped, and never the plain archive name when that is taken.
+        val destination = _state.value.extractDestination
+            ?: extractDestinationFor(archivePath).absolutePath
 
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, extractTarget = null) }
             runCatching { repository.extract(archivePath, destination, password) }
                 .onSuccess {
+                    _state.update { s -> s.copy(extractDestination = null) }
                     _messages.value = "Extracted $it files"
                     refresh()
                 }
                 .onFailure { error ->
+                    // The folder is made before the first entry is read, so a
+                    // wrong password left an empty one behind - and the next
+                    // attempt, finding it taken, would have unpacked into
+                    // "name (1)" beside it. A folder with anything in it is a
+                    // partial extraction and stays, so it can be seen.
+                    File(destination).let { dir ->
+                        if (dir.isDirectory && dir.list()?.isEmpty() == true) dir.delete()
+                    }
                     _state.update { s -> s.copy(isLoading = false) }
                     // Matched on the exception type, not its text: a variant
                     // with no fields has an empty message, so a string test
@@ -608,6 +678,7 @@ class BrowserViewModel(
                             )
                         }
                     } else {
+                        _state.update { s -> s.copy(extractDestination = null) }
                         _messages.value = error.userMessage("Could not extract")
                     }
                 }

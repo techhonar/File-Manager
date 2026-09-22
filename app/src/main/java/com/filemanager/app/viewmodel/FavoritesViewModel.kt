@@ -48,6 +48,9 @@ class FavoritesViewModel(
     private val repository: FileRepository,
     private val paths: PathPrefs,
     private val settings: AppSettings,
+    /** Whether the storage a path is on is present. Passed in so no
+     *  ViewModel reaches for the framework; see StorageVolumes.isMounted. */
+    private val isMounted: (String) -> Boolean,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FavoritesState())
@@ -85,8 +88,12 @@ class FavoritesViewModel(
         val missing = favorites - found
 
         // Forget the ones that have gone, so the list does not keep shrinking
-        // silently every time it is opened.
-        if (missing.isNotEmpty()) paths.forget(missing)
+        // silently every time it is opened - but only from storage that is
+        // actually there. With the SD card out every favourite on it looks
+        // deleted, and forgetting them then meant they were gone for good
+        // once the card went back in.
+        val gone = missing.filter(isMounted)
+        if (gone.isNotEmpty()) paths.forget(gone)
 
         val visible = resolved.filter { showHidden || !it.isHidden }
         val shown = visible.map { it.path }.toSet()
@@ -95,7 +102,7 @@ class FavoritesViewModel(
             current.copy(
                 entries = visible.sortedBy { it.name.lowercase() },
                 isLoading = false,
-                missingCount = missing.size,
+                missingCount = gone.size,
                 hiddenCount = resolved.size - visible.size,
                 // Drop any tick whose file is no longer on screen, so the
                 // count in the title matches what can be acted on.

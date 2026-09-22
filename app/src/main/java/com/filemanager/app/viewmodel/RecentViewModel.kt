@@ -56,11 +56,15 @@ class RecentViewModel(
         viewModelScope.launch {
             runCatching { repository.recent(rootPath, days = 7u, limit = 200u, cancel = token) }
                 .onSuccess { entries ->
+                    // A scan that has since been replaced says nothing about
+                    // whether the current one is still loading.
+                    if (scan !== token) return@onSuccess
                     _state.update { it.copy(entries = entries, isLoading = false) }
                 }
                 .onFailure {
                     // Cancellation lands here too, which is the expected path
                     // when the user leaves the screen.
+                    if (scan !== token) return@onFailure
                     _state.update { it.copy(isLoading = false) }
                 }
         }
@@ -84,12 +88,26 @@ class RecentViewModel(
 
     fun copySelection() {
         clipboard.copy(_state.value.selected.toList())
-        _state.update { it.copy(selected = emptySet(), message = "Copied. Paste in any folder.") }
+        // Out of selection mode as well, or the screen stayed in it with
+        // nothing ticked when selection had been entered from the menu.
+        _state.update {
+            it.copy(
+                selected = emptySet(),
+                selectionActive = false,
+                message = "Copied. Paste in any folder.",
+            )
+        }
     }
 
     fun cutSelection() {
         clipboard.cut(_state.value.selected.toList())
-        _state.update { it.copy(selected = emptySet(), message = "Cut. Paste in any folder.") }
+        _state.update {
+            it.copy(
+                selected = emptySet(),
+                selectionActive = false,
+                message = "Cut. Paste in any folder.",
+            )
+        }
     }
 
     fun deleteSelection() {

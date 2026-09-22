@@ -138,6 +138,18 @@ pub fn copy_paths(
         return Err(FileError::NotADirectory { path: dest_dir });
     }
 
+    // Refused before anything is written. Copying a folder into one of its
+    // own subfolders recursed without end: each level of the copy was itself
+    // inside the source, so it was copied again, until the path grew too long
+    // - measured at 797 nested folders before the filesystem gave up, and a
+    // copy of every file at each level if the directory happened to list them
+    // before the subfolder.
+    for source in &sources {
+        if lands_inside(Path::new(source), dest) {
+            return Err(FileError::IntoItself { path: source.clone() });
+        }
+    }
+
     let total = tree_stats(sources.clone(), cancel.clone())?.file_count;
     let mut done = 0u64;
 
@@ -165,7 +177,11 @@ fn copy_into(
     if src.is_dir() {
         std::fs::create_dir_all(dst).map_err(|e| FileError::from_io(e, dst))?;
         let read = std::fs::read_dir(src).map_err(|e| FileError::from_io(e, src))?;
-        for child in read.flatten() {
+        for child in read {
+            // Not flatten(): an entry that cannot be read has to stop the copy.
+            // Skipping it quietly is how a move - which deletes the source once
+            // this returns - loses the one file it could not see.
+            let child = child.map_err(|e| FileError::from_io(e, src))?;
             copy_into(
                 &child.path(),
                 &dst.join(child.file_name()),
@@ -176,6 +192,8 @@ fn copy_into(
                 cancel,
             )?;
         }
+        // After the children, because adding each of them moved it on.
+        keep_modified_time(src, dst);
         return Ok(());
     }
 
@@ -183,12 +201,43 @@ fn copy_into(
         return Err(FileError::AlreadyExists { path: dst.to_string_lossy().into_owned() });
     }
     std::fs::copy(src, dst).map_err(|e| FileError::from_io(e, src))?;
+    keep_modified_time(src, dst);
 
     *done += 1;
     if let Some(l) = listener {
         l.on_progress(*done, total, src.to_string_lossy().into_owned());
     }
     Ok(())
+}
+
+/// Whether copying `source` into `dest` would put it inside itself.
+///
+/// Canonicalised so that a trailing slash, a `..`, or a symlinked route to the
+/// same place is not a way round it. A path that cannot be resolved is not
+/// inside anything; the copy then fails on its own terms.
+pub(crate) fn lands_inside(source: &Path, dest: &Path) -> bool {
+    let (Ok(source), Ok(dest)) = (source.canonicalize(), dest.canonicalize()) else {
+        return false;
+    };
+    source.is_dir() && dest.starts_with(&source)
+}
+
+/// Give `dst` the modification time `src` has.
+///
+/// `std::fs::copy` carries permissions but not times, so a copied album took
+/// the time of the copy and jumped to the top of every list sorted by date as
+/// though it had just been taken. Best effort: a filesystem that will not set
+/// times has still been copied to, which is the part that matters.
+pub(crate) fn keep_modified_time(src: &Path, dst: &Path) {
+    let Ok(when) = std::fs::metadata(src).and_then(|m| m.modified()) else { return };
+    let target = if dst.is_dir() {
+        std::fs::File::open(dst)
+    } else {
+        std::fs::File::options().write(true).open(dst)
+    };
+    if let Ok(file) = target {
+        let _ = file.set_times(std::fs::FileTimes::new().set_modified(when));
+    }
 }
 
 /// Recursively delete paths. Returns how many files were removed.
