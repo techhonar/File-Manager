@@ -35,7 +35,12 @@ class TrashViewModel(private val repository: FileRepository) : ViewModel() {
                     _state.update { it.copy(items = items, totalBytes = bytes, isLoading = false) }
                 }
                 .onFailure {
-                    _state.update { s -> s.copy(isLoading = false, message = it.message) }
+                    // userMessage, not message: the core's errors carry an
+                    // empty message for most variants, which showed a blank
+                    // snackbar that looked like nothing had happened.
+                    _state.update { s ->
+                        s.copy(isLoading = false, message = it.userMessage("Could not open the trash"))
+                    }
                 }
         }
     }
@@ -62,6 +67,13 @@ class TrashViewModel(private val repository: FileRepository) : ViewModel() {
             runCatching { repository.emptyTrash() }
                 .onSuccess { count ->
                     _state.update { it.copy(message = "Deleted $count items permanently") }
+                    refresh()
+                }
+                .onFailure {
+                    // Said, and the list reloaded, where before a failure did
+                    // neither - the button was pressed, nothing changed on
+                    // screen, and whatever had in fact gone was still listed.
+                    _state.update { s -> s.copy(message = it.userMessage("Could not empty the trash")) }
                     refresh()
                 }
         }

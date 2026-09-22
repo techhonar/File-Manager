@@ -87,7 +87,12 @@ class StorageViewModel(
                             largest = current.largest.filterNot { it.path in gone },
                             selected = emptySet(),
                             selectionActive = false,
-                            message = "${paths.size} moved to trash, ${formatSize(freed)} freed",
+                            // Not "freed": the trash is on the same storage,
+                            // so nothing is released until it is emptied.
+                            // Claiming otherwise sent people looking for
+                            // space that had not appeared.
+                            message = "${paths.size} moved to trash. " +
+                                "Empty the trash to free ${formatSize(freed)}.",
                         )
                     }
                 }
@@ -102,16 +107,25 @@ class StorageViewModel(
     private val _state = MutableStateFlow(StorageState())
     val state: StateFlow<StorageState> = _state.asStateFlow()
 
-    private var scan: CancelToken? = null
+    /**
+     * One token per job, not one shared.
+     *
+     * They were shared, so tapping "Find duplicates" while the analysis was
+     * still running cancelled the analysis - and the per-category breakdown,
+     * which only that walk fills in, stayed empty for as long as the screen
+     * was open.
+     */
+    private var analysis: CancelToken? = null
+    private var duplicateScan: CancelToken? = null
 
     init {
         load()
     }
 
     fun load() {
-        scan?.cancel()
+        analysis?.cancel()
         val token = CancelToken()
-        scan = token
+        analysis = token
 
         _state.update { it.copy(isLoading = true) }
 
@@ -171,9 +185,9 @@ class StorageViewModel(
      * genuinely expensive -- not something to run every time the screen opens.
      */
     fun scanDuplicates() {
-        scan?.cancel()
+        duplicateScan?.cancel()
         val token = CancelToken()
-        scan = token
+        duplicateScan = token
 
         _state.update { it.copy(isScanningDuplicates = true, duplicates = emptyList()) }
         viewModelScope.launch {
@@ -199,7 +213,12 @@ class StorageViewModel(
         }
     }
 
-    /** Keep the first copy in each group, trash the rest. */
+    /**
+     * Keep the first copy in each group, trash the rest.
+     *
+     * "First" is the oldest - the core orders each group that way on purpose,
+     * because this keeps it.
+     */
     fun deleteDuplicates(group: DuplicateGroup) {
         val extras = group.files.drop(1).map { it.path }
         if (extras.isEmpty()) return
@@ -208,19 +227,29 @@ class StorageViewModel(
             runCatching { repository.moveToTrash(extras) }
                 .onSuccess {
                     _state.update { current ->
-                        current.copy(duplicates = current.duplicates.filterNot { it.hash == group.hash })
+                        current.copy(
+                            duplicates = current.duplicates.filterNot { it.hash == group.hash },
+                            message = "${extras.size} copies moved to trash, " +
+                                "kept ${group.files.first().name}",
+                        )
                     }
+                }
+                .onFailure { error ->
+                    // Said. A failure here used to leave the group on screen
+                    // with nothing to indicate the button had done anything.
+                    _state.update { it.copy(message = error.userMessage("Could not remove the copies")) }
                 }
         }
     }
 
     fun cancelScan() {
-        scan?.cancel()
+        duplicateScan?.cancel()
         _state.update { it.copy(isScanningDuplicates = false, duplicateProgress = "") }
     }
 
     override fun onCleared() {
-        scan?.cancel()
+        analysis?.cancel()
+        duplicateScan?.cancel()
         super.onCleared()
     }
 

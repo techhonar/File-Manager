@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Share anything on shared storage, plus our own trash directory. -->
+    <!-- Internal shared storage, and the app's own files and cache. -->
     <external-path name="external_storage" path="." />
     <external-files-path name="app_files" path="." />
     <cache-path name="cache" path="." />
+
+    <!--
+      Everything else - in practice, SD cards and USB drives.
+
+      external-path covers only internal shared storage, /storage/emulated/0.
+      A card is mounted beside it at /storage/<id>, outside every root above,
+      and FileProvider answers a file outside its roots by throwing - so
+      tapping or sharing anything on an SD card crashed the app.
+
+      root-path is not in the public documentation but is part of FileProvider
+      and has been for years. It grants nothing by itself: the provider is not
+      exported, and a URI only reaches another app when this one sends it.
+    -->
+    <root-path name="device" path="." />
 </paths>

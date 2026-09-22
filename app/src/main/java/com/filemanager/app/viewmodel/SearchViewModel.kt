@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.Job
@@ -21,6 +22,7 @@ import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SearchPage
 import uniffi.filemanager_core.SearchSession
 import uniffi.filemanager_core.SearchObserver
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -85,6 +87,8 @@ class SearchViewModel(
     private val clipboard: FileClipboard,
     private val settings: AppSettings,
     private val roots: List<String>,
+    /** Favourites and pins, which a rename has to carry to the new name. */
+    private val paths: PathPrefs,
     /**
      * Shared with the process, not owned by this screen.
      *
@@ -467,12 +471,27 @@ class SearchViewModel(
     /** Copy into the shared clipboard, to be pasted from any folder. */
     fun copySelection() {
         clipboard.copy(_state.value.selected.toList())
-        _state.update { it.copy(selected = emptySet(), message = "Copied. Paste in any folder.") }
+        // selectionActive as well as the ticks. Clearing only the ticks left
+        // the screen in selection mode with nothing selected, when selection
+        // had been entered from the menu.
+        _state.update {
+            it.copy(
+                selected = emptySet(),
+                selectionActive = false,
+                message = "Copied. Paste in any folder.",
+            )
+        }
     }
 
     fun cutSelection() {
         clipboard.cut(_state.value.selected.toList())
-        _state.update { it.copy(selected = emptySet(), message = "Cut. Paste in any folder.") }
+        _state.update {
+            it.copy(
+                selected = emptySet(),
+                selectionActive = false,
+                message = "Cut. Paste in any folder.",
+            )
+        }
     }
 
     /** Delete goes through the trash, so it is always undoable. */
@@ -491,15 +510,49 @@ class SearchViewModel(
 
     fun rename(path: String, newName: String) {
         viewModelScope.launch {
+            val newPath = File(File(path).parentFile, newName).absolutePath
             val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
-            if (ok) {
-                // The renamed file no longer matches what was searched for, so
-                // drop it rather than leaving a row with a stale name.
-                removeFromResults(listOf(path), null)
-            } else {
+            if (!ok) {
+                // Only claim a clash when there is one. A rename can also fail
+                // for want of permission, and "already exists" sent people
+                // looking for a file that was not there.
+                val clash = File(newPath).exists()
                 _state.update {
-                    it.copy(message = "A file named \"$newName\" already exists")
+                    it.copy(
+                        message = if (clash) {
+                            "A file named \"$newName\" already exists"
+                        } else {
+                            "Could not rename \"${File(path).name}\""
+                        },
+                    )
                 }
+                return@launch
+            }
+
+            paths.move(path, newPath)
+            session.forget(listOf(path))
+
+            // Replaced in place rather than dropped. Dropping it assumed a new
+            // name no longer matches the search, which is rarely true and never
+            // true in a category - renaming a photo from Images made it vanish
+            // from the list of images it is still in.
+            val renamed = runCatching { repository.entriesFor(listOf(newPath)) }
+                .getOrNull()
+                ?.firstOrNull()
+            val query = _state.value.query
+            val kept = renamed?.takeIf {
+                query.isBlank() || it.name.contains(query, ignoreCase = true)
+            }
+
+            _state.update { current ->
+                val results = if (kept != null) {
+                    current.results.map { if (it.path == path) kept else it }
+                } else {
+                    current.results.filterNot { it.path == path }
+                }
+                current.withResults(results).copy(
+                    total = if (kept != null) current.total else (current.total - 1).coerceAtLeast(0),
+                )
             }
         }
     }
@@ -521,6 +574,7 @@ class SearchViewModel(
                 // The total counts what the walk found, so it drops too.
                 total = (current.total - (current.results.size - remaining.size)).coerceAtLeast(0),
                 selected = emptySet(),
+                selectionActive = false,
                 message = message,
             )
         }

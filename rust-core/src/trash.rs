@@ -170,8 +170,10 @@ pub fn trash_delete(trash_dir: String, id: String) -> Result<()> {
 pub fn trash_purge_expired(trash_dir: String, retention_days: u32) -> Result<u32> {
     let mut purged = 0;
     for item in trash_list(trash_dir.clone(), retention_days)? {
-        if item.days_remaining <= 0 {
-            trash_delete(trash_dir.clone(), item.id)?;
+        // One item that cannot be removed must not keep the rest past their
+        // time. This runs at startup, unattended; stopping at the first
+        // failure meant everything after it stayed in the trash indefinitely.
+        if item.days_remaining <= 0 && trash_delete(trash_dir.clone(), item.id).is_ok() {
             purged += 1;
         }
     }
@@ -182,11 +184,23 @@ pub fn trash_purge_expired(trash_dir: String, retention_days: u32) -> Result<u32
 #[uniffi::export]
 pub fn trash_empty(trash_dir: String) -> Result<u32> {
     let mut count = 0;
+    let mut first_failure = None;
     for item in trash_list(trash_dir.clone(), u32::MAX)? {
-        trash_delete(trash_dir.clone(), item.id)?;
-        count += 1;
+        // Everything that can go, goes. Stopping at the first failure left the
+        // rest behind and reported nothing about what had been deleted.
+        match trash_delete(trash_dir.clone(), item.id) {
+            Ok(()) => count += 1,
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
+        }
     }
-    Ok(count)
+    // Reported only after trying all of them, so the caller learns something
+    // was left rather than the trash quietly not being empty.
+    match first_failure {
+        Some(error) if count == 0 => Err(error),
+        _ => Ok(count),
+    }
 }
 
 /// Total bytes the trash is holding, for the "Trash (1.2 GB)" label.

@@ -55,6 +55,10 @@ class HomeViewModel(
     private var scan: CancelToken? = null
 
     init {
+        // The screen also asks on every resume, including the first, so this
+        // usually starts a scan that is cancelled a frame later. Kept anyway:
+        // if the screen ever stopped asking, Home would come up empty, and a
+        // wasted start is a cheap price against that.
         refresh()
     }
 

@@ -28,6 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -267,9 +270,24 @@ fun FileManagerRoot(
                 slideOutHorizontally(targetOffsetX = { it / 6 }) + fadeOut(tween(160))
             },
         ) {
-            composable(Routes.HOME) {
+            composable(Routes.HOME) { entry ->
                 val vm: HomeViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsState()
+
+                // Refreshed each time Home comes back into view. The view model
+                // outlives trips to other screens, and it loaded once, when it
+                // was made - so after deleting things and coming back, Trash
+                // still showed its old size and Recent still listed files that
+                // were gone, until the app was restarted. Tied to the
+                // navigation entry's lifecycle, so returning from another app
+                // counts too.
+                DisposableEffect(entry) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) vm.refresh()
+                    }
+                    entry.lifecycle.addObserver(observer)
+                    onDispose { entry.lifecycle.removeObserver(observer) }
+                }
 
                 OneUiScreen(
                     title = "My Files",
@@ -529,7 +547,13 @@ private fun openWithExternalApp(
     val file = File(path)
     if (!file.isFile) return false
 
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    // Guarded, because FileProvider throws for a file outside its roots and an
+    // uncaught throw here takes the whole app down. The roots now cover every
+    // mount, so this should not fire; if a device mounts storage somewhere
+    // unexpected, the file fails to open instead of the app closing.
+    val uri = runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }.getOrElse { return false }
     val mimeType = MimeTypeMap.getSingleton()
         .getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
 

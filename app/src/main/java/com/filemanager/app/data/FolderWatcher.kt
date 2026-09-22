@@ -22,12 +22,15 @@ class FolderWatcher(
 
     private val observer = object : FileObserver(
         File(path),
-        CREATE or DELETE or MOVED_FROM or MOVED_TO or CLOSE_WRITE,
+        CREATE or DELETE or MOVED_FROM or MOVED_TO or CLOSE_WRITE or DELETE_SELF or MOVE_SELF,
     ) {
         override fun onEvent(event: Int, childPath: String?) {
-            // A null path means the watch itself is in trouble - overflow, or
-            // the folder went away. Nothing to report about a child then.
-            if (childPath == null) return
+            // Reported either way. A null path is the watched folder itself -
+            // deleted, moved away, or the watch dropped - and that used to be
+            // ignored as having nothing to say about a child, which left the
+            // screen listing a folder that no longer existed. It is exactly
+            // the case where reloading matters: the reload finds it gone and
+            // says so.
             onChanged()
         }
     }

@@ -23,3 +23,18 @@ fun freeName(dir: File, base: String, extension: String = ""): File {
         .map { File(dir, "$base ($it)$suffix") }
         .first { !it.exists() }
 }
+
+/**
+ * The first of "name.ext", "name (1).ext"... not in [taken].
+ *
+ * The remote counterpart of freeName, which asks the filesystem; this asks the
+ * listing the screen already has, rather than making a round trip per guess.
+ */
+fun freeRemoteName(taken: Set<String>, base: String, extension: String): String {
+    val suffix = if (extension.isEmpty()) "" else ".$extension"
+    val first = "$base$suffix"
+    if (first !in taken) return first
+    return generateSequence(1) { it + 1 }
+        .map { "$base ($it)$suffix" }
+        .first { it !in taken }
+}

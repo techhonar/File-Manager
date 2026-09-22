@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.freeName
+import com.filemanager.app.data.freeRemoteName
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
@@ -185,13 +187,23 @@ class RemoteBrowserViewModel(
                 _state.update {
                     it.copy(busy = "Downloading ${done + 1} of ${entries.size}…")
                 }
-                val target = File(into, entry.name)
+                // Never the name of a file already there. Downloading straight
+                // to Downloads/<name> replaced any file of the user's with that
+                // name - and on failure the cleanup below then deleted it, so a
+                // server that was merely unreachable destroyed a local file the
+                // download had never touched.
+                val target = freeName(
+                    into,
+                    File(entry.name).nameWithoutExtension,
+                    File(entry.name).extension,
+                )
                 runCatching { repository.download(_state.value.server, entry, target) }
                     .onSuccess { done++ }
                     .onFailure {
                         failed++
-                        // A half-written file is worse than none: it looks
-                        // like a download that worked.
+                        // A half-written file is worse than none: it looks like
+                        // a download that worked. Safe to remove now that the
+                        // name was free before this began - it is ours.
                         runCatching { target.delete() }
                     }
             }
@@ -235,11 +247,20 @@ class RemoteBrowserViewModel(
             val uploaded = mutableListOf<String>()
             var failed = 0
 
+            // Once for the whole paste, and grown as each name is used, so two
+            // files with the same name - from different folders - do not both
+            // take it and land on top of each other.
+            val taken = _state.value.entries.mapTo(HashSet()) { it.name }
             for (file in files) {
                 _state.update {
                     it.copy(busy = "Uploading ${uploaded.size + failed + 1} of ${files.size}…")
                 }
-                val target = RemotePaths.join(_state.value.path, file.name)
+                // Not over a file already on the server. Uploads replaced
+                // anything with the same name without asking; the folder's
+                // listing is already in hand, so a clash costs nothing to see.
+                val name = freeRemoteName(taken, file.nameWithoutExtension, file.extension)
+                taken += name
+                val target = RemotePaths.join(_state.value.path, name)
                 runCatching { repository.upload(_state.value.server, file, target) }
                     .onSuccess { uploaded += file.absolutePath }
                     .onFailure { failed++ }

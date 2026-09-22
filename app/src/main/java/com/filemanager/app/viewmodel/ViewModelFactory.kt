@@ -1,6 +1,7 @@
 package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
+import java.io.File
 import androidx.lifecycle.ViewModelProvider
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.AppSettings
@@ -55,7 +56,14 @@ class ViewModelFactory(
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
             BrowserViewModel(
-                repository, clipboard, paths, settings, startPath, highlightPath, ownerAppOf,
+                repository = repository,
+                clipboard = clipboard,
+                paths = paths,
+                settings = settings,
+                startPath = startPath,
+                highlightPath = highlightPath,
+                ownerAppOf = ownerAppOf,
+                volumeRoots = volumes.map { File(it.path).absolutePath },
             ) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
@@ -64,6 +72,7 @@ class ViewModelFactory(
                 clipboard = clipboard,
                 settings = settings,
                 roots = volumes.map { it.path },
+                paths = paths,
                 session = requireNotNull(searchSession) { "searchSession not supplied" },
             ) as T
 

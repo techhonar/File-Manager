@@ -132,6 +132,8 @@ class BrowserViewModel(
      * ViewModel holding one is how activities get leaked.
      */
     private val ownerAppOf: suspend (String) -> String? = { null },
+    /** The storage volumes' top folders, which Up must not go above. */
+    private val volumeRoots: List<String> = emptyList(),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
@@ -280,7 +282,14 @@ class BrowserViewModel(
 
     /** Navigate up one level, stopping at the volume root. */
     fun navigateUp(): Boolean {
-        val parent = File(_state.value.path).parentFile ?: return false
+        val here = File(_state.value.path).absolutePath
+        // At a volume's top folder, Up leaves the browser. It used to stop only
+        // where the parent could not be read - which happens to hold for
+        // internal storage, whose parent is locked, but not for an SD card,
+        // whose parent is /storage: readable, full of mount points, and a dead
+        // end nobody meant to reach.
+        if (here in volumeRoots) return false
+        val parent = File(here).parentFile ?: return false
         if (!parent.canRead()) return false
         load(parent.absolutePath)
         return true
@@ -350,17 +359,7 @@ class BrowserViewModel(
      * a file has to carry them across or the mark is silently lost - which
      * looks to the user like the app forgetting on its own.
      */
-    private fun carryMarks(from: String, to: String) {
-        if (from == to) return
-        if (paths.isFavorite(from)) {
-            paths.toggleFavorite(listOf(from))
-            paths.toggleFavorite(listOf(to))
-        }
-        if (paths.isPinned(from)) {
-            paths.togglePinned(listOf(from))
-            paths.togglePinned(listOf(to))
-        }
-    }
+    private fun carryMarks(from: String, to: String) = paths.move(from, to)
 
     fun toggleFavorite() {
         val selected = _state.value.selected.toList()
@@ -490,7 +489,15 @@ class BrowserViewModel(
     fun rename(path: String, newName: String) {
         viewModelScope.launch {
             val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
-            _messages.value = if (ok) null else "A file named \"$newName\" already exists"
+            // "Already exists" only when something does. A rename refused for
+            // want of permission said so too, and sent people looking for a
+            // file that was not there.
+            _messages.value = when {
+                ok -> null
+                File(File(path).parentFile, newName).exists() ->
+                    "A file named \"$newName\" already exists"
+                else -> "Could not rename \"${File(path).name}\""
+            }
             if (ok) {
                 carryMarks(path, File(File(path).parentFile, newName).absolutePath)
                 refresh()
