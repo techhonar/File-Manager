@@ -224,8 +224,15 @@ pub fn analyze_storage(
             let Ok(link_meta) = std::fs::symlink_metadata(child) else {
                 return partial;
             };
+            // Whether anything under this child may be offered in the largest
+            // list. Worked out once per child for the top level, then per entry
+            // below it.
+            let child_hidden = child
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with('.'));
+
             if link_meta.is_symlink() {
-                partial.add(child, &link_meta, limit);
+                partial.add(child, &link_meta, limit, !child_hidden);
                 return partial;
             }
 
@@ -248,7 +255,20 @@ pub fn analyze_storage(
                     }
                 }
 
-                partial.add(entry.path(), &meta, limit);
+                // Hidden if the top-level folder is, or anything between it and
+                // the file is, or the file itself. Counted either way - the
+                // space is used - but only offered if it is something the user
+                // would recognise and could sensibly delete.
+                let hidden = child_hidden
+                    || entry
+                        .path()
+                        .strip_prefix(child)
+                        .map(|rel| {
+                            rel.components()
+                                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+                        })
+                        .unwrap_or(false);
+                partial.add(entry.path(), &meta, limit, !hidden);
             }
             partial
         })
@@ -315,7 +335,14 @@ impl Partial {
         }
     }
 
-    fn add(&mut self, path: &std::path::Path, meta: &std::fs::Metadata, limit: usize) {
+    /// Count a file, and consider it for the largest list if `offer` is set.
+    ///
+    /// Hidden files are counted but not offered. The largest list is where
+    /// people pick things to delete, and a trashed file turned up there under
+    /// its trash id - unrecognisable, and deleting it moved a file already in
+    /// the trash into the trash again, leaving its original record pointing
+    /// at nothing.
+    fn add(&mut self, path: &std::path::Path, meta: &std::fs::Metadata, limit: usize, offer: bool) {
         let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
         let category = crate::categories::categorize(name.as_ref());
         if let Some(i) = CATEGORY_ORDER.iter().position(|c| *c == category) {
@@ -324,6 +351,9 @@ impl Partial {
         }
         self.scanned_bytes += meta.len();
 
+        if !offer {
+            return;
+        }
         // Skip anything that cannot beat the current cut-off, so the common
         // case costs one comparison rather than building a FileEntry.
         if self.largest.len() == limit && meta.len() <= self.largest[limit - 1].size {

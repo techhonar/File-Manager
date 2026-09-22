@@ -2,7 +2,6 @@
 
 use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::{FileError, Result};
-use crate::types::now_millis;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Component, Path, PathBuf};
@@ -42,10 +41,32 @@ pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
             size: entry.size(),
             compressed_size: entry.compressed_size(),
             is_dir: entry.is_dir(),
-            modified_ms: now_millis(),
+            modified_ms: entry.last_modified().map_or(0, zip_time_ms),
         });
     }
     Ok(entries)
+}
+
+/// A zip timestamp as milliseconds since the epoch.
+///
+/// Every entry used to be stamped with the moment it was listed. A zip stores
+/// a wall-clock time and no zone, so this is that time read as UTC: formatted
+/// in UTC it shows what the archive says, which is all there is to know.
+fn zip_time_ms(time: zip::DateTime) -> u64 {
+    // Days from 1970-01-01 to the date, by the usual civil-calendar formula.
+    let (y, m, d) = (i64::from(time.year()), i64::from(time.month()), i64::from(time.day()));
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+
+    let seconds = days * 86_400
+        + i64::from(time.hour()) * 3_600
+        + i64::from(time.minute()) * 60
+        + i64::from(time.second());
+    u64::try_from(seconds).map_or(0, |s| s * 1_000)
 }
 
 /// Zip `sources` into `dest_path`. Directories go in recursively.
@@ -75,6 +96,25 @@ pub fn archive_create(
 
     let total = crate::scanner::tree_stats(sources.clone(), cancel.clone())?.file_count;
     let file = File::create(dest).map_err(|e| FileError::from_io(e, dest))?;
+
+    // Nothing is left behind unless it is the whole archive. A half-written
+    // zip is not an archive of anything, and one abandoned by a failure or a
+    // cancel sat beside the originals looking like a backup of them.
+    let written = write_archive(file, &sources, password, total, &listener, &cancel);
+    if written.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    written
+}
+
+fn write_archive(
+    file: File,
+    sources: &[String],
+    password: Option<String>,
+    total: u64,
+    listener: &Option<Arc<dyn ProgressListener>>,
+    cancel: &Option<Arc<CancelToken>>,
+) -> Result<u64> {
     let mut zip = ZipWriter::new(BufWriter::new(file));
     let dir_options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     // An empty string is not a password. It arrives as one when a dialog is
@@ -90,16 +130,20 @@ pub fn archive_create(
     };
     let mut done = 0u64;
 
-    for source in &sources {
+    for source in sources {
         let src = Path::new(source);
         // Everything is stored relative to the source's parent, so zipping
         // /sdcard/DCIM gives you "DCIM/photo.jpg", not the whole path.
         let base = src.parent().unwrap_or(Path::new(""));
 
-        for entry in WalkDir::new(src).follow_links(false).into_iter().filter_map(|e| e.ok()) {
-            if let Some(ref token) = cancel {
+        for entry in WalkDir::new(src).follow_links(false) {
+            if let Some(token) = cancel {
                 token.check()?;
             }
+            // Not filter_map(ok): a folder that cannot be read has to fail the
+            // archive. Leaving it out reported success for an archive missing
+            // it, and compressing is often the step before deleting.
+            let entry = entry.map_err(walk_error)?;
             let path = entry.path();
             let Ok(rel) = path.strip_prefix(base) else { continue };
             let name = rel.to_string_lossy().replace('\\', "/");
@@ -115,14 +159,24 @@ pub fn archive_create(
             std::io::copy(&mut reader, &mut zip)?;
 
             done += 1;
-            if let Some(ref l) = listener {
+            if let Some(l) = listener {
                 l.on_progress(done, total, name);
             }
         }
     }
 
-    zip.finish()?;
+    // Flushed here rather than on drop, which would swallow a write error
+    // - a full disk, say - and report a truncated archive as made.
+    zip.finish()?.into_inner().map_err(|e| FileError::from(e.into_error()))?.sync_all()?;
     Ok(done)
+}
+
+fn walk_error(err: walkdir::Error) -> FileError {
+    let path = err.path().map(Path::to_path_buf).unwrap_or_default();
+    match err.into_io_error() {
+        Some(io) => FileError::from_io(io, &path),
+        None => FileError::Io { detail: format!("{}: loops back on itself", path.display()) },
+    }
 }
 
 /// Whether any entry in the archive is encrypted.

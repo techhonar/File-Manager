@@ -1655,3 +1655,126 @@ fn a_record_that_cannot_be_written_leaves_the_file_where_it_was() {
     let orphans = fs::read_dir(trash.join("files")).unwrap().count();
     assert_eq!(orphans, 0, "nothing may be stored without a record");
 }
+
+#[test]
+fn the_largest_files_leave_out_hidden_ones_but_the_totals_do_not() {
+    // "Largest files" is a list to pick deletions from. A trashed file turned
+    // up in it under its trash id, unrecognisable - and deleting it from there
+    // moved a file already in the trash into the trash again, leaving its
+    // original record pointing at nothing. The space it takes is still used,
+    // though, so the totals keep counting it.
+    let tree = TempTree::new("largest-hidden");
+    tree.file(".FileManagerTrash/files/18a2b3c-1f-0", &vec![0u8; 400_000]);
+    tree.file(".thumbnails/big.cache", &vec![0u8; 300_000]);
+    tree.file("Movies/.secret.mp4", &vec![0u8; 250_000]);
+    tree.file("Movies/holiday.mp4", &vec![0u8; 100_000]);
+
+    let analysis = analyze_storage(tree.str(), 10, None, None).unwrap();
+    let names: Vec<&str> = analysis.largest.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["holiday.mp4"], "only the visible file should be offered");
+    assert_eq!(
+        analysis.scanned_bytes, 1_050_000,
+        "every byte on the disk still counts towards what is used",
+    );
+}
+
+#[test]
+fn an_archive_that_cannot_read_a_folder_fails_rather_than_leaving_it_out() {
+    // Compress-then-delete is how people free space. An archive that quietly
+    // skipped the one folder it could not read reported success, and the
+    // originals went with nothing to restore them from.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("zip-unreadable-folder");
+    tree.file("album/one.jpg", b"one");
+    tree.file("album/locked/two.jpg", b"two");
+    let locked = tree.path().join("album/locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let dest = tree.path().join("album.zip");
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "reported success with a folder missing: {result:?}");
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn an_archive_that_fails_partway_leaves_nothing_behind() {
+    // A half-written zip is not an archive of anything, and leaving it meant
+    // the next attempt was named "album (1).zip" beside a broken one.
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("zip-partial");
+    tree.file("album/one.jpg", b"one");
+    let unreadable = tree.file("album/two.jpg", b"two");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let dest = tree.path().join("album.zip");
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        None,
+        None,
+    );
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(result.is_err());
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn a_cancelled_archive_leaves_nothing_behind() {
+    use filemanager_core::cancel::{CancelToken, ProgressListener};
+    use std::sync::Arc;
+
+    struct CancelAfterFirst(Arc<CancelToken>);
+    impl ProgressListener for CancelAfterFirst {
+        fn on_progress(&self, _done: u64, _total: u64, _current: String) {
+            self.0.cancel();
+        }
+    }
+
+    let tree = TempTree::new("zip-cancelled");
+    for i in 0..5 {
+        tree.file(&format!("album/{i}.jpg"), b"picture");
+    }
+    let dest = tree.path().join("album.zip");
+    let token = CancelToken::new();
+
+    let result = archive_create(
+        vec![tree.path().join("album").to_string_lossy().into_owned()],
+        dest.to_string_lossy().into_owned(),
+        None,
+        Some(Arc::new(CancelAfterFirst(token.clone()))),
+        Some(token),
+    );
+
+    assert!(result.is_err());
+    assert!(!dest.exists(), "left a partial archive behind");
+}
+
+#[test]
+fn listing_an_archive_gives_each_entry_its_own_time() {
+    let tree = TempTree::new("zip-list-times");
+    let zip_path = tree.path().join("old.zip");
+    {
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let stamp = zip::DateTime::from_date_and_time(2020, 1, 2, 3, 4, 6).unwrap();
+        let options = zip::write::SimpleFileOptions::default().last_modified_time(stamp);
+        zip.start_file("old.txt", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"from before").unwrap();
+        zip.finish().unwrap();
+    }
+
+    let listed = archive_list(zip_path.to_string_lossy().into_owned()).unwrap();
+
+    // 2020-01-02 03:04:06, the wall-clock time the entry carries.
+    assert_eq!(listed[0].modified_ms, 1_577_934_246_000);
+}
