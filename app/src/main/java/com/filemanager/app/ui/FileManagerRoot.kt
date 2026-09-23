@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.animation.core.tween
@@ -24,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,6 +48,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.data.ftpd.FtpService
+import com.filemanager.app.data.install.isBundle
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.ui.screens.FtpServerScreen
 import com.filemanager.app.ui.screens.RemoteBrowserScreen
@@ -190,7 +193,12 @@ fun FileManagerRoot(
         )
     }
 
-    val openFile: (FileEntry) -> Unit = { entry -> openWithExternalApp(context, entry.path) }
+    // A split-APK bundle is installed here rather than handed on: no app on
+    // the phone opens one, so handing it on did nothing at all.
+    val openPath: (String) -> Unit = { path ->
+        if (isBundle(path)) app.bundleInstaller.install(path) else openWithExternalApp(context, path)
+    }
+    val openFile: (FileEntry) -> Unit = { entry -> openPath(entry.path) }
 
     /**
      * Always shows the chooser, where opening normally goes straight to the
@@ -241,6 +249,20 @@ fun FileManagerRoot(
                     toast(context, "No app can receive these files")
             }
         }
+    }
+
+    // Where a bundle's game data was left, and what to do with it - more than
+    // a toast can hold, and it may arrive after the user has moved on.
+    val installNotice by app.bundleInstaller.notice.collectAsState()
+    installNotice?.let { notice ->
+        AlertDialog(
+            onDismissRequest = app.bundleInstaller::dismissNotice,
+            confirmButton = {
+                TextButton(onClick = app.bundleInstaller::dismissNotice) { Text("OK") }
+            },
+            title = { Text("Game data") },
+            text = { Text(notice) },
+        )
     }
 
     if (showThemeDialog) {
@@ -472,7 +494,7 @@ fun FileManagerRoot(
                     )
                     RemoteBrowserScreen(
                         viewModel = vm,
-                        onOpenDownloaded = { file -> openWithExternalApp(context, file.absolutePath) },
+                        onOpenDownloaded = { file -> openPath(file.absolutePath) },
                         downloadDirectory = downloadDirectory,
                         onNavigateBack = { navController.popBackStack() },
                     )
