@@ -277,10 +277,9 @@ fun FileManagerRoot(
                 // Refreshed each time Home comes back into view. The view model
                 // outlives trips to other screens, and it loaded once, when it
                 // was made - so after deleting things and coming back, Trash
-                // still showed its old size and Recent still listed files that
-                // were gone, until the app was restarted. Tied to the
-                // navigation entry's lifecycle, so returning from another app
-                // counts too.
+                // and the storage gauges still showed the old figures, until
+                // the app was restarted. Tied to the navigation entry's
+                // lifecycle, so returning from another app counts too.
                 DisposableEffect(entry) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) vm.refresh()
@@ -313,7 +312,6 @@ fun FileManagerRoot(
                         onTrashClick = { navController.navigate(Routes.TRASH) },
                     onFavoritesClick = { navController.navigate(Routes.FAVORITES) },
                         onManageStorageClick = { navController.navigate(Routes.STORAGE) },
-                        onFileClick = openFile,
                         remoteServers = remoteServers,
                         onRemoteServerClick = { server ->
                             navController.navigate(Routes.remote(server.id))

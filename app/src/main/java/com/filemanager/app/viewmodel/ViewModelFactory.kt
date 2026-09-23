@@ -53,7 +53,7 @@ class ViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = when {
         modelClass.isAssignableFrom(HomeViewModel::class.java) ->
-            HomeViewModel(repository, volumes, primaryPath, hasRemovableSlot) as T
+            HomeViewModel(repository, volumes, hasRemovableSlot) as T
 
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
             BrowserViewModel(
