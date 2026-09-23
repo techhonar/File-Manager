@@ -65,6 +65,10 @@ fn categorizes_by_extension() {
     assert_eq!(categorize("report.pdf"), FileCategory::Document);
     assert_eq!(categorize("backup.zip"), FileCategory::Archive);
     assert_eq!(categorize("app.apk"), FileCategory::Apk);
+    // Split-APK bundles are installation files too - the app installs them.
+    assert_eq!(categorize("game.XAPK"), FileCategory::Apk);
+    assert_eq!(categorize("app.apks"), FileCategory::Apk);
+    assert_eq!(categorize("app.apkm"), FileCategory::Apk);
     assert_eq!(categorize("no-extension"), FileCategory::Other);
     assert_eq!(categorize(".bashrc"), FileCategory::Other);
 }

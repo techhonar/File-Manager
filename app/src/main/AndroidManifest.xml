@@ -95,6 +95,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!--
+          Where the installer reports back on a split-APK bundle this app
+          handed it: first to ask for the user's confirmation, then with the
+          outcome. Only the installer reaches it, through a pending intent.
+        -->
+        <receiver
+            android:name=".data.install.InstallResultReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

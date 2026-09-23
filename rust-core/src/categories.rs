@@ -28,7 +28,9 @@ const DOCUMENT: &[&str] = &[
 const ARCHIVE: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "iso",
 ];
-const APK: &[&str] = &["apk", "apex", "aab", "xapk"];
+/// Installers, including the split-APK bundles the app installs itself: APKPure's
+/// .xapk, SAI's .apks and APKMirror's .apkm.
+const APK: &[&str] = &["apk", "apex", "aab", "xapk", "apks", "apkm"];
 
 /// Longest extension in the tables above, used to reject early.
 const LONGEST_EXTENSION: usize = 5;
