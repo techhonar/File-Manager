@@ -1390,9 +1390,101 @@ fn a_cancelled_walk_is_not_remembered() {
         )
         .unwrap();
 
-    // Whatever it happened to reach before stopping is not the answer, and
-    // showing it next time as though it were would be worse than nothing.
+    // Stopped before it found anything, so there is nothing to show next
+    // time - and an empty page would open the category on "No files match".
     assert!(session.cached("images".into()).is_none());
+}
+
+#[test]
+fn a_remembered_category_is_still_there_for_the_next_run_of_the_app() {
+    // Android ends a backgrounded app's process freely, and a cache kept only
+    // in memory went with it: the category opened on a spinner every time the
+    // user came back to the app.
+    let tree = TempTree::new("session-cache-disk");
+    tree.file("photos/one.jpg", b"x");
+    tree.file("photos/two.jpg", b"x");
+    let root = vec![tree.path().join("photos").to_string_lossy().into_owned()];
+    let cache_dir = tree.path().join("cache").to_string_lossy().into_owned();
+
+    let first = filemanager_core::session::SearchSession::with_cache_dir(cache_dir.clone());
+    first
+        .run(root, plain_filter(""), 100, "category:IMAGE".into(), PageSink::new(), None)
+        .unwrap();
+    drop(first);
+
+    let next = filemanager_core::session::SearchSession::with_cache_dir(cache_dir);
+    let page = next.cached("category:IMAGE".into()).expect("remembered on disk");
+    let mut names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["one.jpg", "two.jpg"]);
+    assert_eq!(page.total, 2);
+    assert!(page.finished, "it came from a walk that ran to the end");
+    assert!(next.cached("category:VIDEO".into()).is_none(), "and only under its own key");
+}
+
+#[test]
+fn a_file_deleted_since_is_not_brought_back_from_disk() {
+    let tree = TempTree::new("session-cache-disk-stale");
+    tree.file("photos/kept.jpg", b"x");
+    let gone = tree.file("photos/gone.jpg", b"x");
+    let root = vec![tree.path().join("photos").to_string_lossy().into_owned()];
+    let cache_dir = tree.path().join("cache").to_string_lossy().into_owned();
+
+    filemanager_core::session::SearchSession::with_cache_dir(cache_dir.clone())
+        .run(root, plain_filter(""), 100, "category:IMAGE".into(), PageSink::new(), None)
+        .unwrap();
+    // Deleted by some other app while this one was not running.
+    fs::remove_file(&gone).unwrap();
+
+    let page = filemanager_core::session::SearchSession::with_cache_dir(cache_dir)
+        .cached("category:IMAGE".into())
+        .unwrap();
+    let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["kept.jpg"], "a file that has gone would fail when tapped");
+    assert_eq!(page.total, 1);
+}
+
+#[test]
+fn a_file_deleted_from_the_results_is_forgotten_by_the_cache_too() {
+    // Otherwise it came back the next time the category was opened, until
+    // the walk caught up with it.
+    let tree = TempTree::new("session-cache-forget");
+    tree.file("one.jpg", b"x");
+    let two = tree.file("two.jpg", b"x");
+    let root = vec![tree.path().to_string_lossy().into_owned()];
+
+    let session = filemanager_core::session::SearchSession::new();
+    session
+        .run(root, plain_filter(""), 100, "category:IMAGE".into(), PageSink::new(), None)
+        .unwrap();
+    session.forget(vec![two.to_string_lossy().into_owned()]);
+
+    let page = session.cached("category:IMAGE".into()).unwrap();
+    let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["one.jpg"]);
+    assert_eq!(page.total, 1);
+}
+
+#[test]
+fn forgetting_the_cache_forgets_it_on_disk_as_well() {
+    let tree = TempTree::new("session-cache-disk-forget");
+    tree.file("one.jpg", b"x");
+    let root = vec![tree.path().to_string_lossy().into_owned()];
+    let cache_dir = tree.path().join("cache").to_string_lossy().into_owned();
+
+    let session = filemanager_core::session::SearchSession::with_cache_dir(cache_dir.clone());
+    session
+        .run(root, plain_filter(""), 100, "category:IMAGE".into(), PageSink::new(), None)
+        .unwrap();
+    session.forget_cached();
+
+    assert!(session.cached("category:IMAGE".into()).is_none());
+    assert!(
+        filemanager_core::session::SearchSession::with_cache_dir(cache_dir)
+            .cached("category:IMAGE".into())
+            .is_none(),
+        "a new session found it on disk",
+    );
 }
 
 #[test]
