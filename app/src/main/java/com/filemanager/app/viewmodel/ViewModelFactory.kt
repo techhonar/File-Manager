@@ -73,6 +73,7 @@ class ViewModelFactory(
                 clipboard = clipboard,
                 settings = settings,
                 roots = volumes.map { it.path },
+                downloadsPath = StorageVolumes.downloadsPath(),
                 paths = paths,
                 session = requireNotNull(searchSession) { "searchSession not supplied" },
             ) as T

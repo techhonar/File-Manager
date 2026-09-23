@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.filemanager_core.CancelToken
-import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SearchPage
@@ -35,7 +34,7 @@ data class SearchState(
      * one opens its own list with its own layout, and two at once had no
      * layout of its own and no heading that described it.
      */
-    val category: FileCategory? = null,
+    val category: Category? = null,
     val results: List<FileEntry> = emptyList(),
     val isSearching: Boolean = false,
     val hasSearched: Boolean = false,
@@ -70,6 +69,17 @@ data class SearchState(
      * more, rather than quietly pretending the page is all of it.
      */
     val total: Long = 0,
+    /**
+     * True while [results] is a whole list remembered from an earlier walk of
+     * this category, with a fresh walk running underneath.
+     *
+     * That walk's pages are held back until its last, which replaces the list
+     * in one go. Each page used to go straight in: the remembered list was on
+     * screen for a fraction of a second, then swapped for the few dozen files
+     * the walk had reached so far - so the category looked as though it was
+     * scanning from nothing after all.
+     */
+    val refreshingRemembered: Boolean = false,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
 
@@ -87,6 +97,8 @@ class SearchViewModel(
     private val clipboard: FileClipboard,
     private val settings: AppSettings,
     private val roots: List<String>,
+    /** What the Downloads category lists, all of it and nothing else. */
+    private val downloadsPath: String,
     /** Favourites and pins, which a rename has to carry to the new name. */
     private val paths: PathPrefs,
     /**
@@ -128,7 +140,7 @@ class SearchViewModel(
      */
     private var searchedFor: SearchCriteria? = null
 
-    private data class SearchCriteria(val query: String, val category: FileCategory?)
+    private data class SearchCriteria(val query: String, val category: Category?)
 
     /**
      * Every keystroke searches, as it should - but most keystrokes never
@@ -142,7 +154,18 @@ class SearchViewModel(
      * or deleting past it - has to go to disk.
      */
     fun onQueryChange(query: String) {
-        _state.update { it.copy(query = query) }
+        val before = _state.value
+        // Whatever is on screen no longer answers the query, remembered or not.
+        _state.update { it.copy(query = query, refreshingRemembered = false) }
+
+        // Emptying the box in a category goes back to the category's own list,
+        // which is the one thing remembered - so it is shown at once instead of
+        // the last query's results while the whole category is walked again.
+        val category = before.category
+        if (query.isBlank() && before.query.isNotBlank() && category != null) {
+            show(category)
+            return
+        }
 
         if (narrowInSession(query)) {
             return
@@ -151,29 +174,53 @@ class SearchViewModel(
     }
 
     /** Show this category, or show everything if it is already the one shown. */
-    fun toggleCategory(category: FileCategory) {
-        _state.update { current ->
-            val next = if (current.category == category) null else category
-            // Moving to a different list, which has its own stored layout.
-            current.copy(category = next, viewMode = storedViewMode(next))
-        }
-        // Changing the filter can widen the set, so what is held cannot answer.
-        searchedFor = null
-        showCached(_state.value.category, _state.value.query)
-        scheduleWalk()
+    fun toggleCategory(category: Category) {
+        show(if (_state.value.category == category) null else category)
+    }
+
+    /** Whether [applyCategory] has run for this screen. */
+    private var arrived = false
+
+    /**
+     * Open on the category whose tile was tapped on the home screen.
+     *
+     * Once per screen, not once per call. The call comes again whenever the
+     * activity is recreated - turning the phone, or a change of theme - and
+     * each time it threw the list away and started the walk over, and put
+     * back the category if the user had since switched to another.
+     */
+    fun applyCategory(category: Category) {
+        if (arrived) return
+        arrived = true
+        show(category)
     }
 
     /**
-     * Replace the filter with a single category and search immediately.
+     * Switch the screen to [next]'s list, or to nothing.
      *
-     * Used when the user taps a tile on the home screen - it replaces rather
-     * than adds, so arriving from "Videos" shows videos and not videos plus
-     * whatever was ticked last time.
+     * What is on screen belongs to the category being left, so it goes at
+     * once. Switching used to leave it there under the new heading while the
+     * new walk ran - and since what a category remembers was only ever put
+     * into an empty screen, it was never shown on a switch at all.
      */
-    fun applyCategory(category: FileCategory) {
-        _state.update { it.copy(category = category, viewMode = storedViewMode(category)) }
+    private fun show(next: Category?) {
+        cancelSearch()
+        // What the session holds was found for the category being left.
         searchedFor = null
-        showCached(category, _state.value.query)
+        _state.update {
+            it.withResults(emptyList()).copy(
+                category = next,
+                // Moving to a different list, which has its own stored layout.
+                viewMode = storedViewMode(next),
+                total = 0,
+                hasSearched = false,
+                // A selection belongs to the list it was made in.
+                selectionActive = false,
+                refreshingRemembered = false,
+                resultsEpoch = it.resultsEpoch + 1,
+            )
+        }
+        showCached(next, _state.value.query)
         scheduleWalk()
     }
 
@@ -287,15 +334,33 @@ class SearchViewModel(
             // in practice be read correctly - but relying on that is the kind
             // of reasoning that stops being true when the code moves.
             val everythingHeld = AtomicBoolean(true)
+            val firstPage = AtomicBoolean(true)
             val observer = object : SearchObserver {
                 override fun onPage(page: SearchPage) {
                     if (generation.get() != mine) return
                     everythingHeld.set(page.complete)
+                    // Outside the update, which may run its block more than once.
+                    val first = firstPage.getAndSet(false)
                     _state.update {
+                        // A whole remembered list stays until this walk has a
+                        // whole answer to put in its place. See
+                        // refreshingRemembered.
+                        if (it.refreshingRemembered && !page.finished) return@update it
                         it.withResults(page.entries).copy(
                             total = page.total.toLong(),
                             hasSearched = true,
                             isSearching = !page.finished,
+                            refreshingRemembered = false,
+                            // A walk's first page starts a different list - a
+                            // new query's - and the rest add to it. One that
+                            // replaces a remembered list is that list brought
+                            // up to date, and whoever is reading it keeps
+                            // their place in it.
+                            resultsEpoch = if (first && !it.refreshingRemembered) {
+                                it.resultsEpoch + 1
+                            } else {
+                                it.resultsEpoch
+                            },
                         )
                     }
                 }
@@ -303,7 +368,8 @@ class SearchViewModel(
 
             val filter = SearchFilter(
                 query = current.query,
-                categories = listOfNotNull(current.category),
+                // Downloads is a folder, not a type: every type, in one place.
+                categories = listOfNotNull((current.category as? Category.OfType)?.type),
                 minSize = null,
                 maxSize = null,
                 modifiedAfter = null,
@@ -317,7 +383,7 @@ class SearchViewModel(
             val ran = runCatching {
                 repository.runSearch(
                     session = session,
-                    roots = roots,
+                    roots = rootsFor(current.category),
                     filter = filter,
                     pageSize = PAGE_SIZE,
                     cacheKey = cacheKeyFor(current.category, current.query),
@@ -396,12 +462,10 @@ class SearchViewModel(
         },
     )
 
-    /**
-     * Which stored layout this screen is currently showing.
-     *
-     * A category is its own list and keeps its own layout; no category is a
-     * plain search, which keeps one of its own.
-     */
+    /** Where [category]'s files are: Downloads in one folder, the rest anywhere. */
+    private fun rootsFor(category: Category?): List<String> =
+        if (category == Category.Downloads) listOf(downloadsPath) else roots
+
     /**
      * Where a category's last results are filed, or empty for a free-text
      * search.
@@ -410,8 +474,8 @@ class SearchViewModel(
      * opened over and over; typed queries are unbounded in number and mostly
      * typed once.
      */
-    private fun cacheKeyFor(category: FileCategory?, query: String): String =
-        if (category != null && query.isBlank()) "category:${category.name}" else ""
+    private fun cacheKeyFor(category: Category?, query: String): String =
+        if (category != null && query.isBlank()) "category:${category.key}" else ""
 
     /**
      * Show what this category showed last time, while a fresh walk runs.
@@ -421,17 +485,19 @@ class SearchViewModel(
      * itself a moment later. On a full device that spinner was several
      * seconds of every visit to the same category.
      */
-    private fun showCached(category: FileCategory?, query: String) {
+    private fun showCached(category: Category?, query: String) {
         val key = cacheKeyFor(category, query)
         if (key.isEmpty()) return
 
         viewModelScope.launch {
-            val page = repository.cachedSearch(session, key) ?: return@launch
+            val page = runCatching { repository.cachedSearch(session, key) }.getOrNull()
+                ?: return@launch
             _state.update { current ->
-                // Only into an empty list. The walk may have got there first -
-                // it is faster than this on a small folder - and replacing
-                // fresh results with remembered ones would be going backwards.
-                if (current.results.isNotEmpty()) return@update current
+                // Only into the empty screen it was fetched for. The walk may
+                // have got there first - it is quicker than this on a small
+                // folder - and replacing what it found with what was
+                // remembered would be going backwards.
+                if (current.hasSearched || current.results.isNotEmpty()) return@update current
                 // And only if the screen is still showing what was asked for.
                 if (current.category != category || current.query != query) {
                     return@update current
@@ -439,16 +505,27 @@ class SearchViewModel(
                 current.withResults(page.entries).copy(
                     total = page.total.toLong(),
                     hasSearched = true,
+                    // A whole list is kept until the walk has a whole one to
+                    // replace it with. Part of one, left by a walk the user
+                    // did not wait for, only until the walk's first page,
+                    // which is already as much and more up to date.
+                    refreshingRemembered = page.finished,
                     resultsEpoch = current.resultsEpoch + 1,
                 )
             }
         }
     }
 
-    private fun scopeFor(category: FileCategory?): ViewScope =
-        category?.let { ViewScope.category(it.name) } ?: ViewScope.Search
+    /**
+     * Which stored layout this screen is currently showing.
+     *
+     * A category is its own list and keeps its own layout; no category is a
+     * plain search, which keeps one of its own.
+     */
+    private fun scopeFor(category: Category?): ViewScope =
+        category?.let { ViewScope.category(it.key) } ?: ViewScope.Search
 
-    private fun storedViewMode(category: FileCategory?): ViewMode =
+    private fun storedViewMode(category: Category?): ViewMode =
         settings.viewMode(scopeFor(category)).value.toViewMode()
 
     fun setViewMode(mode: ViewMode) {
