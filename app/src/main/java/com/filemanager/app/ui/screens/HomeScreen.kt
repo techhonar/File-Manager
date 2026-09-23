@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,7 +34,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.filemanager.app.data.StorageVolume
-import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.color
 import com.filemanager.app.ui.components.icon
 import com.filemanager.app.ui.components.label
@@ -56,12 +53,11 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.HomeState
 import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileCategory
-import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.formatSize
 
 /**
- * The landing page: Recent files, a category grid, per-volume storage gauges,
- * then utilities.
+ * The landing page: a row into Recent files, a category grid, per-volume
+ * storage gauges, network storage, then utilities.
  *
  * Deliberately plain rows on the page background rather than rounded grouped
  * cards - only the category tiles get a raised surface. Section headings are
@@ -77,7 +73,6 @@ fun HomeScreen(
     onTrashClick: () -> Unit,
     onFavoritesClick: () -> Unit,
     onManageStorageClick: () -> Unit,
-    onFileClick: (FileEntry) -> Unit,
     /** The saved network locations, shown between Storage and Utilities. */
     remoteServers: List<RemoteServer>,
     onRemoteServerClick: (RemoteServer) -> Unit,
@@ -90,6 +85,27 @@ fun HomeScreen(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
+        // A way in rather than the files themselves. They were listed at the
+        // bottom, the newest ten and "View all", which made the home screen
+        // long and left the way to all of them below everything else. One
+        // row at the top, as My Files has it, with the whole list a tap away.
+        item {
+            HomeRow(
+                icon = Icons.Outlined.Schedule,
+                title = "Recent files",
+                onClick = onRecentClick,
+            )
+            HorizontalDivider(
+                modifier = Modifier.padding(
+                    start = OneUi.ScreenPadding,
+                    end = OneUi.ScreenPadding,
+                    top = 12.dp,
+                ),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+        }
+
         item { SectionHeading("Categories") }
         item {
             Column(
@@ -199,23 +215,6 @@ fun HomeScreen(
                 title = "Manage storage",
                 onClick = onManageStorageClick,
             )
-        }
-
-        if (state.recent.isNotEmpty()) {
-            item { SectionHeading("Recent files") }
-            items(state.recent.take(10), key = { it.path }) { entry ->
-                SearchResultRow(entry = entry, onClick = { onFileClick(entry) })
-            }
-            item {
-                // Only the newest few are listed here; the rest are a tap away
-                // rather than an endless home screen.
-                TextButton(
-                    onClick = onRecentClick,
-                    modifier = Modifier.padding(start = OneUi.ScreenPadding - 12.dp),
-                ) {
-                    Text("View all")
-                }
-            }
         }
 
         item { Spacer(Modifier.height(32.dp)) }
