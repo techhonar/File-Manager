@@ -33,9 +33,11 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
@@ -75,6 +77,7 @@ import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.color
 import com.filemanager.app.ui.components.label
 import com.filemanager.app.ui.theme.OneUi
+import com.filemanager.app.viewmodel.Category
 import com.filemanager.app.viewmodel.SearchViewModel
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
@@ -111,38 +114,48 @@ fun SearchScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
 
-    // Whether the reader has taken hold of the list since the last query.
-    // Everything below keeps the list showing its first row, and this is the
-    // one thing that stops it: once someone has scrolled somewhere on purpose,
-    // moving them is worse than anything it would be fixing.
-    var userScrolled by remember { mutableStateOf(false) }
-    LaunchedEffect(state.query, state.category) { userScrolled = false }
-    // Drags rather than isScrollInProgress, which is also true while the
-    // scroll below is running - that would set this on the first reset and
-    // stop every later one.
+    // Which list the reader has taken hold of, by its epoch. Everything below
+    // keeps the list showing its first row, and this is the one thing that
+    // stops it: once someone has scrolled somewhere on purpose, moving them is
+    // worse than anything it would be fixing. Kept by epoch rather than as a
+    // flag cleared when the query changed, which happened a frame after the
+    // new list arrived - long enough for the old scrolling to hold it. Saved
+    // like the scroll position itself, so coming back from "Show in folder"
+    // finds the reader where they were rather than back at the top.
+    var scrolledEpoch by rememberSaveable { mutableIntStateOf(-1) }
+    // Drags rather than isScrollInProgress, which is also true while the list
+    // is being moved by anything else.
     LaunchedEffect(listState, gridState) {
         merge(
             listState.interactionSource.interactions,
             gridState.interactionSource.interactions,
-        ).collect { if (it is DragInteraction.Start) userScrolled = true }
+        ).collect { if (it is DragInteraction.Start) scrolledEpoch = state.resultsEpoch }
     }
-    // Held at the top until the reader takes hold, rather than put back once
-    // per query. Scrolling once on a change was not enough: a lazy list saves
-    // its scroll position and restores it on the way back in, so re-opening a
-    // category resumed partway down a list that was still empty and stayed
-    // there as results filled in underneath. Re-asserting it on every change
-    // costs nothing when it is already at the top, which is the normal case.
-    LaunchedEffect(listState, gridState) {
-        snapshotFlow { Triple(state.resultsEpoch, state.results.size, state.viewMode) }
-            .collect {
-                if (userScrolled) return@collect
-                // Both, because the layout can be switched while results are
-                // coming in and only one of them is on screen at a time.
-                runCatching {
-                    listState.scrollToItem(0)
-                    gridState.scrollToItem(0)
-                }
-            }
+    // Held at the top until the reader takes hold, on every change to the
+    // results. It used to wait for their number to change. A lazy list keeps
+    // its place by the key of its first row, so as the walk found files newer
+    // than those on screen and put them above, the list followed its old first
+    // row down - and once the page was full, every update was a thousand rows
+    // like the last, nothing put it back, and the category opened partway
+    // down. Only on phones holding more than a thousand of the type, which is
+    // why it showed on some and not others.
+    //
+    // Requested in the composition that brings the results rather than
+    // scrolled to afterwards: the request is honoured by the same layout pass
+    // that places them, where a scroll landed a frame after the list had been
+    // drawn in the wrong place. Both states, because the layout can be
+    // switched and only one of them is on screen at a time.
+    val results = state.results
+    val pinned = remember { PinnedResults() }
+    SideEffect {
+        if (pinned.results === results) return@SideEffect
+        pinned.results = results
+        val reading = scrolledEpoch == state.resultsEpoch ||
+            listState.isScrollInProgress || gridState.isScrollInProgress
+        if (!reading) {
+            listState.requestScrollToItem(0)
+            gridState.requestScrollToItem(0)
+        }
     }
     // Which result has its actions unfolded. One at a time, so the list does
     // not turn into a column of expanded panels.
@@ -233,7 +246,7 @@ fun SearchScreen(
                     .padding(horizontal = OneUi.ScreenPadding),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                FILTER_CATEGORIES.forEach { category ->
+                CATEGORY_CHIPS.forEach { category ->
                     CategoryChip(
                         category = category,
                         selected = category == state.category,
@@ -451,7 +464,7 @@ private fun SearchField(
  */
 @Composable
 private fun CategoryChip(
-    category: FileCategory,
+    category: Category,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -520,14 +533,21 @@ private fun RenameDialogHost(
     }
 }
 
-private val FILTER_CATEGORIES = listOf(
-    FileCategory.IMAGE,
-    FileCategory.VIDEO,
-    FileCategory.AUDIO,
-    FileCategory.DOCUMENT,
-    FileCategory.ARCHIVE,
-    FileCategory.APK,
+/** In the home screen's order, where the two share tiles. */
+private val CATEGORY_CHIPS = listOf(
+    Category.OfType(FileCategory.IMAGE),
+    Category.OfType(FileCategory.VIDEO),
+    Category.OfType(FileCategory.AUDIO),
+    Category.OfType(FileCategory.DOCUMENT),
+    Category.Downloads,
+    Category.OfType(FileCategory.ARCHIVE),
+    Category.OfType(FileCategory.APK),
 )
+
+/** The results the list was last held at the top for. See SearchScreen. */
+private class PinnedResults {
+    var results: List<FileEntry>? = null
+}
 
 /** List or grid, for a screen a category tile lands on. */
 @Composable

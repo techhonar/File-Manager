@@ -82,7 +82,7 @@ import com.filemanager.app.viewmodel.ViewModelFactory
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
-import uniffi.filemanager_core.FileCategory
+import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileEntry
 
 /**
@@ -121,8 +121,8 @@ private object Routes {
     }
 
     /** Search, optionally pre-filtered to one category. */
-    fun search(category: FileCategory? = null): String =
-        if (category == null) "search" else "search?category=${category.name}"
+    fun search(category: Category? = null): String =
+        if (category == null) "search" else "search?category=${category.key}"
 }
 
 @Composable
@@ -308,9 +308,6 @@ fun FileManagerRoot(
                         onCategoryClick = { category ->
                             navController.navigate(Routes.search(category))
                         },
-                        onDownloadsClick = {
-                            navController.navigate(Routes.browse(StorageVolumes.downloadsPath()))
-                        },
                         onRecentClick = { navController.navigate(Routes.RECENT) },
                         onVolumeClick = { navController.navigate(Routes.browse(it.path)) },
                         onTrashClick = { navController.navigate(Routes.TRASH) },
@@ -392,12 +389,11 @@ fun FileManagerRoot(
                 val vm: SearchViewModel = viewModel(factory = factory)
                 val categoryName = entry.arguments?.getString("category")
 
-                // Applied once per arrival, so re-tapping the same tile does
-                // not stack filters and the user can still clear it by hand.
+                // Handed over on every composition of this screen, including
+                // the one after the activity is recreated; the view model
+                // applies it only the first time. See applyCategory.
                 LaunchedEffect(categoryName) {
-                    categoryName
-                        ?.let { name -> FileCategory.entries.firstOrNull { it.name == name } }
-                        ?.let(vm::applyCategory)
+                    categoryName?.let(Category::fromKey)?.let(vm::applyCategory)
                 }
                 SearchScreen(
                     viewModel = vm,

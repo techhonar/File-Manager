@@ -18,6 +18,7 @@ import com.filemanager.app.data.remote.RemoteConnections
 import com.filemanager.app.data.remote.RemoteServers
 import uniffi.filemanager_core.SearchSession
 import kotlinx.coroutines.CoroutineScope
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -55,8 +56,15 @@ class FileManagerApp : Application(), ImageLoaderFactory {
      *
      * There is only ever one search screen, and starting a search replaces
      * whatever the session held, so one is all that is needed.
+     *
+     * What each category last showed is kept on disk too, in the cache
+     * folder, so that it survives Android ending the process - which it does
+     * to any app left in the background for long, and after which every
+     * category used to open onto a spinner again.
      */
-    val searchSession: SearchSession by lazy { SearchSession() }
+    val searchSession: SearchSession by lazy {
+        SearchSession.withCacheDir(File(cacheDir, "category-cache").path)
+    }
 
     /** Saved network locations, and the live connections to them. */
     val remoteServers: RemoteServers by lazy { RemoteServers(this) }

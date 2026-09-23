@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Wifi
 import com.filemanager.app.data.remote.RemoteServer
@@ -53,9 +52,9 @@ import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.color
 import com.filemanager.app.ui.components.icon
 import com.filemanager.app.ui.components.label
-import com.filemanager.app.ui.theme.CategoryColors
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.HomeState
+import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.formatSize
@@ -71,8 +70,8 @@ import uniffi.filemanager_core.formatSize
 @Composable
 fun HomeScreen(
     state: HomeState,
-    onCategoryClick: (FileCategory) -> Unit,
-    onDownloadsClick: () -> Unit,
+    /** Downloads included: it opens the same kind of list as the rest. */
+    onCategoryClick: (Category) -> Unit,
     onRecentClick: () -> Unit,
     onVolumeClick: (StorageVolume) -> Unit,
     onTrashClick: () -> Unit,
@@ -101,14 +100,9 @@ fun HomeScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         row.forEach { tile ->
                             CategoryTileCard(
-                                tile = tile,
+                                category = tile,
                                 modifier = Modifier.weight(1f),
-                                onClick = {
-                                    when (tile) {
-                                        is HomeTile.Category -> onCategoryClick(tile.category)
-                                        HomeTile.Downloads -> onDownloadsClick()
-                                    }
-                                },
+                                onClick = { onCategoryClick(tile) },
                             )
                         }
                         // Pad a short final row so tiles keep their width
@@ -228,23 +222,18 @@ fun HomeScreen(
     }
 }
 
-/** What a tile on the category grid can point at. */
-private sealed interface HomeTile {
-    data class Category(val category: FileCategory) : HomeTile
-    data object Downloads : HomeTile
-}
-
 /**
  * Downloads sits among the file-type tiles even though it is a folder, not a
- * type - it is the one location people reach for often enough to earn a tile.
+ * type - it is the one location people reach for often enough to earn a tile,
+ * and it opens the same way the others do: its files, newest first.
  */
 private val HOME_TILES = listOf(
-    HomeTile.Category(FileCategory.IMAGE),
-    HomeTile.Category(FileCategory.VIDEO),
-    HomeTile.Category(FileCategory.AUDIO),
-    HomeTile.Category(FileCategory.DOCUMENT),
-    HomeTile.Downloads,
-    HomeTile.Category(FileCategory.APK),
+    Category.OfType(FileCategory.IMAGE),
+    Category.OfType(FileCategory.VIDEO),
+    Category.OfType(FileCategory.AUDIO),
+    Category.OfType(FileCategory.DOCUMENT),
+    Category.Downloads,
+    Category.OfType(FileCategory.APK),
 )
 
 /**
@@ -255,18 +244,11 @@ private val HOME_TILES = listOf(
  */
 @Composable
 private fun CategoryTileCard(
-    tile: HomeTile,
+    category: Category,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val accent = when (tile) {
-        is HomeTile.Category -> tile.category.color()
-        HomeTile.Downloads -> CategoryColors.Downloads
-    }
-    val caption = when (tile) {
-        is HomeTile.Category -> tile.category.label()
-        HomeTile.Downloads -> "Downloads"
-    }
+    val accent = category.color()
 
     Box(
         modifier = modifier
@@ -280,7 +262,7 @@ private fun CategoryTileCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            if (tile is HomeTile.Category && tile.category == FileCategory.APK) {
+            if (category == Category.OfType(FileCategory.APK)) {
                 Text(
                     text = "APK",
                     color = accent,
@@ -288,12 +270,8 @@ private fun CategoryTileCard(
                     fontSize = 18.sp,
                 )
             } else {
-                val glyph: ImageVector = when (tile) {
-                    is HomeTile.Category -> tile.category.icon()
-                    HomeTile.Downloads -> Icons.Outlined.Download
-                }
                 Icon(
-                    imageVector = glyph,
+                    imageVector = category.icon(),
                     contentDescription = null,
                     tint = accent,
                     modifier = Modifier.size(30.dp),
@@ -301,7 +279,7 @@ private fun CategoryTileCard(
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                text = caption,
+                text = category.label(),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,

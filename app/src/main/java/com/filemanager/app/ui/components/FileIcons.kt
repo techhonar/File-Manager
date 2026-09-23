@@ -3,6 +3,7 @@ package com.filemanager.app.ui.components
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderZip
 import androidx.compose.material.icons.outlined.Image
@@ -12,6 +13,7 @@ import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.filemanager.app.ui.theme.CategoryColors
+import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileCategory
 
 // Outlined rather than filled: the category grid draws a thin coloured glyph
@@ -48,4 +50,19 @@ fun FileCategory.label(): String = when (this) {
     FileCategory.ARCHIVE -> "Archives"
     FileCategory.APK -> "Installation files"
     FileCategory.OTHER -> "Other"
+}
+
+fun Category.icon(): ImageVector = when (this) {
+    is Category.OfType -> type.icon()
+    Category.Downloads -> Icons.Outlined.Download
+}
+
+fun Category.color(): Color = when (this) {
+    is Category.OfType -> type.color()
+    Category.Downloads -> CategoryColors.Downloads
+}
+
+fun Category.label(): String = when (this) {
+    is Category.OfType -> type.label()
+    Category.Downloads -> "Downloads"
 }

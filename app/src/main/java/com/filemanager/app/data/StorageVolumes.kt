@@ -76,15 +76,15 @@ object StorageVolumes {
     fun primaryPath(): String = Environment.getExternalStorageDirectory().absolutePath
 
     /**
-     * The public Downloads folder, which the home screen gives its own tile.
+     * The public Downloads folder, which the Downloads category lists.
      *
-     * Falls back to the storage root if the device somehow lacks it, so the
-     * tile always opens somewhere rather than failing.
+     * Whether or not it exists. It used to fall back to the storage root when
+     * missing, which suited a tile that opened a folder - but as a category
+     * that would list every file on the phone as downloaded. Missing, the
+     * category is empty, which is the truth.
      */
-    fun downloadsPath(): String {
-        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return if (dir != null && dir.exists()) dir.absolutePath else primaryPath()
-    }
+    fun downloadsPath(): String =
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
 
     /**
      * Well-known folders shown as shortcuts, skipping any the device lacks.
