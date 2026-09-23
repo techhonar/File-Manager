@@ -38,6 +38,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
+      Tapping an .apk hands it to the system installer, which from Android 8
+      checks the app it came from: one that targets 8 or later without this
+      declared is turned away, and the installer closes the moment it opens,
+      with no message - so tapping an .apk did nothing at all. Declared, the
+      installer asks the user once to allow installs from this app, then
+      installs. It grants nothing on its own; that switch is the user's.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       READ_MEDIA_IMAGES / VIDEO / AUDIO are still deliberately absent. They were
       here as a fallback for when all-files access is declined, but no such
       fallback was ever built - the app gates every screen on
