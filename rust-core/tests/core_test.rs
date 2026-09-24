@@ -1947,6 +1947,32 @@ fn a_trashed_folder_whose_original_cannot_all_be_removed_stays_listed() {
 }
 
 #[test]
+fn a_file_that_cannot_be_removed_is_not_left_in_the_trash_as_well() {
+    // A file is removed in one step or not at all, so one that could not be
+    // is still whole where it was - and a copy kept in the trash beside it
+    // would be listed as deleted when it was not.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(trash) = other_filesystem("trash-file-stays") else { return };
+    let tree = TempTree::new("trash-file-stays-src");
+    let photo = tree.file("locked/photo.jpg", b"still here");
+    let locked = tree.path().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        let _ = fs::remove_file(locked.join("probe"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let result = trash_move(trash.str(), photo.to_string_lossy().into_owned());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&photo).unwrap(), "still here");
+    assert!(trash_list(trash.str(), 30).unwrap().is_empty(), "listed as deleted when it was not");
+    assert_eq!(fs::read_dir(trash.path().join("files")).unwrap().count(), 0);
+}
+
+#[test]
 fn a_cancelled_duplicate_scan_says_so_rather_than_returning_part_of_the_answer() {
     // Cancelling while files were being hashed returned whatever groups had
     // been finished by then as a successful scan, so the screen showed a
