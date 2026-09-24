@@ -79,6 +79,8 @@ import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.CompressDialog
 import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
+import com.filemanager.app.data.archiveBaseName
+import com.filemanager.app.data.isExtractable
 import androidx.activity.compose.BackHandler
 import com.filemanager.app.ui.components.ExtractDialog
 import kotlinx.coroutines.delay
@@ -353,7 +355,7 @@ fun BrowserScreen(
             // From the view model, which checked the name is free. Worked out
             // here it could promise a folder that already existed.
             destinationName = state.extractDestination?.substringAfterLast('/')
-                ?: target.name.substringBeforeLast('.', target.name),
+                ?: archiveBaseName(target.name),
             needsPassword = state.extractNeedsPassword,
             wrongPassword = state.extractWrongPassword,
             onExtract = { password -> viewModel.extract(target.path, password) },
@@ -434,11 +436,10 @@ private fun FileList(
                     state.inSelectionMode -> viewModel.toggleSelection(entry.path)
                     entry.isDir -> viewModel.load(entry.path)
                     // Ask before unpacking: it is a lot of writing to do on a
-                    // single tap, and undoing it by hand is worse. Zips only,
-                    // the one kind the core can read: a .rar or .7z opened the
-                    // same dialog and then always failed, where another app
-                    // on the phone could have opened it.
-                    entry.name.endsWith(".zip", ignoreCase = true) -> viewModel.confirmExtract(entry)
+                    // single tap, and undoing it by hand is worse. Only the
+                    // kinds the core can read - anything else, an .iso say,
+                    // goes to whichever app on the phone opens it.
+                    isExtractable(entry.name) -> viewModel.confirmExtract(entry)
                     else -> onOpenFile(entry)
                 }
             }
