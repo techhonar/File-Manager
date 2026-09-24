@@ -1,6 +1,10 @@
 package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -32,6 +36,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.OneUiGroup
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.OneUiSectionHeader
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.StorageBar
 import com.filemanager.app.ui.components.StorageLegend
@@ -114,7 +121,7 @@ fun StorageScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 SelectionActionBar(
                     onDelete = viewModel::deleteSelection,
                     onShare = { onShare(state.selected.toList()) },
@@ -169,16 +176,18 @@ fun StorageScreen(
             if (state.largest.isNotEmpty()) {
                 item { OneUiSectionHeader("Largest files") }
                 items(state.largest, key = { it.path }) { entry ->
-                    SearchResultRow(
-                        entry = entry,
-                        isSelected = entry.path in state.selected,
-                        selectionMode = state.inSelectionMode,
-                        onClick = {
-                            if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                            else onOpenFile(entry)
-                        },
-                        onLongClick = { viewModel.toggleSelection(entry.path) },
-                    )
+                    Box(Modifier.animateItem()) {
+                        SearchResultRow(
+                            entry = entry,
+                            isSelected = entry.path in state.selected,
+                            selectionMode = state.inSelectionMode,
+                            onClick = {
+                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                else onOpenFile(entry)
+                            },
+                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                        )
+                    }
                 }
             }
 
@@ -197,63 +206,77 @@ private fun DuplicateSection(
     onCancel: () -> Unit,
     onClean: (DuplicateGroup) -> Unit,
 ) {
-    Column(Modifier.padding(20.dp)) {
-        when {
-            isScanning -> Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.height(20.dp))
-                Text(
-                    text = progress.ifEmpty { "Scanning…" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp).weight(1f),
-                )
-                TextButton(onClick = onCancel) { Text("Stop") }
-            }
-
-            groups.isEmpty() -> {
-                Text(
-                    text = "Find files stored more than once. This reads file " +
-                        "contents, so it takes a minute on a full device.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = onScan, shape = OneUi.PillShape) {
-                    Text("Scan for duplicates")
+    // AnimatedContent rather than a cross-fade: the three states are
+    // different heights, and the card should grow into the next one
+    // rather than jump.
+    AnimatedContent(
+        targetState = when {
+            isScanning -> Pane.LOADING
+            groups.isEmpty() -> Pane.EMPTY
+            else -> Pane.ITEMS
+        },
+        modifier = Modifier.padding(20.dp),
+        transitionSpec = { fadeIn(PaneFade) togetherWith fadeOut(PaneFade) },
+        label = "duplicates",
+    ) { pane ->
+        Column {
+            when (pane) {
+                Pane.LOADING -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.height(20.dp))
+                    Text(
+                        text = progress.ifEmpty { "Scanning…" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp).weight(1f),
+                    )
+                    TextButton(onClick = onCancel) { Text("Stop") }
                 }
-            }
 
-            else -> {
-                Text(
-                    text = "${groups.size} duplicate sets",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = "${formatSize(reclaimable)} reclaimable",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(16.dp))
+                Pane.EMPTY -> {
+                    Text(
+                        text = "Find files stored more than once. This reads file " +
+                            "contents, so it takes a minute on a full device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = onScan, shape = OneUi.PillShape) {
+                        Text("Scan for duplicates")
+                    }
+                }
 
-                groups.take(20).forEach { group ->
-                    Column(Modifier.padding(vertical = 10.dp)) {
-                        Text(
-                            text = group.files.first().name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "${group.files.size} copies  ·  ${formatSize(group.size)} each",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onClean(group) }, shape = OneUi.PillShape) {
-                                Text("Keep one, trash ${group.files.size - 1}")
+                else -> {
+                    Text(
+                        text = "${groups.size} duplicate sets",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "${formatSize(reclaimable)} reclaimable",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(16.dp))
+
+                    groups.take(20).forEach { group ->
+                        Column(Modifier.padding(vertical = 10.dp)) {
+                            Text(
+                                text = group.files.first().name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "${group.files.size} copies  ·  ${formatSize(group.size)} each",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { onClean(group) }, shape = OneUi.PillShape) {
+                                    Text("Keep one, trash ${group.files.size - 1}")
+                                }
                             }
                         }
                     }

@@ -17,6 +17,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -300,15 +304,20 @@ fun FileManagerRoot(
             navController = navController,
             startDestination = Routes.HOME,
             modifier = Modifier.fillMaxSize(),
-            // One UI slides laterally rather than cross-fading, which also
-            // avoids the transparent midpoint a fade goes through.
+            // Both screens move together, the way One UI does it: the new one
+            // slides in from the side it belongs on while the old one gives
+            // way a little in the same direction, each fading as it goes.
             enterTransition = {
-                slideInHorizontally(initialOffsetX = { it / 6 }) + fadeIn(tween(220))
+                slideInHorizontally(ScreenMotion) { it / 5 } + fadeIn(ScreenFadeIn)
             },
-            exitTransition = { fadeOut(tween(120)) },
-            popEnterTransition = { fadeIn(tween(180)) },
+            exitTransition = {
+                slideOutHorizontally(ScreenMotion) { -it / 10 } + fadeOut(ScreenFadeOut)
+            },
+            popEnterTransition = {
+                slideInHorizontally(ScreenMotion) { -it / 10 } + fadeIn(ScreenFadeIn)
+            },
             popExitTransition = {
-                slideOutHorizontally(targetOffsetX = { it / 6 }) + fadeOut(tween(160))
+                slideOutHorizontally(ScreenMotion) { it / 5 } + fadeOut(ScreenFadeOut)
             },
         ) {
             composable(Routes.HOME) { entry ->
@@ -540,6 +549,11 @@ fun FileManagerRoot(
         }
     }
 }
+
+/** How far and how fast screens move when one replaces another. */
+private val ScreenMotion = tween<IntOffset>(durationMillis = 340, easing = FastOutSlowInEasing)
+private val ScreenFadeIn = tween<Float>(durationMillis = 260, delayMillis = 60, easing = LinearOutSlowInEasing)
+private val ScreenFadeOut = tween<Float>(durationMillis = 180, easing = FastOutLinearInEasing)
 
 /** The home screen's overflow menu: what has no tile of its own. */
 @Composable

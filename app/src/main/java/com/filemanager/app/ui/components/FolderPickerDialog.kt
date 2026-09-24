@@ -1,5 +1,9 @@
 package com.filemanager.app.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -122,46 +126,60 @@ fun FolderPickerDialog(
                         .heightIn(min = 160.dp, max = 320.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    when {
-                        state.isLoading -> CircularProgressIndicator()
+                    // AnimatedContent, not a cross-fade: the box grows from the
+                    // spinner's height to the list's instead of jumping.
+                    AnimatedContent(
+                        targetState = when {
+                            state.isLoading -> Pane.LOADING
+                            state.error != null -> Pane.ERROR
+                            state.folders.isEmpty() -> Pane.EMPTY
+                            else -> Pane.ITEMS
+                        },
+                        transitionSpec = { fadeIn(PaneFade) togetherWith fadeOut(PaneFade) },
+                        contentAlignment = Alignment.Center,
+                        label = "folders",
+                    ) { pane ->
+                        when (pane) {
+                            Pane.LOADING -> CircularProgressIndicator()
 
-                        state.error != null -> Text(
-                            text = state.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                        )
+                            Pane.ERROR -> Text(
+                                text = state.error.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
+                            )
 
-                        state.folders.isEmpty() -> Text(
-                            text = "No folders in here.\nIt can still be shared.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
+                            Pane.EMPTY -> Text(
+                                text = "No folders in here.\nIt can still be shared.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
 
-                        else -> LazyColumn(Modifier.fillMaxWidth()) {
-                            items(state.folders, key = { it.path }) { folder ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onOpen(folder.path) }
-                                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.Default.Folder,
-                                        null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(24.dp),
-                                    )
-                                    Spacer(Modifier.width(16.dp))
-                                    Text(
-                                        text = folder.name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                            Pane.ITEMS -> LazyColumn(Modifier.fillMaxWidth()) {
+                                items(state.folders, key = { it.path }) { folder ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onOpen(folder.path) }
+                                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Folder,
+                                            null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                        Spacer(Modifier.width(16.dp))
+                                        Text(
+                                            text = folder.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -1,5 +1,14 @@
 package com.filemanager.app.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -66,11 +75,19 @@ fun OneUiScreen(
         topBar = {
             LargeTopAppBar(
                 title = {
-                    Text(
-                        text = title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // Crossfaded, so a new folder's name or the selection
+                    // count replaces the old one instead of snapping to it.
+                    AnimatedContent(
+                        targetState = title,
+                        transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(120)) },
+                        label = "title",
+                    ) { shown ->
+                        Text(
+                            text = shown,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 },
                 navigationIcon = navigationIcon,
                 actions = actions,
@@ -88,6 +105,31 @@ fun OneUiScreen(
         snackbarHost = snackbarHost,
         content = content,
     )
+}
+
+/** Which of a list screen's panes is showing: a spinner, an error, "empty", or the list. */
+enum class Pane { LOADING, ERROR, EMPTY, ITEMS }
+
+/**
+ * How panes replace each other: a short cross-fade, so a list arriving after
+ * its spinner - or emptying after the last item goes - does not snap.
+ */
+val PaneFade = tween<Float>(durationMillis = 220)
+
+/**
+ * A bar along the bottom that comes and goes - selection's actions - sliding
+ * up into place and back down, rather than appearing and vanishing at once
+ * and jolting the list above it.
+ */
+@Composable
+fun AnimatedBottomBar(visible: Boolean, content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(260, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(200)),
+        exit = slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(160)),
+    ) {
+        content()
+    }
 }
 
 /**

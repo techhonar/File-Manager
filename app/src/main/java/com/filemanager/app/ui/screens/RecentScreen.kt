@@ -1,6 +1,7 @@
 package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,7 +26,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
@@ -88,7 +92,7 @@ fun RecentScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 SelectionActionBar(
                     onDelete = viewModel::deleteSelection,
                     onCopy = viewModel::copySelection,
@@ -98,34 +102,42 @@ fun RecentScreen(
             }
         },
     ) { padding ->
-        when {
-            state.entries.isEmpty() -> Box(
-                Modifier.padding(padding).fillMaxSize(),
-                Alignment.Center,
-            ) {
-                Text(
-                    text = if (state.isLoading) "Looking for recent files…"
-                    else "Nothing modified recently",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            else -> LazyColumn(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-                items(state.entries, key = { it.path }) { entry ->
-                    SearchResultRow(
-                        entry = entry,
-                        isSelected = entry.path in state.selected,
-                        selectionMode = state.inSelectionMode,
-                        onClick = {
-                            if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                            else onOpenFile(entry)
-                        },
-                        onLongClick = { viewModel.toggleSelection(entry.path) },
+        Crossfade(
+            targetState = if (state.entries.isEmpty()) Pane.EMPTY else Pane.ITEMS,
+            animationSpec = PaneFade,
+            label = "recent",
+        ) { pane ->
+            when (pane) {
+                Pane.EMPTY -> Box(
+                    Modifier.padding(padding).fillMaxSize(),
+                    Alignment.Center,
+                ) {
+                    Text(
+                        text = if (state.isLoading) "Looking for recent files…"
+                        else "Nothing modified recently",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                else -> LazyColumn(
+                    modifier = Modifier.padding(padding).fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        Box(Modifier.animateItem()) {
+                            SearchResultRow(
+                                entry = entry,
+                                isSelected = entry.path in state.selected,
+                                selectionMode = state.inSelectionMode,
+                                onClick = {
+                                    if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                    else onOpenFile(entry)
+                                },
+                                onLongClick = { viewModel.toggleSelection(entry.path) },
+                            )
+                        }
+                    }
                 }
             }
         }

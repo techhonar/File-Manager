@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.SelectAllToggle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.FavoritesViewModel
@@ -112,7 +116,7 @@ fun FavoritesScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 // Only the mark is removed here; the files themselves are left
                 // alone, so this bar carries one action and not the usual set.
                 Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
@@ -147,45 +151,53 @@ fun FavoritesScreen(
             }
         },
     ) { padding ->
-        when {
-            state.entries.isEmpty() -> Box(
-                Modifier.padding(padding).fillMaxSize(),
-                Alignment.Center,
-            ) {
-                Text(
-                    text = when {
-                        state.isLoading -> "Loading…"
-                        // "You have none" and "yours are all hidden" look
-                        // identical otherwise, and only one of them is fixed
-                        // by adding more favourites.
-                        state.hiddenCount > 0 ->
-                            "${state.hiddenCount} hidden " +
-                                (if (state.hiddenCount == 1) "favourite is" else "favourites are") +
-                                " not shown.\nTurn on Show hidden files from the menu."
-                        else -> "Nothing here yet.\nSelect a file and choose Add to favourites."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                )
-            }
-
-            else -> LazyColumn(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-                items(state.entries, key = { it.path }) { entry ->
-                    SearchResultRow(
-                        entry = entry,
-                        isSelected = entry.path in state.selected,
-                        selectionMode = state.inSelectionMode,
-                        onClick = {
-                            if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                            else onOpenFile(entry)
+        Crossfade(
+            targetState = if (state.entries.isEmpty()) Pane.EMPTY else Pane.ITEMS,
+            animationSpec = PaneFade,
+            label = "favorites",
+        ) { pane ->
+            when (pane) {
+                Pane.EMPTY -> Box(
+                    Modifier.padding(padding).fillMaxSize(),
+                    Alignment.Center,
+                ) {
+                    Text(
+                        text = when {
+                            state.isLoading -> "Loading…"
+                            // "You have none" and "yours are all hidden" look
+                            // identical otherwise, and only one of them is fixed
+                            // by adding more favourites.
+                            state.hiddenCount > 0 ->
+                                "${state.hiddenCount} hidden " +
+                                    (if (state.hiddenCount == 1) "favourite is" else "favourites are") +
+                                    " not shown.\nTurn on Show hidden files from the menu."
+                            else -> "Nothing here yet.\nSelect a file and choose Add to favourites."
                         },
-                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
                     )
+                }
+
+                else -> LazyColumn(
+                    modifier = Modifier.padding(padding).fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        Box(Modifier.animateItem()) {
+                            SearchResultRow(
+                                entry = entry,
+                                isSelected = entry.path in state.selected,
+                                selectionMode = state.inSelectionMode,
+                                onClick = {
+                                    if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                    else onOpenFile(entry)
+                                },
+                                onLongClick = { viewModel.toggleSelection(entry.path) },
+                            )
+                        }
+                    }
                 }
             }
         }
