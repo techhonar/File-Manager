@@ -76,8 +76,14 @@ class FileRepository(
      * The cost is that the folder outlives an uninstall. That is the same
      * trade the platform's own file managers make, and the Trash screen can
      * empty it.
+     *
+     * Worked out on every use rather than once. The repository is made as the
+     * app starts, which on a first launch is before all-files access has been
+     * granted - so the fallback was fixed for that whole session, and whatever
+     * was deleted in it went to a trash the next launch never looked in: not
+     * listed, not restorable, not purged.
      */
-    private val trashDir: String = resolveTrashDir(appContext)
+    private val trashDir: String get() = resolveTrashDir(appContext)
 
     // --- Browsing -----------------------------------------------------------
 
@@ -129,7 +135,14 @@ class FileRepository(
         val remaining = sources.filterNot { source ->
             val from = File(source)
             val to = File(destination, from.name)
-            if (to.exists() && !overwrite) false else from.renameTo(to)
+            when {
+                // Already where it is going, so there is nothing to do. Passed
+                // on to the copy, an empty folder was copied onto itself
+                // without complaint - and then deleted as the original.
+                from.canonicalPath == to.canonicalPath -> true
+                to.exists() && !overwrite -> false
+                else -> from.renameTo(to)
+            }
         }
         if (remaining.isEmpty()) return@withContext sources.size.toULong()
 

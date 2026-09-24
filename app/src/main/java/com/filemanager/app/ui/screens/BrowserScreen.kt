@@ -89,7 +89,6 @@ import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.BrowserViewModel
-import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SortKey
 import uniffi.filemanager_core.SortOptions
@@ -435,8 +434,11 @@ private fun FileList(
                     state.inSelectionMode -> viewModel.toggleSelection(entry.path)
                     entry.isDir -> viewModel.load(entry.path)
                     // Ask before unpacking: it is a lot of writing to do on a
-                    // single tap, and undoing it by hand is worse.
-                    entry.category == FileCategory.ARCHIVE -> viewModel.confirmExtract(entry)
+                    // single tap, and undoing it by hand is worse. Zips only,
+                    // the one kind the core can read: a .rar or .7z opened the
+                    // same dialog and then always failed, where another app
+                    // on the phone could have opened it.
+                    entry.name.endsWith(".zip", ignoreCase = true) -> viewModel.confirmExtract(entry)
                     else -> onOpenFile(entry)
                 }
             }

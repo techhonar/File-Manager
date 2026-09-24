@@ -1874,3 +1874,138 @@ fn listing_an_archive_gives_each_entry_its_own_time() {
     // 2020-01-02 03:04:06, the wall-clock time the entry carries.
     assert_eq!(listed[0].modified_ms, 1_577_934_246_000);
 }
+
+/// A folder on a different filesystem from the test trees, so a rename between
+/// them fails with EXDEV and the copy fallback runs - the path a phone takes
+/// whenever the trash and the file are on different mounts. None where there
+/// is no such filesystem to use.
+fn other_filesystem(name: &str) -> Option<TempTree> {
+    use std::os::unix::fs::MetadataExt;
+    let shm = Path::new("/dev/shm");
+    let here = fs::metadata(std::env::temp_dir()).ok()?.dev();
+    if fs::metadata(shm).ok()?.dev() == here {
+        return None;
+    }
+    let dir = shm.join(format!("fm-test-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).ok()?;
+    Some(TempTree(dir))
+}
+
+#[test]
+fn a_trash_move_that_fails_partway_leaves_no_partial_copy_behind() {
+    // The copy fallback stopped where it failed and left what it had copied
+    // in the trash. Its record was taken back out, so that half a folder was
+    // never listed, never purged, and counted against the trash's size.
+    let Some(trash) = other_filesystem("trash-partial") else { return };
+    let tree = TempTree::new("trash-partial-src");
+    tree.file("album/a.jpg", b"one");
+    // Something the copy cannot read: a link to a file that is not there.
+    std::os::unix::fs::symlink(tree.path().join("gone"), tree.path().join("album/broken"))
+        .unwrap();
+    let album = tree.path().join("album");
+
+    let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
+
+    assert!(result.is_err(), "the copy should have failed");
+    assert_eq!(fs::read_to_string(album.join("a.jpg")).unwrap(), "one", "the original is untouched");
+    assert!(trash_list(trash.str(), 30).unwrap().is_empty(), "no record for a move that failed");
+    let stored = fs::read_dir(trash.path().join("files")).unwrap().count();
+    assert_eq!(stored, 0, "half a folder was left in the trash with nothing listing it");
+}
+
+#[test]
+fn a_trashed_folder_whose_original_cannot_all_be_removed_stays_listed() {
+    // The copy reached the trash whole, then removing the original stopped
+    // partway - after some of its files were already gone. The record was
+    // dropped as though nothing had moved, so those files were left only in
+    // a copy the trash did not list: not restorable, not even visible.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(trash) = other_filesystem("trash-remove-fails") else { return };
+    let tree = TempTree::new("trash-remove-fails-src");
+    tree.file("album/a.jpg", b"one");
+    tree.file("album/locked/b.jpg", b"two");
+    let locked = tree.path().join("album/locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    // Root ignores the permission, so there is no failure to test there.
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        let _ = fs::remove_file(locked.join("probe"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let album = tree.path().join("album");
+    let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the original is not all gone, so this was not a clean move");
+    let listed = trash_list(trash.str(), 30).unwrap();
+    assert_eq!(listed.len(), 1, "the whole copy in the trash has to stay listed");
+    let stored = trash.path().join("files").join(&listed[0].id);
+    assert_eq!(fs::read_to_string(stored.join("a.jpg")).unwrap(), "one");
+    assert_eq!(fs::read_to_string(stored.join("locked/b.jpg")).unwrap(), "two");
+}
+
+#[test]
+fn a_file_that_cannot_be_removed_is_not_left_in_the_trash_as_well() {
+    // A file is removed in one step or not at all, so one that could not be
+    // is still whole where it was - and a copy kept in the trash beside it
+    // would be listed as deleted when it was not.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(trash) = other_filesystem("trash-file-stays") else { return };
+    let tree = TempTree::new("trash-file-stays-src");
+    let photo = tree.file("locked/photo.jpg", b"still here");
+    let locked = tree.path().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        let _ = fs::remove_file(locked.join("probe"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let result = trash_move(trash.str(), photo.to_string_lossy().into_owned());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&photo).unwrap(), "still here");
+    assert!(trash_list(trash.str(), 30).unwrap().is_empty(), "listed as deleted when it was not");
+    assert_eq!(fs::read_dir(trash.path().join("files")).unwrap().count(), 0);
+}
+
+#[test]
+fn a_cancelled_duplicate_scan_says_so_rather_than_returning_part_of_the_answer() {
+    // Cancelling while files were being hashed returned whatever groups had
+    // been finished by then as a successful scan, so the screen showed a
+    // fraction of the duplicates as though it were all of them.
+    use filemanager_core::cancel::{CancelToken, ProgressListener};
+    use std::sync::Arc;
+
+    struct CancelOnFirst(Arc<CancelToken>);
+    impl ProgressListener for CancelOnFirst {
+        fn on_progress(&self, _done: u64, _total: u64, _current: String) {
+            self.0.cancel();
+        }
+    }
+
+    let tree = TempTree::new("dedup-cancelled");
+    // Several sizes, so there are several groups to hash after the first.
+    for size in 0..8usize {
+        let body = vec![size as u8; 200_000 + size];
+        tree.file(&format!("a/{size}.bin"), &body);
+        tree.file(&format!("b/{size}.bin"), &body);
+    }
+    let token = CancelToken::new();
+
+    let result = find_duplicates(
+        tree.str(),
+        100_000,
+        Some(Arc::new(CancelOnFirst(token.clone()))),
+        Some(token),
+    );
+
+    assert!(
+        matches!(result, Err(filemanager_core::errors::FileError::Cancelled)),
+        "got {:?}",
+        result.map(|groups| groups.len()),
+    );
+}

@@ -87,6 +87,16 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
     // was, which is refused on restore rather than lost.
     std::fs::write(&meta_path, json).map_err(|e| FileError::from_io(e, &meta_path))?;
     if let Err(error) = move_path(src, &dest) {
+        // A folder copied whole whose original could not all be removed may
+        // have lost some of its files already, so that copy is the only place
+        // they are: it keeps its record and stays listed. Anything else failed
+        // with the original whole and leaves nothing behind - a failed copy
+        // has taken its part back out, and a file is removed in one step or
+        // not at all, so a copy of one that stayed is only a duplicate.
+        if meta.is_dir() && dest.exists() {
+            return Err(error);
+        }
+        let _ = remove_exact(&dest);
         let _ = std::fs::remove_file(&meta_path);
         return Err(error);
     }
@@ -231,7 +241,12 @@ fn move_path(src: &Path, dest: &Path) -> Result<()> {
     if std::fs::rename(src, dest).is_ok() {
         return Ok(());
     }
-    copy_exact(src, dest)?;
+    if let Err(error) = copy_exact(src, dest) {
+        // Nothing half-copied is left behind. `dest` was free when this began
+        // - both callers make sure of it - so all that is there is this copy.
+        let _ = remove_exact(dest);
+        return Err(error);
+    }
     remove_exact(src)
 }
 
