@@ -214,6 +214,8 @@ val cargoBuild by tasks.registering(Exec::class) {
     // Rebuild only when the Rust sources or manifest actually change.
     inputs.dir(rustDir.dir("src"))
     inputs.file(rustDir.file("Cargo.toml"))
+    // Links the C++ runtime UnRAR needs on Android; see the file.
+    inputs.file(rustDir.file("build.rs"))
     outputs.dir(jniLibsDir)
 
     val profile = "release"

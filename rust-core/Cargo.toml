@@ -23,10 +23,29 @@ rayon = "1"
 # aes-crypto covers the AES encryption every modern archiver produces;
 # ZipCrypto, the legacy scheme, needs no feature flag.
 zip = { version = "2", default-features = false, features = ["deflate", "time", "aes-crypto"] }
+# The other archives the app opens. Pure Rust, all of them, so they cross-
+# compile for every ABI with nothing extra - except RAR, whose only complete
+# reader is RARLAB's own C++ UnRAR, built from source by unrar's build script
+# (see build.rs for the C++ runtime it needs).
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
+ruzstd = "0.9"
+# The codecs 7-Zip actually writes: LZMA/LZMA2 always, BZip2, PPMd and
+# Deflate by choice, and AES for a protected archive. zstd would pull in C.
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["aes256", "bzip2", "deflate", "ppmd"] }
+unrar = "0.5"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
+
+[dev-dependencies]
+# Encoders, so the tests can make the archives they extract. The app itself
+# only ever reads these formats.
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "encoder"] }
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["aes256", "compress"] }
 
 [profile.release]
 opt-level = 3
