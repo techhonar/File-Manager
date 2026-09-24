@@ -117,6 +117,9 @@ fun BrowserScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    // Choosing a file for another app, where tapping an archive picks it
+    // rather than offering to unpack it.
+    picking: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val clipboard by viewModel.clipboardContents.collectAsState()
@@ -302,7 +305,7 @@ fun BrowserScreen(
             ) {
                 FileList(
                     state, viewModel, onOpenFile, PaddingValues(0.dp), contentPadding,
-                    listState, gridState,
+                    listState, gridState, offerExtract = !picking,
                 )
             }
         }
@@ -404,6 +407,7 @@ private fun FileList(
     contentPadding: PaddingValues,
     listState: LazyListState,
     gridState: LazyGridState,
+    offerExtract: Boolean,
 ) {
     Crossfade(
         targetState = when {
@@ -453,7 +457,7 @@ private fun FileList(
                         // single tap, and undoing it by hand is worse. Only the
                         // kinds the core can read - anything else, an .iso say,
                         // goes to whichever app on the phone opens it.
-                        isExtractable(entry.name) -> viewModel.confirmExtract(entry)
+                        offerExtract && isExtractable(entry.name) -> viewModel.confirmExtract(entry)
                         else -> onOpenFile(entry)
                     }
                 }
