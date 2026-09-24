@@ -15,6 +15,7 @@ import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.install.BundleInstaller
+import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.data.remote.RemoteConnections
 import com.filemanager.app.data.remote.RemoteServers
 import uniffi.filemanager_core.SearchSession
@@ -90,6 +91,9 @@ class FileManagerApp : Application(), ImageLoaderFactory {
 
     /** Process-wide: an install outlives the screen it was started from. */
     val bundleInstaller: BundleInstaller by lazy { BundleInstaller(this) }
+
+    /** Update App. Process-wide, so a download is not lost with its screen. */
+    val updater: AppUpdater by lazy { AppUpdater(this) }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
