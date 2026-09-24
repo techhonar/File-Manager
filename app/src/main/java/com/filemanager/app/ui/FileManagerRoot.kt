@@ -3,12 +3,20 @@ package com.filemanager.app.ui
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -41,7 +49,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -52,7 +63,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
+import com.filemanager.app.MainActivity
 import com.filemanager.app.data.ftpd.FtpService
+import com.filemanager.app.data.external.Incoming
+import com.filemanager.app.data.external.accepts
+import com.filemanager.app.data.external.mimeTypeOf
 import com.filemanager.app.data.install.isBundle
 import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.data.update.AppUpdater
@@ -149,10 +164,20 @@ private object Routes {
         if (category == null) "search" else "search?category=${category.key}"
 }
 
+/**
+ * The app. [openFolder] is a folder another app asked to have shown, handed
+ * back through [onFolderOpened] once it is; with [picking], another app is
+ * waiting for a file, and tapping one gives it to [onPick].
+ */
 @Composable
 fun FileManagerRoot(
     hasStorageAccess: Boolean,
     onRequestAccess: () -> Unit,
+    openFolder: String? = null,
+    onFolderOpened: () -> Unit = {},
+    picking: Incoming.Pick? = null,
+    onPick: (String) -> Unit = {},
+    onCancelPick: () -> Unit = {},
 ) {
     // Nothing in this app works without all-files access, so gate the whole
     // tree rather than handling a denied permission in every screen.
@@ -220,6 +245,13 @@ fun FileManagerRoot(
     // still hand them to another app.
     val openPath: (String) -> Unit = { path ->
         when {
+            // Choosing for another app: a tap sends the file there instead.
+            picking != null ->
+                if (accepts(picking.types, mimeTypeOf(path.substringAfterLast('/')))) {
+                    onPick(path)
+                } else {
+                    toast(context, "The app you're choosing for can't take this kind of file")
+                }
             isBundle(path) -> app.bundleInstaller.install(path)
             viewerKind(path.substringAfterLast('/')) != null -> navController.navigate(Routes.viewer(path))
             else -> openWithExternalApp(context, path)
@@ -308,6 +340,17 @@ fun FileManagerRoot(
         onRetry = app.updater::update,
     )
 
+    LaunchedEffect(openFolder) {
+        if (openFolder != null) {
+            navController.navigate(Routes.browse(openFolder))
+            onFolderOpened()
+        }
+    }
+
+    // Measured, so the screens can end above it.
+    var pickBarHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -315,7 +358,18 @@ fun FileManagerRoot(
         NavHost(
             navController = navController,
             startDestination = Routes.HOME,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                // The pick bar lies over the bottom, navigation bar included.
+                .then(
+                    if (picking == null) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .padding(bottom = pickBarHeight)
+                            .consumeWindowInsets(WindowInsets.navigationBars)
+                    },
+                ),
             // Both screens move together, the way One UI does it: the new one
             // slides in from the side it belongs on while the old one gives
             // way a little in the same direction, each fading as it goes.
@@ -568,6 +622,38 @@ fun FileManagerRoot(
                 TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() })
             }
         }
+
+        if (picking != null) {
+            PickBar(
+                onCancel = onCancelPick,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .wrapContentHeight(Alignment.Bottom)
+                    .onSizeChanged { pickBarHeight = with(density) { it.height.toDp() } },
+            )
+        }
+    }
+}
+
+/** Says a file is being chosen for another app, and lets the choosing be called off. */
+@Composable
+private fun PickBar(onCancel: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Tap a file to send it",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        }
     }
 }
 
@@ -623,7 +709,7 @@ private fun HomeOverflowMenu(
  * With [forceChooser] the picker is always shown; without it the user's
  * default opens directly, which is what tapping a file should do.
  */
-private fun openWithExternalApp(
+internal fun openWithExternalApp(
     context: android.content.Context,
     path: String,
     forceChooser: Boolean = false,
@@ -646,7 +732,14 @@ private fun openWithExternalApp(
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     val intent = if (forceChooser) {
-        Intent.createChooser(view, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        Intent.createChooser(view, "Open with")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // This app opens these types too now; offering it back to itself
+            // would only reopen the file where it already is.
+            .putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(ComponentName(context, MainActivity::class.java)),
+            )
     } else {
         view
     }

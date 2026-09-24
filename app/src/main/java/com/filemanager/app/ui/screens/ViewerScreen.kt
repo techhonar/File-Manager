@@ -1,8 +1,10 @@
 package com.filemanager.app.ui.screens
 
 import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -49,6 +52,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.filemanager.app.data.external.copyForViewing
 import com.filemanager.app.data.viewer.DocAlign
 import com.filemanager.app.data.viewer.DocBlock
 import com.filemanager.app.data.viewer.DocCell
@@ -90,6 +94,8 @@ fun ViewerScreen(
     onOpenWith: (String) -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
+    // Given when the name can't say: another app's file may have none.
+    kind: ViewerKind? = null,
 ) {
     val file = remember(path) { File(path) }
     val openWith = { onOpenWith(path) }
@@ -109,11 +115,49 @@ fun ViewerScreen(
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (viewerKind(file.name)) {
+            when (kind ?: viewerKind(file.name)) {
                 ViewerKind.TEXT -> Viewer(file, { TextFiles.read(it) }, openWith) { TextView(it) }
                 ViewerKind.DOCX -> Viewer(file, { Docx.read(it) }, openWith) { DocxView(it, file) }
                 ViewerKind.PDF -> PdfPane(file, openWith)
                 null -> Message("This file can't be shown here.", openWith)
+            }
+        }
+    }
+}
+
+/**
+ * A file another app asked to have shown - opened from its "Open with", say.
+ * Copied in before it is read, since it is only lent while this is open;
+ * back returns to the app that sent it.
+ */
+@Composable
+fun ExternalViewerScreen(
+    uri: Uri,
+    kind: ViewerKind,
+    onOpenWith: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    val copy by produceState<Result<File>?>(null, uri) {
+        value = withContext(Dispatchers.IO) { runCatching { copyForViewing(context, uri) } }
+    }
+    val file = copy?.getOrNull()
+    when {
+        file != null -> ViewerScreen(path = file.path, onOpenWith = onOpenWith, onNavigateBack = onClose, kind = kind)
+        copy == null -> Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+            Alignment.Center,
+        ) { CircularProgressIndicator() }
+        else -> OneUiScreen(
+            title = "Can't open file",
+            navigationIcon = {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+            },
+        ) { padding ->
+            Box(Modifier.padding(padding)) {
+                Message("This file couldn't be read from the app that sent it.", onOpenWith = null)
             }
         }
     }
