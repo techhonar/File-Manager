@@ -1874,3 +1874,74 @@ fn listing_an_archive_gives_each_entry_its_own_time() {
     // 2020-01-02 03:04:06, the wall-clock time the entry carries.
     assert_eq!(listed[0].modified_ms, 1_577_934_246_000);
 }
+
+/// A folder on a different filesystem from the test trees, so a rename between
+/// them fails with EXDEV and the copy fallback runs - the path a phone takes
+/// whenever the trash and the file are on different mounts. None where there
+/// is no such filesystem to use.
+fn other_filesystem(name: &str) -> Option<TempTree> {
+    use std::os::unix::fs::MetadataExt;
+    let shm = Path::new("/dev/shm");
+    let here = fs::metadata(std::env::temp_dir()).ok()?.dev();
+    if fs::metadata(shm).ok()?.dev() == here {
+        return None;
+    }
+    let dir = shm.join(format!("fm-test-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).ok()?;
+    Some(TempTree(dir))
+}
+
+#[test]
+fn a_trash_move_that_fails_partway_leaves_no_partial_copy_behind() {
+    // The copy fallback stopped where it failed and left what it had copied
+    // in the trash. Its record was taken back out, so that half a folder was
+    // never listed, never purged, and counted against the trash's size.
+    let Some(trash) = other_filesystem("trash-partial") else { return };
+    let tree = TempTree::new("trash-partial-src");
+    tree.file("album/a.jpg", b"one");
+    // Something the copy cannot read: a link to a file that is not there.
+    std::os::unix::fs::symlink(tree.path().join("gone"), tree.path().join("album/broken"))
+        .unwrap();
+    let album = tree.path().join("album");
+
+    let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
+
+    assert!(result.is_err(), "the copy should have failed");
+    assert_eq!(fs::read_to_string(album.join("a.jpg")).unwrap(), "one", "the original is untouched");
+    assert!(trash_list(trash.str(), 30).unwrap().is_empty(), "no record for a move that failed");
+    let stored = fs::read_dir(trash.path().join("files")).unwrap().count();
+    assert_eq!(stored, 0, "half a folder was left in the trash with nothing listing it");
+}
+
+#[test]
+fn a_trashed_folder_whose_original_cannot_all_be_removed_stays_listed() {
+    // The copy reached the trash whole, then removing the original stopped
+    // partway - after some of its files were already gone. The record was
+    // dropped as though nothing had moved, so those files were left only in
+    // a copy the trash did not list: not restorable, not even visible.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(trash) = other_filesystem("trash-remove-fails") else { return };
+    let tree = TempTree::new("trash-remove-fails-src");
+    tree.file("album/a.jpg", b"one");
+    tree.file("album/locked/b.jpg", b"two");
+    let locked = tree.path().join("album/locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    // Root ignores the permission, so there is no failure to test there.
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        let _ = fs::remove_file(locked.join("probe"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let album = tree.path().join("album");
+    let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the original is not all gone, so this was not a clean move");
+    let listed = trash_list(trash.str(), 30).unwrap();
+    assert_eq!(listed.len(), 1, "the whole copy in the trash has to stay listed");
+    let stored = trash.path().join("files").join(&listed[0].id);
+    assert_eq!(fs::read_to_string(stored.join("a.jpg")).unwrap(), "one");
+    assert_eq!(fs::read_to_string(stored.join("locked/b.jpg")).unwrap(), "two");
+}
