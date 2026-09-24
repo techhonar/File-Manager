@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-24
+
 ### New features
 
 - Add Update App, which downloads the latest release and opens the installer
@@ -16,6 +18,7 @@ commit behind each line explains why the change was made.
 ### Behind the scenes
 
 - Give 0.4.5 its place in the changelog
+- Add Update App, themes, logos and transitions to the changelog
 
 ## [0.4.5] - 2026-09-24
 
@@ -297,7 +300,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/techhonar/File-Manager/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/techhonar/File-Manager/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/techhonar/File-Manager/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/techhonar/File-Manager/compare/v0.4.2...v0.4.3
