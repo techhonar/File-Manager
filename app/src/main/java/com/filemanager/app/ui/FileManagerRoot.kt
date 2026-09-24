@@ -88,6 +88,7 @@ import com.filemanager.app.data.StorageVolumes
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.screens.AboutScreen
 import com.filemanager.app.ui.screens.BrowserScreen
+import com.filemanager.app.ui.screens.DefaultAppsScreen
 import com.filemanager.app.ui.screens.HomeScreen
 import com.filemanager.app.ui.screens.PermissionScreen
 import com.filemanager.app.ui.screens.RecentScreen
@@ -126,6 +127,7 @@ private object Routes {
     const val RECENT = "recent"
     const val ABOUT = "about"
     const val THEME = "theme"
+    const val DEFAULTS = "defaults"
     const val FAVORITES = "favorites"
     const val NETWORK = "network"
     const val FTP_SERVER = "ftpserver"
@@ -414,6 +416,7 @@ fun FileManagerRoot(
                             onManageStorage = { navController.navigate(Routes.STORAGE) },
                             onTrash = { navController.navigate(Routes.TRASH) },
                             onTheme = { navController.navigate(Routes.THEME) },
+                            onDefaults = { navController.navigate(Routes.DEFAULTS) },
                             onUpdate = app.updater::update,
                             onAbout = { navController.navigate(Routes.ABOUT) },
                         )
@@ -609,6 +612,13 @@ fun FileManagerRoot(
                 AboutScreen(onNavigateBack = { navController.popBackStack() })
             }
 
+            composable(Routes.DEFAULTS) { entry ->
+                DefaultAppsScreen(
+                    lifecycle = entry.lifecycle,
+                    onNavigateBack = { navController.popBackStack() },
+                )
+            }
+
             composable(Routes.VIEWER_PATTERN) { entry ->
                 // Already decoded by Navigation; see Routes.browse.
                 ViewerScreen(
@@ -669,6 +679,7 @@ private fun HomeOverflowMenu(
     onManageStorage: () -> Unit,
     onTrash: () -> Unit,
     onTheme: () -> Unit,
+    onDefaults: () -> Unit,
     onUpdate: () -> Unit,
     onAbout: () -> Unit,
 ) {
@@ -689,6 +700,10 @@ private fun HomeOverflowMenu(
         DropdownMenuItem(
             text = { Text("Theme") },
             onClick = { onTheme(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Default apps") },
+            onClick = { onDefaults(); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("Update App") },
