@@ -6,6 +6,14 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Add a Default apps screen and answer the Downloads notification
+
+### Behind the scenes
+
+- Give 0.4.8 its place in the changelog
+
 ## [0.4.8] - 2026-09-24
 
 ### New features
