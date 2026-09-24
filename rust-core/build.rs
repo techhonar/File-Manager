@@ -17,6 +17,13 @@ fn main() {
     println!("cargo:rustc-link-lib=c++_static");
     println!("cargo:rustc-link-lib=c++abi");
 
+    // unrar_sys also asks for libpthread, which Android does not have: threads
+    // are part of its C library, so the NDK ships no libpthread for the linker
+    // to find, and the link fails. An empty archive answers the request.
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
+    std::fs::write(out.join("libpthread.a"), b"!<arch>\n").expect("write empty libpthread.a");
+    println!("cargo:rustc-link-search=native={}", out.display());
+
     // And anything else left undefined fails the build here, instead of the
     // app on the phone - the NDK's own advice for every shared library.
     println!("cargo:rustc-cdylib-link-arg=-Wl,--no-undefined");
