@@ -73,12 +73,64 @@
           No launcher entry of its own: the app is opened through whichever
           activity-alias below is turned on, one per logo under Theme > App
           logo. Exactly one is on at a time; logo 1, the original, to start.
+
+          What it does declare is what makes Android count it as a file
+          manager. There is no setting for a default one: when something asks
+          for a files app, a folder or a file, the phone offers every app
+          that says it can, and the user picks one with "Always". These stay
+          here rather than on the aliases, which come and go with the logo.
         -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.FileManager" />
+            android:theme="@style/Theme.FileManager">
+
+            <!-- "The Files app", as Settings and launchers ask for it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.APP_FILES" />
+            </intent-filter>
+
+            <!-- Open a folder: every way apps name one. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="resource/folder" />
+                <data android:mimeType="inode/directory" />
+                <data android:mimeType="x-directory/normal" />
+                <data android:mimeType="vnd.android.document/directory" />
+                <data android:mimeType="vnd.android.document/root" />
+            </intent-filter>
+
+            <!-- Show a file in the viewer: the types it can show. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="text/tab-separated-values" />
+                <data android:mimeType="text/xml" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
+
+            <!-- Choose a file for another app: attaching, uploading. -->
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
 
         <activity-alias
             android:name=".Logo01"
