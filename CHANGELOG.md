@@ -6,6 +6,14 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Give the text editor the tools a text editor has
+
+### Behind the scenes
+
+- Give 0.4.10 its place in the changelog
+
 ## [0.4.10] - 2026-09-24
 
 ### New features
