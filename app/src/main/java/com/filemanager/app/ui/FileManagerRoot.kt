@@ -487,6 +487,7 @@ fun FileManagerRoot(
                     onShare = shareFiles,
                     onOpenWith = openWith,
                     onNavigateBack = { navController.popBackStack() },
+                    picking = picking != null,
                 )
             }
 
