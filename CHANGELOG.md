@@ -6,6 +6,15 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Let the phone use File Manager as its file manager
+- Pick archives when choosing a file for another app
+
+### Behind the scenes
+
+- Give 0.4.7 its place in the changelog
+
 ## [0.4.7] - 2026-09-24
 
 ### New features
