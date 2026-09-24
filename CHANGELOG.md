@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-24
+
 ### New features
 
 - Open text, PDF and Word files in a viewer of the app's own
@@ -13,6 +15,7 @@ commit behind each line explains why the change was made.
 ### Behind the scenes
 
 - Give 0.4.6 its place in the changelog
+- Add the file viewer to the changelog
 
 ## [0.4.6] - 2026-09-24
 
@@ -308,7 +311,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/techhonar/File-Manager/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/techhonar/File-Manager/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/techhonar/File-Manager/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/techhonar/File-Manager/compare/v0.4.3...v0.4.4
