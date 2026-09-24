@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-24
+
 ### New features
 
 - Give the text editor the tools a text editor has
@@ -13,6 +15,7 @@ commit behind each line explains why the change was made.
 ### Behind the scenes
 
 - Give 0.4.10 its place in the changelog
+- Add the editor's new tools to the changelog
 
 ## [0.4.10] - 2026-09-24
 
@@ -353,7 +356,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.10...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/techhonar/File-Manager/compare/v0.4.10...v0.5.0
 [0.4.10]: https://github.com/techhonar/File-Manager/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/techhonar/File-Manager/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/techhonar/File-Manager/compare/v0.4.7...v0.4.8
