@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-24
+
 ### New features
 
 - Extract .rar, .7z and .tar archives, plain or compressed
@@ -13,6 +15,10 @@ commit behind each line explains why the change was made.
 - Say in the README which archives the app opens
 - Build the native core for the app's minSdk, not API 21
 - Give the Android link the libpthread UnRAR asks for
+
+### Behind the scenes
+
+- Add 0.4.4 and the archive work to the changelog
 
 ## [0.4.4] - 2026-09-24
 
@@ -280,7 +286,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/techhonar/File-Manager/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/techhonar/File-Manager/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/techhonar/File-Manager/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/techhonar/File-Manager/compare/v0.4.1...v0.4.2
