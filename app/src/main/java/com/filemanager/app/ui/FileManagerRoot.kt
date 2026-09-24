@@ -3,6 +3,7 @@ package com.filemanager.app.ui
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.content.Intent
@@ -83,8 +84,6 @@ import com.filemanager.app.viewmodel.StorageViewModel
 import com.filemanager.app.viewmodel.TrashViewModel
 import com.filemanager.app.viewmodel.ViewModelFactory
 import java.io.File
-import java.net.URLDecoder
-import java.net.URLEncoder
 import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileEntry
 
@@ -111,15 +110,24 @@ private object Routes {
     /** Ids are UUIDs, so they need no encoding. */
     fun remote(serverId: String): String = "remote/$serverId"
 
-    /** Paths contain slashes, so they must be encoded into the route. */
+    /**
+     * Paths contain slashes, so they must be encoded into the route.
+     *
+     * Encoded here and never decoded by hand: Navigation decodes an argument
+     * itself before handing it over. Decoding it a second time turned a "+"
+     * in a folder's name into a space, so "C++" could not be opened, and a
+     * "%" - "50% off" - into a broken escape that threw and closed the app.
+     * Uri.encode rather than URLEncoder, which writes a space as a "+" that
+     * Navigation's decoding leaves alone.
+     */
     fun browse(path: String, highlight: String? = null): String {
-        val encoded = URLEncoder.encode(path, Charsets.UTF_8.name())
+        val encoded = Uri.encode(path)
         // Show-in-folder passes the file so the browser can scroll to it;
         // opening a folder normally passes nothing.
         return if (highlight == null) {
             "browse/$encoded"
         } else {
-            "browse/$encoded?highlight=${URLEncoder.encode(highlight, Charsets.UTF_8.name())}"
+            "browse/$encoded?highlight=${Uri.encode(highlight)}"
         }
     }
 
@@ -365,10 +373,9 @@ fun FileManagerRoot(
                     },
                 ),
             ) { entry ->
-                val encoded = entry.arguments?.getString("path").orEmpty()
-                val path = URLDecoder.decode(encoded, Charsets.UTF_8.name())
+                // Already decoded by Navigation; see Routes.browse.
+                val path = entry.arguments?.getString("path").orEmpty()
                 val highlight = entry.arguments?.getString("highlight")
-                    ?.let { URLDecoder.decode(it, Charsets.UTF_8.name()) }
 
                 // Keyed by path so each folder gets its own ViewModel rather
                 // than reusing the previous folder's state.
