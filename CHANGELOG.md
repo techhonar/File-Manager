@@ -6,6 +6,14 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Open text, PDF and Word files in a viewer of the app's own
+
+### Behind the scenes
+
+- Give 0.4.6 its place in the changelog
+
 ## [0.4.6] - 2026-09-24
 
 ### New features
