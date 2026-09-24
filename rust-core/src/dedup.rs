@@ -88,6 +88,12 @@ pub fn find_duplicates(
         })
         .collect();
 
+    // Stopped partway, what was gathered is some of the groups, not all of
+    // them - and returned as a finished scan it was shown as the whole answer.
+    if let Some(token) = cancel {
+        token.check()?;
+    }
+
     let mut groups = groups;
     for group in &mut groups {
         // The caller keeps the first file and trashes the rest, so which is

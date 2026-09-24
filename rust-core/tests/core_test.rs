@@ -1945,3 +1945,41 @@ fn a_trashed_folder_whose_original_cannot_all_be_removed_stays_listed() {
     assert_eq!(fs::read_to_string(stored.join("a.jpg")).unwrap(), "one");
     assert_eq!(fs::read_to_string(stored.join("locked/b.jpg")).unwrap(), "two");
 }
+
+#[test]
+fn a_cancelled_duplicate_scan_says_so_rather_than_returning_part_of_the_answer() {
+    // Cancelling while files were being hashed returned whatever groups had
+    // been finished by then as a successful scan, so the screen showed a
+    // fraction of the duplicates as though it were all of them.
+    use filemanager_core::cancel::{CancelToken, ProgressListener};
+    use std::sync::Arc;
+
+    struct CancelOnFirst(Arc<CancelToken>);
+    impl ProgressListener for CancelOnFirst {
+        fn on_progress(&self, _done: u64, _total: u64, _current: String) {
+            self.0.cancel();
+        }
+    }
+
+    let tree = TempTree::new("dedup-cancelled");
+    // Several sizes, so there are several groups to hash after the first.
+    for size in 0..8usize {
+        let body = vec![size as u8; 200_000 + size];
+        tree.file(&format!("a/{size}.bin"), &body);
+        tree.file(&format!("b/{size}.bin"), &body);
+    }
+    let token = CancelToken::new();
+
+    let result = find_duplicates(
+        tree.str(),
+        100_000,
+        Some(Arc::new(CancelOnFirst(token.clone()))),
+        Some(token),
+    );
+
+    assert!(
+        matches!(result, Err(filemanager_core::errors::FileError::Cancelled)),
+        "got {:?}",
+        result.map(|groups| groups.len()),
+    );
+}
