@@ -221,6 +221,10 @@ val cargoBuild by tasks.registering(Exec::class) {
     val profile = "release"
     val args = mutableListOf("cargo", "ndk")
     abiTargets.values.forEach { abi -> args += listOf("-t", abi) }
+    // Built against the oldest Android the app installs on, rather than
+    // cargo-ndk's default of 21. RARLAB's UnRAR calls lutimes, which Android's
+    // C library only declares from 26, so below that it does not compile.
+    args += listOf("--platform", checkNotNull(android.defaultConfig.minSdk).toString())
     args += listOf("-o", jniLibsDir.get().asFile.absolutePath, "build", "--$profile")
     commandLine(args)
 
