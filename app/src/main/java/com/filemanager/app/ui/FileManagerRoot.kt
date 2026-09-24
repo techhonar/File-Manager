@@ -50,6 +50,7 @@ import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.data.ftpd.FtpService
 import com.filemanager.app.data.install.isBundle
+import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.ui.screens.FtpServerScreen
 import com.filemanager.app.ui.screens.RemoteBrowserScreen
@@ -78,6 +79,7 @@ import com.filemanager.app.ui.screens.FavoritesScreen
 import com.filemanager.app.viewmodel.FavoritesViewModel
 import com.filemanager.app.viewmodel.HomeViewModel
 import com.filemanager.app.ui.components.ThemeDialog
+import com.filemanager.app.ui.components.UpdateDialog
 import com.filemanager.app.viewmodel.RecentViewModel
 import com.filemanager.app.viewmodel.SearchViewModel
 import com.filemanager.app.viewmodel.StorageViewModel
@@ -273,6 +275,24 @@ fun FileManagerRoot(
         )
     }
 
+    // Update App. The installer is opened from here rather than from the
+    // updater: Android lets an app start another app's screen only while it
+    // is in front, so a download that finishes while the user is elsewhere
+    // waits until they come back.
+    val updateState by app.updater.state.collectAsState()
+    LaunchedEffect(updateState) {
+        val ready = updateState as? AppUpdater.State.Ready ?: return@LaunchedEffect
+        runCatching { context.startActivity(app.updater.installIntent(ready.apk)) }
+            .onFailure { toast(context, "Could not open the installer") }
+        app.updater.dismiss()
+    }
+    UpdateDialog(
+        state = updateState,
+        onCancel = app.updater::cancel,
+        onDismiss = app.updater::dismiss,
+        onRetry = app.updater::update,
+    )
+
     if (showThemeDialog) {
         ThemeDialog(
             current = themeMode,
@@ -328,6 +348,7 @@ fun FileManagerRoot(
                             onManageStorage = { navController.navigate(Routes.STORAGE) },
                             onTrash = { navController.navigate(Routes.TRASH) },
                             onTheme = { showThemeDialog = true },
+                            onUpdate = app.updater::update,
                             onAbout = { navController.navigate(Routes.ABOUT) },
                         )
                     },
@@ -520,12 +541,13 @@ fun FileManagerRoot(
     }
 }
 
-/** The home screen's overflow menu: the two destinations without a tile. */
+/** The home screen's overflow menu: what has no tile of its own. */
 @Composable
 private fun HomeOverflowMenu(
     onManageStorage: () -> Unit,
     onTrash: () -> Unit,
     onTheme: () -> Unit,
+    onUpdate: () -> Unit,
     onAbout: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -545,6 +567,10 @@ private fun HomeOverflowMenu(
         DropdownMenuItem(
             text = { Text("Theme") },
             onClick = { onTheme(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Update App") },
+            onClick = { onUpdate(); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("About") },
