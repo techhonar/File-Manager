@@ -54,6 +54,7 @@ import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.data.ftpd.FtpService
 import com.filemanager.app.data.install.isBundle
+import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.ui.screens.FtpServerScreen
@@ -79,6 +80,7 @@ import com.filemanager.app.ui.screens.SearchScreen
 import com.filemanager.app.ui.screens.StorageScreen
 import com.filemanager.app.ui.screens.ThemeScreen
 import com.filemanager.app.ui.screens.TrashScreen
+import com.filemanager.app.ui.screens.ViewerScreen
 import com.filemanager.app.viewmodel.BrowserViewModel
 import com.filemanager.app.ui.screens.FavoritesScreen
 import com.filemanager.app.viewmodel.FavoritesViewModel
@@ -113,6 +115,7 @@ private object Routes {
     const val NETWORK = "network"
     const val FTP_SERVER = "ftpserver"
     const val REMOTE_PATTERN = "remote/{serverId}"
+    const val VIEWER_PATTERN = "viewer/{path}"
 
     /** Ids are UUIDs, so they need no encoding. */
     fun remote(serverId: String): String = "remote/$serverId"
@@ -137,6 +140,9 @@ private object Routes {
             "browse/$encoded?highlight=${Uri.encode(highlight)}"
         }
     }
+
+    /** The viewer, for the file at [path]. Encoded as [browse] explains. */
+    fun viewer(path: String): String = "viewer/${Uri.encode(path)}"
 
     /** Search, optionally pre-filtered to one category. */
     fun search(category: Category? = null): String =
@@ -210,8 +216,14 @@ fun FileManagerRoot(
 
     // A split-APK bundle is installed here rather than handed on: no app on
     // the phone opens one, so handing it on did nothing at all.
+    // Text, PDFs and Word documents open in the app's own viewer, which can
+    // still hand them to another app.
     val openPath: (String) -> Unit = { path ->
-        if (isBundle(path)) app.bundleInstaller.install(path) else openWithExternalApp(context, path)
+        when {
+            isBundle(path) -> app.bundleInstaller.install(path)
+            viewerKind(path.substringAfterLast('/')) != null -> navController.navigate(Routes.viewer(path))
+            else -> openWithExternalApp(context, path)
+        }
     }
     val openFile: (FileEntry) -> Unit = { entry -> openPath(entry.path) }
 
@@ -540,6 +552,15 @@ fun FileManagerRoot(
 
         composable(Routes.ABOUT) {
                 AboutScreen(onNavigateBack = { navController.popBackStack() })
+            }
+
+            composable(Routes.VIEWER_PATTERN) { entry ->
+                // Already decoded by Navigation; see Routes.browse.
+                ViewerScreen(
+                    path = entry.arguments?.getString("path").orEmpty(),
+                    onOpenWith = openWith,
+                    onNavigateBack = { navController.popBackStack() },
+                )
             }
 
             composable(Routes.TRASH) {
