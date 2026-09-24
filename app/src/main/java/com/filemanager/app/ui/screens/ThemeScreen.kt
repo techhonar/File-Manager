@@ -1,6 +1,15 @@
 package com.filemanager.app.ui.screens
 
 import android.os.Build
+import android.widget.Toast
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import com.filemanager.app.data.AppLogo
+import com.filemanager.app.data.AppLogos
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -125,6 +134,11 @@ fun ThemeScreen(
                 )
             }
 
+            OneUiSectionHeader("App logo")
+            OneUiGroup {
+                LogoGrid(Modifier.padding(16.dp))
+            }
+
             OneUiSectionHeader("Custom colours")
             Text(
                 text = "Set the colour of any part by hand. It overrides the theme, in light and dark alike.",
@@ -247,6 +261,78 @@ private fun AccentGrid(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The home-screen logos. Picking one switches the launcher entry at once;
+ * the launcher itself can take a moment to redraw.
+ */
+@Composable
+private fun LogoGrid(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var current by remember { mutableStateOf(AppLogos.current(context)) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        AppLogos.all.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                row.forEach { logo ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .width(76.dp)
+                            .clickable {
+                                if (logo != current) {
+                                    AppLogos.select(context, logo)
+                                    current = logo
+                                    Toast.makeText(
+                                        context,
+                                        "Logo changed. Your home screen may take a moment to show it.",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        LogoPreview(logo, selected = logo == current)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = logo.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A logo as a launcher shows it: the two layers of the adaptive icon, cut to
+ * a circle. The layers are 108 units across and a launcher shows the middle
+ * 72, so they are drawn half as large again and cropped.
+ */
+@Composable
+private fun LogoPreview(logo: AppLogo, selected: Boolean) {
+    val size = 54.dp
+    Box(
+        Modifier
+            .size(size + 10.dp)
+            .then(
+                if (selected) {
+                    Modifier.border(3.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(size).clip(CircleShape), contentAlignment = Alignment.Center) {
+            val layer = size * (108f / 72f)
+            Image(painterResource(logo.background), contentDescription = null, modifier = Modifier.requiredSize(layer))
+            Image(painterResource(logo.foreground), contentDescription = logo.name, modifier = Modifier.requiredSize(layer))
         }
     }
 }
