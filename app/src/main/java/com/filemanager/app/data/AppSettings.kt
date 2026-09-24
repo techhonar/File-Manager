@@ -24,6 +24,40 @@ enum class ThemeMode {
     DARK,
 }
 
+/** What dark means: One UI's true black, or a softer grey for LCD screens. */
+enum class DarkStyle { BLACK, DIM }
+
+/** The accent colour: buttons, links, selection, highlights. */
+enum class ThemeAccent {
+    BLUE, TEAL, GREEN, PURPLE, ORANGE, PINK,
+
+    /** Taken from the wallpaper (Material You), on Android 12 and newer. */
+    WALLPAPER,
+}
+
+/**
+ * A part of the app whose colour can be set by hand, over whatever the theme
+ * gives it. Stored by name, so a name must not change once released.
+ */
+enum class ColorPart {
+    ACCENT, BACKGROUND, CARDS, TEXT, SECONDARY_TEXT,
+    FOLDERS, IMAGES, VIDEOS, AUDIO, DOCUMENTS, DOWNLOADS, INSTALLERS, ARCHIVES,
+}
+
+/**
+ * Everything the theme is made from.
+ *
+ * [custom] holds only the parts set by hand, as ARGB; the rest come from
+ * [mode], [darkStyle] and [accent]. The hand-set ones apply in light and dark
+ * alike - a colour picked is the colour shown.
+ */
+data class ThemeChoice(
+    val mode: ThemeMode = ThemeMode.SYSTEM,
+    val darkStyle: DarkStyle = DarkStyle.BLACK,
+    val accent: ThemeAccent = ThemeAccent.BLUE,
+    val custom: Map<ColorPart, Int> = emptyMap(),
+)
+
 /**
  * Which list a layout preference belongs to.
  *
@@ -61,8 +95,8 @@ class AppSettings(context: Context) {
 
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    private val _themeMode = MutableStateFlow(readThemeMode())
-    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+    private val _theme = MutableStateFlow(readTheme())
+    val theme: StateFlow<ThemeChoice> = _theme.asStateFlow()
 
     /**
      * One layout per [ViewScope], created the first time it is asked for.
@@ -133,17 +167,51 @@ class AppSettings(context: Context) {
 
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME, mode.name).apply()
-        _themeMode.value = mode
+        _theme.value = _theme.value.copy(mode = mode)
     }
 
-    /** Falls back to following the system if the stored value is unreadable. */
-    private fun readThemeMode(): ThemeMode {
-        val stored = prefs.getString(KEY_THEME, null) ?: return ThemeMode.SYSTEM
-        return runCatching { ThemeMode.valueOf(stored) }.getOrDefault(ThemeMode.SYSTEM)
+    fun setDarkStyle(style: DarkStyle) {
+        prefs.edit().putString(KEY_DARK_STYLE, style.name).apply()
+        _theme.value = _theme.value.copy(darkStyle = style)
     }
+
+    fun setAccent(accent: ThemeAccent) {
+        prefs.edit().putString(KEY_ACCENT, accent.name).apply()
+        _theme.value = _theme.value.copy(accent = accent)
+    }
+
+    /** Set one part's colour by hand, or with null give it back to the theme. */
+    fun setCustomColor(part: ColorPart, argb: Int?) {
+        val key = colorKey(part)
+        prefs.edit().apply { if (argb == null) remove(key) else putInt(key, argb) }.apply()
+        val custom = _theme.value.custom.toMutableMap()
+        if (argb == null) custom.remove(part) else custom[part] = argb
+        _theme.value = _theme.value.copy(custom = custom)
+    }
+
+    fun resetCustomColors() {
+        prefs.edit().apply { ColorPart.entries.forEach { remove(colorKey(it)) } }.apply()
+        _theme.value = _theme.value.copy(custom = emptyMap())
+    }
+
+    /** Each part falls back to the default if what is stored is unreadable. */
+    private fun readTheme() = ThemeChoice(
+        mode = readEnum(KEY_THEME, ThemeMode.SYSTEM),
+        darkStyle = readEnum(KEY_DARK_STYLE, DarkStyle.BLACK),
+        accent = readEnum(KEY_ACCENT, ThemeAccent.BLUE),
+        custom = ColorPart.entries
+            .filter { prefs.contains(colorKey(it)) }
+            .associateWith { prefs.getInt(colorKey(it), 0) },
+    )
+
+    private fun colorKey(part: ColorPart) = "${KEY_COLOR}_${part.name}"
 
     private companion object {
         const val KEY_THEME = "theme_mode"
+        const val KEY_DARK_STYLE = "dark_style"
+        const val KEY_ACCENT = "theme_accent"
+        /** Prefix; one key per ColorPart. */
+        const val KEY_COLOR = "custom_color"
         /**
          * Also the prefix for the per-scope keys, and still read on its own as
          * the fallback for a scope that has never been set.

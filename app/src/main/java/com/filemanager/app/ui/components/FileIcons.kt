@@ -10,6 +10,8 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.filemanager.app.ui.theme.CategoryColors
@@ -30,6 +32,9 @@ fun FileCategory.icon(): ImageVector = when (this) {
     FileCategory.OTHER -> Icons.Outlined.InsertDriveFile
 }
 
+/** Follows the theme, where each category's colour can be set by hand. */
+@Composable
+@ReadOnlyComposable
 fun FileCategory.color(): Color = when (this) {
     FileCategory.DIRECTORY -> CategoryColors.Directory
     FileCategory.IMAGE -> CategoryColors.Image
@@ -57,6 +62,8 @@ fun Category.icon(): ImageVector = when (this) {
     Category.Downloads -> Icons.Outlined.Download
 }
 
+@Composable
+@ReadOnlyComposable
 fun Category.color(): Color = when (this) {
     is Category.OfType -> type.color()
     Category.Downloads -> CategoryColors.Downloads

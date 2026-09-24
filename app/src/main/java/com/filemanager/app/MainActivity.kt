@@ -37,10 +37,10 @@ class MainActivity : ComponentActivity() {
 
             // Read from the stored preference, so the choice survives a
             // restart and applies before the first frame is drawn.
-            val themeMode by (application as FileManagerApp).settings.themeMode
+            val theme by (application as FileManagerApp).settings.theme
                 .collectAsState()
 
-            FileManagerTheme(themeMode = themeMode) {
+            FileManagerTheme(theme = theme) {
                 FileManagerRoot(
                     hasStorageAccess = hasStorageAccess,
                     onRequestAccess = {

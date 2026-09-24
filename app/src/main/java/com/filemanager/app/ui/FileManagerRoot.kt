@@ -73,12 +73,12 @@ import com.filemanager.app.ui.screens.PermissionScreen
 import com.filemanager.app.ui.screens.RecentScreen
 import com.filemanager.app.ui.screens.SearchScreen
 import com.filemanager.app.ui.screens.StorageScreen
+import com.filemanager.app.ui.screens.ThemeScreen
 import com.filemanager.app.ui.screens.TrashScreen
 import com.filemanager.app.viewmodel.BrowserViewModel
 import com.filemanager.app.ui.screens.FavoritesScreen
 import com.filemanager.app.viewmodel.FavoritesViewModel
 import com.filemanager.app.viewmodel.HomeViewModel
-import com.filemanager.app.ui.components.ThemeDialog
 import com.filemanager.app.ui.components.UpdateDialog
 import com.filemanager.app.viewmodel.RecentViewModel
 import com.filemanager.app.viewmodel.SearchViewModel
@@ -104,6 +104,7 @@ private object Routes {
     const val TRASH = "trash"
     const val RECENT = "recent"
     const val ABOUT = "about"
+    const val THEME = "theme"
     const val FAVORITES = "favorites"
     const val NETWORK = "network"
     const val FTP_SERVER = "ftpserver"
@@ -230,8 +231,6 @@ fun FileManagerRoot(
         }
     }
     val scope = rememberCoroutineScope()
-    var showThemeDialog by remember { mutableStateOf(false) }
-    val themeMode by app.settings.themeMode.collectAsState()
 
     /**
      * Share files, expanding any folder into the files it contains.
@@ -293,14 +292,6 @@ fun FileManagerRoot(
         onRetry = app.updater::update,
     )
 
-    if (showThemeDialog) {
-        ThemeDialog(
-            current = themeMode,
-            onSelect = app.settings::setThemeMode,
-            onDismiss = { showThemeDialog = false },
-        )
-    }
-
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -347,7 +338,7 @@ fun FileManagerRoot(
                         HomeOverflowMenu(
                             onManageStorage = { navController.navigate(Routes.STORAGE) },
                             onTrash = { navController.navigate(Routes.TRASH) },
-                            onTheme = { showThemeDialog = true },
+                            onTheme = { navController.navigate(Routes.THEME) },
                             onUpdate = app.updater::update,
                             onAbout = { navController.navigate(Routes.ABOUT) },
                         )
@@ -527,6 +518,15 @@ fun FileManagerRoot(
                         onNavigateBack = { navController.popBackStack() },
                     )
                 }
+            }
+
+            composable(Routes.THEME) {
+                val theme by app.settings.theme.collectAsState()
+                ThemeScreen(
+                    theme = theme,
+                    settings = app.settings,
+                    onNavigateBack = { navController.popBackStack() },
+                )
             }
 
         composable(Routes.ABOUT) {
