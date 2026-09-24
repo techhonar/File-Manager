@@ -10,7 +10,7 @@ An Android file manager in the style of Samsung's My Files, built with
 | Recursive directory scans and sizes | Jetpack Compose UI |
 | Global search with filters | Permissions, MediaStore, intents |
 | Storage analysis by category | Navigation and screen state |
-| Zip create / list / extract | Single-file rename, mkdir |
+| Zip create; zip, 7z, RAR and tar extract | Single-file rename, mkdir |
 | Duplicate detection (blake3) | Thumbnail loading |
 | Recycle bin (move / restore / purge) | Sharing via FileProvider |
 
@@ -188,7 +188,7 @@ rust-core/src/
   search.rs       parallel search with filters
   categories.rs   extension -> category, home screen queries
   storage.rs      usage breakdown, largest files
-  archive.rs      zip create / list / extract
+  archive.rs      zip create; zip, 7z, RAR and tar (+gz/bz2/xz/zst) extract
   trash.rs        recycle bin
   dedup.rs        duplicate detection
 
@@ -204,5 +204,8 @@ app/src/main/java/com/filemanager/app/
 - Grid view toggles state but the browser still renders a list.
 - Copy/move run in a ViewModel scope, so leaving the screen cancels them; they
   belong in a foreground Service (the manifest permissions are already there).
-- Only zip is supported for archives. rar/7z would need another crate.
+- Archives are only ever created as zip; the other kinds are extract-only.
+- RAR extraction uses RARLAB's UnRAR (C++, built from source by the `unrar`
+  crate). Its licence is freeware rather than open source: free to ship
+  inside an app, but it rules out stores that accept only open-source code.
 - No SD-card SAF fallback - the app assumes all-files access was granted.

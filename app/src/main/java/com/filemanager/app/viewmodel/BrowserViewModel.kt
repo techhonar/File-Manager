@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.archiveBaseName
 import com.filemanager.app.data.freeName
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.isWrongPassword
@@ -639,7 +640,7 @@ class BrowserViewModel(
     /** A folder beside the archive, named after it, that does not exist yet. */
     private fun extractDestinationFor(archivePath: String): File {
         val archive = File(archivePath)
-        return freeName(archive.parentFile ?: File("/"), archive.nameWithoutExtension)
+        return freeName(archive.parentFile ?: File("/"), archiveBaseName(archive.name))
     }
 
     fun extract(archivePath: String, password: String? = null) {

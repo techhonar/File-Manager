@@ -26,7 +26,8 @@ const DOCUMENT: &[&str] = &[
     "csv", "epub", "html", "htm", "json", "xml",
 ];
 const ARCHIVE: &[&str] = &[
-    "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "iso",
+    "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "tbz2", "txz", "tzst",
+    "iso",
 ];
 /// Installers, including the split-APK bundles the app installs itself: APKPure's
 /// .xapk, SAI's .apks and APKMirror's .apkm.

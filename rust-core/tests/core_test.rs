@@ -2009,3 +2009,265 @@ fn a_cancelled_duplicate_scan_says_so_rather_than_returning_part_of_the_answer()
         result.map(|groups| groups.len()),
     );
 }
+
+// --- Archives other than zip ---------------------------------------------------
+
+use filemanager_core::errors::FileError;
+use std::io::Write as _;
+
+/// One tar entry, written byte by byte: the tar crate's own setters refuse the
+/// names a hostile archive uses, which are the point of some of these.
+fn tar_entry(tar: &mut tar::Builder<Vec<u8>>, name: &str, kind: tar::EntryType, body: &[u8], link: &str) {
+    let mut header = tar::Header::new_ustar();
+    {
+        let raw = header.as_ustar_mut().unwrap();
+        raw.name[..name.len()].copy_from_slice(name.as_bytes());
+        raw.linkname[..link.len()].copy_from_slice(link.as_bytes());
+    }
+    header.set_entry_type(kind);
+    header.set_size(body.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append(&header, body).unwrap();
+}
+
+/// An album of two files, plus what a hostile archive uses to write outside
+/// the folder it is unpacked into: a name climbing out with "..", an absolute
+/// one, and a link to somewhere else followed by a file written through it.
+fn sample_tar() -> Vec<u8> {
+    use tar::EntryType;
+    let mut tar = tar::Builder::new(Vec::new());
+    tar_entry(&mut tar, "album/", EntryType::Directory, b"", "");
+    tar_entry(&mut tar, "album/one.txt", EntryType::Regular, b"one", "");
+    tar_entry(&mut tar, "album/sub/two.txt", EntryType::Regular, b"two", "");
+    tar_entry(&mut tar, "../escaped.txt", EntryType::Regular, b"out", "");
+    tar_entry(&mut tar, "/absolute.txt", EntryType::Regular, b"out", "");
+    tar_entry(&mut tar, "album/link", EntryType::Symlink, b"", "../..");
+    tar_entry(&mut tar, "album/link/through.txt", EntryType::Regular, b"out", "");
+    // A duplicate, stored as a second name for the first file - and one that
+    // names a file outside the archive altogether.
+    tar_entry(&mut tar, "album/again.txt", EntryType::Link, b"", "album/one.txt");
+    tar_entry(&mut tar, "album/stolen.txt", EntryType::Link, b"", "../../etc/hostname");
+    tar.into_inner().unwrap()
+}
+
+/// Extract `archive` into `<tree>/out`, as the app does into a fresh folder.
+fn unpack(tree: &TempTree, archive: &Path, password: Option<&str>) -> Result<u64, FileError> {
+    archive_extract(
+        archive.to_string_lossy().into_owned(),
+        tree.path().join("out").to_string_lossy().into_owned(),
+        password.map(str::to_owned),
+        None,
+        None,
+    )
+}
+
+fn encrypted(archive: &Path) -> bool {
+    archive_is_encrypted(archive.to_string_lossy().into_owned()).unwrap()
+}
+
+/// What a sample tar must come out as, wherever it came from.
+fn assert_album_unpacked(tree: &TempTree) {
+    let out = tree.path().join("out");
+    assert_eq!(fs::read_to_string(out.join("album/one.txt")).unwrap(), "one");
+    assert_eq!(fs::read_to_string(out.join("album/sub/two.txt")).unwrap(), "two");
+    assert!(!tree.path().join("escaped.txt").exists(), "\"..\" reached outside the folder");
+    assert!(!Path::new("/absolute.txt").exists(), "an absolute name was written as one");
+    let link = out.join("album/link");
+    assert!(
+        fs::symlink_metadata(&link).map(|m| !m.file_type().is_symlink()).unwrap_or(true),
+        "a link was recreated, and could carry later entries anywhere",
+    );
+    assert!(!tree.path().join("through.txt").exists(), "a file was written through a link");
+    assert_eq!(fs::read_to_string(out.join("album/again.txt")).unwrap(), "one", "a duplicate went missing");
+    assert!(!out.join("album/stolen.txt").exists(), "a file outside the archive was copied in");
+}
+
+#[test]
+fn a_tar_unpacks_its_files_and_nothing_outside_its_folder() {
+    let tree = TempTree::new("tar-plain");
+    let archive = tree.path().join("album.tar");
+    fs::write(&archive, sample_tar()).unwrap();
+
+    assert!(!encrypted(&archive));
+    let written = unpack(&tree, &archive, None).unwrap();
+
+    assert_album_unpacked(&tree);
+    // one.txt, two.txt, again.txt, and through.txt, which lands inside as a
+    // plain file now that the link it relied on was never made.
+    assert_eq!(written, 4);
+    assert_eq!(fs::read_to_string(tree.path().join("out/album/link/through.txt")).unwrap(), "out");
+}
+
+#[test]
+fn a_compressed_tar_unpacks_whichever_compression_it_uses() {
+    let tar = sample_tar();
+    let gzip = {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    let bzip2 = {
+        let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    let xz = {
+        let mut e = lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(6)).unwrap();
+        e.write_all(&tar).unwrap();
+        e.finish().unwrap()
+    };
+    let zstd = ruzstd::encoding::compress_to_vec(&tar[..], ruzstd::encoding::CompressionLevel::Fastest);
+
+    // Named every way they turn up - and "backup.gz" is a tar all the same,
+    // since what is inside decides, not the name.
+    for (name, bytes) in [
+        ("album.tar.gz", &gzip),
+        ("album.tgz", &gzip),
+        ("backup.gz", &gzip),
+        ("album.tar.bz2", &bzip2),
+        ("album.tar.xz", &xz),
+        ("album.tar.zst", &zstd),
+    ] {
+        let tree = TempTree::new(&format!("tar-{name}"));
+        let archive = tree.path().join(name);
+        fs::write(&archive, bytes).unwrap();
+
+        assert!(!encrypted(&archive), "{name}");
+        unpack(&tree, &archive, None).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_album_unpacked(&tree);
+    }
+}
+
+#[test]
+fn a_single_compressed_file_comes_out_under_its_own_name() {
+    let tree = TempTree::new("gz-single");
+    let archive = tree.path().join("notes.txt.gz");
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b"just the one file").unwrap();
+    fs::write(&archive, e.finish().unwrap()).unwrap();
+
+    assert_eq!(unpack(&tree, &archive, None).unwrap(), 1);
+    assert_eq!(fs::read_to_string(tree.path().join("out/notes.txt")).unwrap(), "just the one file");
+}
+
+/// A solid 7z: every file packed as one stream, so each has to be read to
+/// its end before the next can be. The middle entry climbs out with "..".
+fn sample_7z(path: &Path, password: Option<&str>, encrypt_names: bool) {
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderMethod, Password, SourceReader};
+    let mut writer = ArchiveWriter::create(path).unwrap();
+    if let Some(pw) = password {
+        writer.set_content_methods(vec![
+            sevenz_rust2::encoder_options::AesEncoderOptions::new(Password::from(pw)).into(),
+            EncoderMethod::LZMA2.into(),
+        ]);
+        writer.set_encrypt_header(encrypt_names);
+    }
+    let bodies: [&[u8]; 3] = [b"one", b"out", b"two"];
+    let entries = ["album/one.txt", "../escaped.txt", "album/two.txt"]
+        .iter()
+        .zip(bodies)
+        .map(|(name, body)| {
+            let mut entry = ArchiveEntry::new_file(name);
+            entry.size = body.len() as u64;
+            entry
+        })
+        .collect();
+    let readers = bodies.iter().map(|body| SourceReader::new(*body)).collect();
+    writer.push_archive_entries(entries, readers).unwrap();
+    writer.finish().unwrap();
+}
+
+fn assert_7z_unpacked(tree: &TempTree) {
+    let out = tree.path().join("out");
+    assert_eq!(fs::read_to_string(out.join("album/one.txt")).unwrap(), "one");
+    assert_eq!(
+        fs::read_to_string(out.join("album/two.txt")).unwrap(),
+        "two",
+        "the entry after a skipped one has to start where it starts",
+    );
+    assert!(!tree.path().join("escaped.txt").exists(), "\"..\" reached outside the folder");
+}
+
+#[test]
+fn a_7z_unpacks_and_skips_what_would_land_outside_its_folder() {
+    let tree = TempTree::new("7z-plain");
+    let archive = tree.path().join("album.7z");
+    sample_7z(&archive, None, false);
+
+    assert!(!encrypted(&archive));
+    assert_eq!(unpack(&tree, &archive, None).unwrap(), 2);
+    assert_7z_unpacked(&tree);
+}
+
+#[test]
+fn a_protected_7z_asks_for_its_password_and_refuses_a_wrong_one() {
+    for encrypt_names in [false, true] {
+        let tree = TempTree::new(&format!("7z-locked-{encrypt_names}"));
+        let archive = tree.path().join("album.7z");
+        sample_7z(&archive, Some("secret"), encrypt_names);
+
+        assert!(encrypted(&archive), "names encrypted: {encrypt_names}");
+        assert!(
+            matches!(unpack(&tree, &archive, None), Err(FileError::PasswordRequired)),
+            "names encrypted: {encrypt_names}",
+        );
+        assert!(
+            matches!(unpack(&tree, &archive, Some("wrong")), Err(FileError::WrongPassword)),
+            "names encrypted: {encrypt_names}: {:?}",
+            unpack(&tree, &archive, Some("wrong")),
+        );
+        unpack(&tree, &archive, Some("secret")).unwrap();
+        assert_7z_unpacked(&tree);
+    }
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+}
+
+#[test]
+fn a_rar_unpacks() {
+    let tree = TempTree::new("rar-plain");
+    let archive = fixture("version.rar");
+
+    assert!(!encrypted(&archive));
+    assert_eq!(unpack(&tree, &archive, None).unwrap(), 1);
+    assert_eq!(fs::read_to_string(tree.path().join("out/VERSION")).unwrap(), "unrar-0.4.0");
+}
+
+#[test]
+fn a_protected_rar_asks_for_its_password_and_refuses_a_wrong_one() {
+    // One with only its contents encrypted, one with its list of names too.
+    for (name, password) in [("crypted.rar", "unrar"), ("comment-hpw-password.rar", "password")] {
+        let tree = TempTree::new(&format!("rar-{name}"));
+        let archive = fixture(name);
+
+        assert!(encrypted(&archive), "{name}");
+        assert!(
+            matches!(unpack(&tree, &archive, None), Err(FileError::PasswordRequired)),
+            "{name}: {:?}",
+            unpack(&tree, &archive, None),
+        );
+        assert!(
+            matches!(unpack(&tree, &archive, Some("wrong")), Err(FileError::WrongPassword)),
+            "{name}: {:?}",
+            unpack(&tree, &archive, Some("wrong")),
+        );
+        assert_eq!(unpack(&tree, &archive, Some(password)).unwrap(), 1, "{name}");
+        assert_eq!(
+            fs::read_to_string(tree.path().join("out/.gitignore")).unwrap(),
+            "target\nCargo.lock\n",
+            "{name}",
+        );
+    }
+}
+
+#[test]
+fn something_that_is_not_an_archive_is_refused_before_a_folder_is_made() {
+    let tree = TempTree::new("not-an-archive");
+    let fake = tree.file("holiday.rar", b"a text file wearing an archive's name");
+
+    assert!(matches!(unpack(&tree, &fake, None), Err(FileError::Archive { .. })));
+    assert!(!tree.path().join("out").exists(), "an empty folder was left behind");
+}
