@@ -113,7 +113,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.FileManager">
+            android:theme="@style/Theme.FileManager"
+            android:windowSoftInputMode="adjustResize">
 
             <!-- "The Files app", as Settings and launchers ask for it. -->
             <intent-filter>

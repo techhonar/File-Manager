@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -71,7 +73,9 @@ import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.Pane
 import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.theme.OneUi
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.zip.ZipFile
@@ -96,30 +100,49 @@ fun ViewerScreen(
     modifier: Modifier = Modifier,
     // Given when the name can't say: another app's file may have none.
     kind: ViewerKind? = null,
+    // Off for another app's file: what is shown is a copy, and saving it
+    // would change nothing the sender sees.
+    editable: Boolean = true,
 ) {
     val file = remember(path) { File(path) }
+    val shown = kind ?: viewerKind(file.name)
     val openWith = { onOpenWith(path) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val edit: TextEdit? = if (editable && shown == ViewerKind.TEXT) viewModel(key = "edit $path") { TextEdit() } else null
 
-    OneUiScreen(
-        title = file.name,
-        modifier = modifier,
-        navigationIcon = {
-            IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-            }
-        },
-        actions = {
-            IconButton(onClick = openWith) {
-                Icon(Icons.AutoMirrored.Filled.OpenInNew, "Open with")
-            }
-        },
-    ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when (kind ?: viewerKind(file.name)) {
-                ViewerKind.TEXT -> Viewer(file, { TextFiles.read(it) }, openWith) { TextView(it) }
-                ViewerKind.DOCX -> Viewer(file, { Docx.read(it) }, openWith) { DocxView(it, file) }
-                ViewerKind.PDF -> PdfPane(file, openWith)
-                null -> Message("This file can't be shown here.", openWith)
+    Crossfade(targetState = edit?.opened != null, animationSpec = PaneFade, label = "edit") { editing ->
+        if (editing && edit != null) {
+            TextEditor(file, edit, modifier)
+            return@Crossfade
+        }
+        OneUiScreen(
+            title = file.name,
+            modifier = modifier,
+            navigationIcon = {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+            },
+            actions = {
+                if (edit != null) {
+                    IconButton(onClick = { scope.launch { startEditing(context, file, edit) } }) {
+                        Icon(Icons.Default.Edit, "Edit")
+                    }
+                }
+                IconButton(onClick = openWith) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, "Open with")
+                }
+            },
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                when (shown) {
+                    // Read again after each save, to show what was saved.
+                    ViewerKind.TEXT -> Viewer(file, { TextFiles.read(it) }, openWith, edit?.saves ?: 0) { TextView(it) }
+                    ViewerKind.DOCX -> Viewer(file, { Docx.read(it) }, openWith) { DocxView(it, file) }
+                    ViewerKind.PDF -> PdfPane(file, openWith)
+                    null -> Message("This file can't be shown here.", openWith)
+                }
             }
         }
     }
@@ -143,7 +166,13 @@ fun ExternalViewerScreen(
     }
     val file = copy?.getOrNull()
     when {
-        file != null -> ViewerScreen(path = file.path, onOpenWith = onOpenWith, onNavigateBack = onClose, kind = kind)
+        file != null -> ViewerScreen(
+            path = file.path,
+            onOpenWith = onOpenWith,
+            onNavigateBack = onClose,
+            kind = kind,
+            editable = false,
+        )
         copy == null -> Box(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
             Alignment.Center,
@@ -169,9 +198,11 @@ private fun <T : Any> Viewer(
     file: File,
     read: (File) -> T,
     onOpenWith: () -> Unit,
+    version: Int = 0,
     content: @Composable (T) -> Unit,
 ) {
-    val load by produceState<Load<T>>(Load.Reading, file) {
+    // Keeps showing what it has while reading again for a new [version].
+    val load by produceState<Load<T>>(Load.Reading, file, version) {
         value = withContext(Dispatchers.IO) {
             try {
                 Load.Read(read(file))

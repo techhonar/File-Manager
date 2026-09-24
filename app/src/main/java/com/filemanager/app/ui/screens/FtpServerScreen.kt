@@ -8,6 +8,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.text.style.TextOverflow
 import com.filemanager.app.data.StorageVolume
@@ -104,6 +106,9 @@ fun FtpServerScreen(
         Column(
             modifier = Modifier
                 .padding(padding)
+                // Above the keyboard, so a field being typed in scrolls into view.
+                .consumeWindowInsets(padding)
+                .imePadding()
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(contentPadding)
