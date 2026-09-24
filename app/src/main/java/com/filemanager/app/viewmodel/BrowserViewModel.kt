@@ -541,12 +541,17 @@ class BrowserViewModel(
         }
     }
 
-    fun createFile(name: String) {
+    /** Makes an empty file called [name] here, and hands its path to [then]. */
+    fun createFile(name: String, then: (String) -> Unit = {}) {
         viewModelScope.launch {
-            val ok = runCatching { repository.createFile(_state.value.path, name) }
+            val parent = _state.value.path
+            val ok = runCatching { repository.createFile(parent, name) }
                 .getOrDefault(false)
             _messages.value = if (ok) null else "A file named \"$name\" already exists"
-            if (ok) refresh()
+            if (ok) {
+                refresh()
+                then(File(parent, name).path)
+            }
         }
     }
 

@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -75,6 +76,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import com.filemanager.app.data.viewer.ViewerKind
+import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
@@ -82,9 +85,11 @@ import com.filemanager.app.ui.components.CompressDialog
 import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
 import com.filemanager.app.data.archiveBaseName
+import com.filemanager.app.data.freeName
 import com.filemanager.app.data.isExtractable
 import androidx.activity.compose.BackHandler
 import com.filemanager.app.ui.components.ExtractDialog
+import java.io.File
 import kotlinx.coroutines.delay
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
@@ -120,6 +125,8 @@ fun BrowserScreen(
     // Choosing a file for another app, where tapping an archive picks it
     // rather than offering to unpack it.
     picking: Boolean = false,
+    /** A new text file was made; open it for typing. */
+    onEditNewFile: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val clipboard by viewModel.clipboardContents.collectAsState()
@@ -161,6 +168,7 @@ fun BrowserScreen(
 
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
+    var showNewTextDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var showCompressDialog by remember { mutableStateOf(false) }
 
@@ -241,6 +249,7 @@ fun BrowserScreen(
                 CreateMenu(
                     onNewFolder = { showNewFolderDialog = true },
                     onNewFile = { showNewFileDialog = true },
+                    onNewTextFile = { showNewTextDialog = true },
                 )
                 SortMenu(current = state.sort, onSelect = viewModel::setSort)
                 OverflowMenu(
@@ -353,6 +362,23 @@ fun BrowserScreen(
                 showNewFileDialog = false
             },
             onDismiss = { showNewFileDialog = false },
+        )
+    }
+
+    if (showNewTextDialog) {
+        TextInputDialog(
+            title = "New text file",
+            label = "File name",
+            // A free name, so Create works without thinking of one.
+            initial = remember { freeName(File(state.path), "New text file", "txt").name },
+            confirmLabel = "Create",
+            onConfirm = { name ->
+                showNewTextDialog = false
+                viewModel.createFile(name) { path ->
+                    if (viewerKind(name) == ViewerKind.TEXT) onEditNewFile(path)
+                }
+            },
+            onDismiss = { showNewTextDialog = false },
         )
     }
 
@@ -576,6 +602,7 @@ private fun Breadcrumbs(
 private fun CreateMenu(
     onNewFolder: () -> Unit,
     onNewFile: () -> Unit,
+    onNewTextFile: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -587,6 +614,11 @@ private fun CreateMenu(
             text = { Text("New folder") },
             leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
             onClick = { onNewFolder(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("New text file") },
+            leadingIcon = { Icon(Icons.Default.EditNote, null) },
+            onClick = { onNewTextFile(); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("New file") },
