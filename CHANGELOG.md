@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-24
+
 ### New features
 
 - Let the phone use File Manager as its file manager
@@ -14,6 +16,7 @@ commit behind each line explains why the change was made.
 ### Behind the scenes
 
 - Give 0.4.7 its place in the changelog
+- Add being the phone's file manager to the changelog
 
 ## [0.4.7] - 2026-09-24
 
@@ -320,7 +323,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/techhonar/File-Manager/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/techhonar/File-Manager/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/techhonar/File-Manager/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/techhonar/File-Manager/compare/v0.4.4...v0.4.5
