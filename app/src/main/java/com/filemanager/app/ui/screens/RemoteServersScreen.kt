@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import com.filemanager.app.data.remote.RemoteServer
 import com.filemanager.app.data.remote.RemoteType
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.RemoteServerDialog
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.RemoteServersViewModel
@@ -79,28 +82,36 @@ fun RemoteServersScreen(
             }
         },
     ) { padding ->
-        if (state.servers.isEmpty()) {
-            Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
-                Text(
-                    text = "No network storage yet.\n\nAdd an FTP, SFTP, SMB or " +
-                        "WebDAV server and it will appear here and on the home screen.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-                items(state.servers, key = { it.id }) { server ->
-                    RemoteServerRow(
-                        server = server,
-                        onClick = { onOpenServer(server) },
-                        onEdit = { viewModel.edit(server) },
+        Crossfade(
+            targetState = if (state.servers.isEmpty()) Pane.EMPTY else Pane.ITEMS,
+            animationSpec = PaneFade,
+            label = "servers",
+        ) { pane ->
+            when (pane) {
+                Pane.EMPTY -> Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
+                    Text(
+                        text = "No network storage yet.\n\nAdd an FTP, SFTP, SMB or " +
+                            "WebDAV server and it will appear here and on the home screen.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
                     )
+                }
+
+                else -> LazyColumn(
+                    modifier = Modifier.padding(padding).fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.servers, key = { it.id }) { server ->
+                        Box(Modifier.animateItem()) {
+                            RemoteServerRow(
+                                server = server,
+                                onClick = { onOpenServer(server) },
+                                onEdit = { viewModel.edit(server) },
+                            )
+                        }
+                    }
                 }
             }
         }

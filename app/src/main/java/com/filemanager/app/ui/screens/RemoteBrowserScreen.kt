@@ -1,6 +1,7 @@
 package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,7 +56,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.data.remote.RemoteEntry
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.TextInputDialog
 import com.filemanager.app.ui.theme.OneUi
@@ -157,7 +161,7 @@ fun RemoteBrowserScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
                     Column {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -215,50 +219,63 @@ fun RemoteBrowserScreen(
                 }
             }
 
-            when {
-                state.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-
-                state.error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = state.error.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                        )
-                        TextButton(onClick = viewModel::refresh) { Text("Try again") }
+            Crossfade(
+                targetState = when {
+                    state.isLoading -> Pane.LOADING
+                    state.error != null -> Pane.ERROR
+                    state.entries.isEmpty() -> Pane.EMPTY
+                    else -> Pane.ITEMS
+                },
+                animationSpec = PaneFade,
+                label = "folder",
+            ) { pane ->
+                when (pane) {
+                    Pane.LOADING -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        CircularProgressIndicator()
                     }
-                }
 
-                state.entries.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        text = "This folder is empty",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                    Pane.ERROR -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = state.error.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
+                            )
+                            TextButton(onClick = viewModel::refresh) { Text("Try again") }
+                        }
+                    }
 
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = contentPadding,
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        RemoteRow(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = {
-                                if (state.inSelectionMode) {
-                                    viewModel.toggleSelection(entry.path)
-                                } else {
-                                    viewModel.open(entry)
-                                }
-                            },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                    Pane.EMPTY -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Text(
+                            text = "This folder is empty",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+
+                    Pane.ITEMS -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.entries, key = { it.path }) { entry ->
+                            Box(Modifier.animateItem()) {
+                                RemoteRow(
+                                    entry = entry,
+                                    isSelected = entry.path in state.selected,
+                                    selectionMode = state.inSelectionMode,
+                                    onClick = {
+                                        if (state.inSelectionMode) {
+                                            viewModel.toggleSelection(entry.path)
+                                        } else {
+                                            viewModel.open(entry)
+                                        }
+                                    },
+                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                )
+                            }
+                        }
                     }
                 }
             }

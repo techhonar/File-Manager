@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -36,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.TrashViewModel
 import uniffi.filemanager_core.TrashItem
@@ -86,22 +89,34 @@ fun TrashScreen(
                 ),
             )
 
-            when {
-                state.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+            Crossfade(
+                targetState = when {
+                    state.isLoading -> Pane.LOADING
+                    state.items.isEmpty() -> Pane.EMPTY
+                    else -> Pane.ITEMS
+                },
+                animationSpec = PaneFade,
+                label = "trash",
+            ) { pane ->
+                when (pane) {
+                    Pane.LOADING -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
 
-                state.items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        "Trash is empty",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                    Pane.EMPTY -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Text(
+                            "Trash is empty",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
 
-                else -> LazyColumn(contentPadding = contentPadding) {
-                    items(state.items, key = { it.id }) { item ->
-                        TrashRow(item = item, onRestore = { viewModel.restore(item) })
+                    else -> LazyColumn(contentPadding = contentPadding) {
+                        items(state.items, key = { it.id }) { item ->
+                            Box(Modifier.animateItem()) {
+                                TrashRow(item = item, onRestore = { viewModel.restore(item) })
+                            }
+                        }
                     }
                 }
             }

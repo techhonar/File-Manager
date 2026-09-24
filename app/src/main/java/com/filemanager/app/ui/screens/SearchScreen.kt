@@ -1,11 +1,13 @@
 package com.filemanager.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.InlineResultActions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
@@ -39,6 +41,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
@@ -219,7 +223,7 @@ fun SearchScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 SelectionActionBar(
                     onCopy = viewModel::copySelection,
                     onMove = viewModel::cutSelection,
@@ -266,127 +270,146 @@ fun SearchScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            when {
-                // Results render while the walk is still running - the list
-                // fills in rather than appearing all at once at the end.
-                state.results.isNotEmpty() && state.viewMode == ViewMode.GRID ->
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 108.dp),
-                        state = gridState,
-                        contentPadding = contentPadding,
-                    ) {
-                        items(state.results, key = { it.path }) { entry ->
-                            FileGridCell(
-                                entry = entry,
-                                isSelected = entry.path in state.selected,
-                                selectionMode = state.inSelectionMode,
-                                onClick = {
-                                    if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                                    else onOpenFile(entry)
-                                },
-                                onLongClick = { viewModel.toggleSelection(entry.path) },
-                            )
-                        }
-                    }
+            Crossfade(
+                targetState = when {
+                    state.results.isNotEmpty() -> Pane.ITEMS
+                    state.isSearching -> Pane.LOADING
+                    else -> Pane.EMPTY
+                },
+                animationSpec = PaneFade,
+                label = "results",
+            ) { pane ->
+                when (pane) {
+                    // Results render while the walk is still running - the list
+                    // fills in rather than appearing all at once at the end.
+                    Pane.ITEMS -> when {
+                        state.viewMode == ViewMode.GRID ->
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(minSize = 108.dp),
+                                state = gridState,
+                                contentPadding = contentPadding,
+                            ) {
+                                items(state.results, key = { it.path }) { entry ->
+                                    Box(Modifier.animateItem(placementSpec = null)) {
+                                        FileGridCell(
+                                            entry = entry,
+                                            isSelected = entry.path in state.selected,
+                                            selectionMode = state.inSelectionMode,
+                                            onClick = {
+                                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                                else onOpenFile(entry)
+                                            },
+                                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                                        )
+                                    }
+                                }
+                            }
 
-                state.results.isNotEmpty() && state.viewMode == ViewMode.DETAILED ->
-                    LazyColumn(state = listState, contentPadding = contentPadding) {
-                        items(state.results, key = { it.path }) { entry ->
-                            Column {
-                                FileDetailRow(
-                                    entry = entry,
-                                    isSelected = entry.path in state.selected,
-                                    selectionMode = state.inSelectionMode,
-                                    onClick = {
-                                        when {
-                                            state.inSelectionMode ->
-                                                viewModel.toggleSelection(entry.path)
-                                            expandedPath == entry.path -> expandedPath = null
-                                            else -> expandedPath = entry.path
+                        state.viewMode == ViewMode.DETAILED ->
+                            LazyColumn(state = listState, contentPadding = contentPadding) {
+                                items(state.results, key = { it.path }) { entry ->
+                                    Box(Modifier.animateItem(placementSpec = null)) {
+                                        Column {
+                                            FileDetailRow(
+                                                entry = entry,
+                                                isSelected = entry.path in state.selected,
+                                                selectionMode = state.inSelectionMode,
+                                                onClick = {
+                                                    when {
+                                                        state.inSelectionMode ->
+                                                            viewModel.toggleSelection(entry.path)
+                                                        expandedPath == entry.path -> expandedPath = null
+                                                        else -> expandedPath = entry.path
+                                                    }
+                                                },
+                                                onLongClick = { viewModel.toggleSelection(entry.path) },
+                                            )
+                                            InlineResultActions(
+                                                visible = expandedPath == entry.path &&
+                                                    !state.inSelectionMode,
+                                                onOpen = { onOpenFile(entry) },
+                                            onOpenWith = { onOpenWith(entry.path) },
+                                                onCopyPath = { onCopyPath(entry.path) },
+                                                onShowInFolder = {
+                                                    expandedPath = null
+                                                    onShowInFolder(entry.path)
+                                                },
+                                            )
                                         }
+                                    }
+                                }
+                            }
+
+                        else -> LazyColumn(
+                            state = listState,
+                            contentPadding = contentPadding,
+                        ) {
+                            item {
+                                Text(
+                                    // The count is what the walk found; the list is
+                                    // the page of it that crossed from Rust. Saying
+                                    // only the page size would under-report a loose
+                                    // query by an order of magnitude.
+                                    text = if (state.truncated) {
+                                        "${state.total} results, showing ${state.results.size}"
+                                    } else {
+                                        "${state.total} results"
                                     },
-                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(
+                                        start = OneUi.ScreenPadding + 8.dp,
+                                        bottom = 8.dp,
+                                    ),
                                 )
-                                InlineResultActions(
-                                    visible = expandedPath == entry.path &&
-                                        !state.inSelectionMode,
-                                    onOpen = { onOpenFile(entry) },
-                                onOpenWith = { onOpenWith(entry.path) },
-                                    onCopyPath = { onCopyPath(entry.path) },
-                                    onShowInFolder = {
-                                        expandedPath = null
-                                        onShowInFolder(entry.path)
-                                    },
-                                )
+                            }
+                            items(state.results, key = { it.path }) { entry ->
+                                Box(Modifier.animateItem(placementSpec = null)) {
+                                    Column {
+                                        SearchResultRow(
+                                            entry = entry,
+                                            isSelected = entry.path in state.selected,
+                                            selectionMode = state.inSelectionMode,
+                                            onClick = {
+                                                when {
+                                                    state.inSelectionMode ->
+                                                        viewModel.toggleSelection(entry.path)
+                                                    // A result is usually somewhere the
+                                                    // user was not expecting, so offer to
+                                                    // locate it rather than only open it.
+                                                    expandedPath == entry.path -> expandedPath = null
+                                                    else -> expandedPath = entry.path
+                                                }
+                                            },
+                                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                                        )
+                                        InlineResultActions(
+                                            visible = expandedPath == entry.path && !state.inSelectionMode,
+                                            onOpen = { onOpenFile(entry) },
+                                            onOpenWith = { onOpenWith(entry.path) },
+                                            onCopyPath = { onCopyPath(entry.path) },
+                                            onShowInFolder = {
+                                                expandedPath = null
+                                                onShowInFolder(entry.path)
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
 
-                state.results.isNotEmpty() -> LazyColumn(
-                    state = listState,
-                    contentPadding = contentPadding,
-                ) {
-                    item {
-                        Text(
-                            // The count is what the walk found; the list is
-                            // the page of it that crossed from Rust. Saying
-                            // only the page size would under-report a loose
-                            // query by an order of magnitude.
-                            text = if (state.truncated) {
-                                "${state.total} results, showing ${state.results.size}"
-                            } else {
-                                "${state.total} results"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(
-                                start = OneUi.ScreenPadding + 8.dp,
-                                bottom = 8.dp,
-                            ),
-                        )
-                    }
-                    items(state.results, key = { it.path }) { entry ->
-                        Column {
-                            SearchResultRow(
-                                entry = entry,
-                                isSelected = entry.path in state.selected,
-                                selectionMode = state.inSelectionMode,
-                                onClick = {
-                                    when {
-                                        state.inSelectionMode ->
-                                            viewModel.toggleSelection(entry.path)
-                                        // A result is usually somewhere the
-                                        // user was not expecting, so offer to
-                                        // locate it rather than only open it.
-                                        expandedPath == entry.path -> expandedPath = null
-                                        else -> expandedPath = entry.path
-                                    }
-                                },
-                                onLongClick = { viewModel.toggleSelection(entry.path) },
-                            )
-                            InlineResultActions(
-                                visible = expandedPath == entry.path && !state.inSelectionMode,
-                                onOpen = { onOpenFile(entry) },
-                                onOpenWith = { onOpenWith(entry.path) },
-                                onCopyPath = { onCopyPath(entry.path) },
-                                onShowInFolder = {
-                                    expandedPath = null
-                                    onShowInFolder(entry.path)
-                                },
-                            )
-                        }
-                    }
+                    // Before "no files match": a walk that has not finished has
+                    // not established that. A category opens onto an empty screen
+                    // and stays that way until the first page arrives, which on a
+                    // full device is a few seconds.
+                    Pane.LOADING -> SearchingMessage()
+
+                    else -> EmptyMessage(
+                        if (state.hasSearched) "No files match"
+                        else "Search by name, or pick a category",
+                    )
                 }
-
-                // Before "no files match": a walk that has not finished has
-                // not established that. A category opens onto an empty screen
-                // and stays that way until the first page arrives, which on a
-                // full device is a few seconds.
-                state.isSearching -> SearchingMessage()
-
-                state.hasSearched -> EmptyMessage("No files match")
-
-                else -> EmptyMessage("Search by name, or pick a category")
             }
         }
     }

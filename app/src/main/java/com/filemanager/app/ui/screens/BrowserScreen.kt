@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -74,6 +75,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.CompressDialog
@@ -86,6 +88,8 @@ import com.filemanager.app.ui.components.ExtractDialog
 import kotlinx.coroutines.delay
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.Pane
+import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
@@ -248,7 +252,7 @@ fun BrowserScreen(
             }
         },
         bottomBar = {
-            if (state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.inSelectionMode) {
                 SelectionActionBar(
                     onCopy = viewModel::copy,
                     onMove = viewModel::cut,
@@ -401,102 +405,119 @@ private fun FileList(
     listState: LazyListState,
     gridState: LazyGridState,
 ) {
-    when {
-        state.isLoading -> Box(
-            Modifier.padding(scaffoldPadding).fillMaxSize(),
-            Alignment.Center,
-        ) { CircularProgressIndicator() }
+    Crossfade(
+        targetState = when {
+            state.isLoading -> Pane.LOADING
+            state.error != null -> Pane.ERROR
+            state.entries.isEmpty() -> Pane.EMPTY
+            else -> Pane.ITEMS
+        },
+        animationSpec = PaneFade,
+        label = "folder",
+    ) { pane ->
+        when (pane) {
+            Pane.LOADING -> Box(
+                Modifier.padding(scaffoldPadding).fillMaxSize(),
+                Alignment.Center,
+            ) { CircularProgressIndicator() }
 
-        state.error != null -> Box(
-            Modifier.padding(scaffoldPadding).fillMaxSize(),
-            Alignment.Center,
-        ) {
-            Text(
-                text = state.error!!,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(32.dp),
-            )
-        }
-
-        state.entries.isEmpty() -> Box(
-            Modifier.padding(scaffoldPadding).fillMaxSize(),
-            Alignment.Center,
-        ) {
-            Text(
-                "This folder is empty",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        else -> {
-            val onEntryClick: (FileEntry) -> Unit = { entry ->
-                when {
-                    state.inSelectionMode -> viewModel.toggleSelection(entry.path)
-                    entry.isDir -> viewModel.load(entry.path)
-                    // Ask before unpacking: it is a lot of writing to do on a
-                    // single tap, and undoing it by hand is worse. Only the
-                    // kinds the core can read - anything else, an .iso say,
-                    // goes to whichever app on the phone opens it.
-                    isExtractable(entry.name) -> viewModel.confirmExtract(entry)
-                    else -> onOpenFile(entry)
-                }
+            Pane.ERROR -> Box(
+                Modifier.padding(scaffoldPadding).fillMaxSize(),
+                Alignment.Center,
+            ) {
+                Text(
+                    text = state.error.orEmpty(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(32.dp),
+                )
             }
-            val listModifier = Modifier.padding(scaffoldPadding).fillMaxSize()
 
-            when (state.viewMode) {
-                ViewMode.GRID -> LazyVerticalGrid(
-                    // Adaptive rather than a fixed count, so a tablet or a
-                    // landscape phone gets more columns instead of enormous
-                    // tiles.
-                    columns = GridCells.Adaptive(minSize = 108.dp),
-                    state = gridState,
-                    modifier = listModifier,
-                    contentPadding = contentPadding,
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        FileGridCell(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = { onEntryClick(entry) },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                        )
+            Pane.EMPTY -> Box(
+                Modifier.padding(scaffoldPadding).fillMaxSize(),
+                Alignment.Center,
+            ) {
+                Text(
+                    "This folder is empty",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Pane.ITEMS -> {
+                val onEntryClick: (FileEntry) -> Unit = { entry ->
+                    when {
+                        state.inSelectionMode -> viewModel.toggleSelection(entry.path)
+                        entry.isDir -> viewModel.load(entry.path)
+                        // Ask before unpacking: it is a lot of writing to do on a
+                        // single tap, and undoing it by hand is worse. Only the
+                        // kinds the core can read - anything else, an .iso say,
+                        // goes to whichever app on the phone opens it.
+                        isExtractable(entry.name) -> viewModel.confirmExtract(entry)
+                        else -> onOpenFile(entry)
                     }
                 }
+                val listModifier = Modifier.padding(scaffoldPadding).fillMaxSize()
 
-                ViewMode.DETAILED -> LazyColumn(
-                    state = listState,
-                    modifier = listModifier,
-                    contentPadding = contentPadding,
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        FileDetailRow(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = { onEntryClick(entry) },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                        )
+                when (state.viewMode) {
+                    ViewMode.GRID -> LazyVerticalGrid(
+                        // Adaptive rather than a fixed count, so a tablet or a
+                        // landscape phone gets more columns instead of enormous
+                        // tiles.
+                        columns = GridCells.Adaptive(minSize = 108.dp),
+                        state = gridState,
+                        modifier = listModifier,
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.entries, key = { it.path }) { entry ->
+                            Box(Modifier.animateItem()) {
+                                FileGridCell(
+                                    entry = entry,
+                                    isSelected = entry.path in state.selected,
+                                    selectionMode = state.inSelectionMode,
+                                    onClick = { onEntryClick(entry) },
+                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                )
+                            }
+                        }
                     }
-                }
 
-                ViewMode.LIST -> LazyColumn(
-                    state = listState,
-                    modifier = listModifier,
-                    contentPadding = contentPadding,
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        FileRow(
-                            entry = entry,
-                            isSelected = entry.path in state.selected,
-                            selectionMode = state.inSelectionMode,
-                            onClick = { onEntryClick(entry) },
-                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                            isPinned = entry.path in state.pinned,
-                            isHighlighted = entry.path == state.highlightPath,
-                        )
+                    ViewMode.DETAILED -> LazyColumn(
+                        state = listState,
+                        modifier = listModifier,
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.entries, key = { it.path }) { entry ->
+                            Box(Modifier.animateItem()) {
+                                FileDetailRow(
+                                    entry = entry,
+                                    isSelected = entry.path in state.selected,
+                                    selectionMode = state.inSelectionMode,
+                                    onClick = { onEntryClick(entry) },
+                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                )
+                            }
+                        }
+                    }
+
+                    ViewMode.LIST -> LazyColumn(
+                        state = listState,
+                        modifier = listModifier,
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.entries, key = { it.path }) { entry ->
+                            Box(Modifier.animateItem()) {
+                                FileRow(
+                                    entry = entry,
+                                    isSelected = entry.path in state.selected,
+                                    selectionMode = state.inSelectionMode,
+                                    onClick = { onEntryClick(entry) },
+                                    onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    isPinned = entry.path in state.pinned,
+                                    isHighlighted = entry.path == state.highlightPath,
+                                )
+                            }
+                        }
                     }
                 }
             }
