@@ -132,7 +132,7 @@ private object Routes {
     const val NETWORK = "network"
     const val FTP_SERVER = "ftpserver"
     const val REMOTE_PATTERN = "remote/{serverId}"
-    const val VIEWER_PATTERN = "viewer/{path}"
+    const val VIEWER_PATTERN = "viewer/{path}?edit={edit}"
 
     /** Ids are UUIDs, so they need no encoding. */
     fun remote(serverId: String): String = "remote/$serverId"
@@ -158,8 +158,12 @@ private object Routes {
         }
     }
 
-    /** The viewer, for the file at [path]. Encoded as [browse] explains. */
-    fun viewer(path: String): String = "viewer/${Uri.encode(path)}"
+    /**
+     * The viewer, for the file at [path]; with [edit], straight into editing.
+     * Encoded as [browse] explains.
+     */
+    fun viewer(path: String, edit: Boolean = false): String =
+        "viewer/${Uri.encode(path)}" + if (edit) "?edit=true" else ""
 
     /** Search, optionally pre-filtered to one category. */
     fun search(category: Category? = null): String =
@@ -491,6 +495,7 @@ fun FileManagerRoot(
                     onOpenWith = openWith,
                     onNavigateBack = { navController.popBackStack() },
                     picking = picking != null,
+                    onEditNewFile = { path -> navController.navigate(Routes.viewer(path, edit = true)) },
                 )
             }
 
@@ -619,12 +624,21 @@ fun FileManagerRoot(
                 )
             }
 
-            composable(Routes.VIEWER_PATTERN) { entry ->
+            composable(
+                route = Routes.VIEWER_PATTERN,
+                arguments = listOf(
+                    navArgument("edit") {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
+                ),
+            ) { entry ->
                 // Already decoded by Navigation; see Routes.browse.
                 ViewerScreen(
                     path = entry.arguments?.getString("path").orEmpty(),
                     onOpenWith = openWith,
                     onNavigateBack = { navController.popBackStack() },
+                    startEditing = entry.arguments?.getBoolean("edit") == true,
                 )
             }
 

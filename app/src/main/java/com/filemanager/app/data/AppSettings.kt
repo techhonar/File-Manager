@@ -58,6 +58,16 @@ data class ThemeChoice(
     val custom: Map<ColorPart, Int> = emptyMap(),
 )
 
+/** How the text editor shows text. The same for every file, so a choice sticks. */
+data class EditorPrefs(
+    val wordWrap: Boolean = true,
+    val lineNumbers: Boolean = true,
+    val highlight: Boolean = true,
+    val symbolBar: Boolean = true,
+    /** In sp. */
+    val textSize: Int = 14,
+)
+
 /**
  * Which list a layout preference belongs to.
  *
@@ -97,6 +107,28 @@ class AppSettings(context: Context) {
 
     private val _theme = MutableStateFlow(readTheme())
     val theme: StateFlow<ThemeChoice> = _theme.asStateFlow()
+
+    private val _editor = MutableStateFlow(
+        EditorPrefs(
+            wordWrap = prefs.getBoolean(KEY_EDITOR_WRAP, true),
+            lineNumbers = prefs.getBoolean(KEY_EDITOR_LINE_NUMBERS, true),
+            highlight = prefs.getBoolean(KEY_EDITOR_HIGHLIGHT, true),
+            symbolBar = prefs.getBoolean(KEY_EDITOR_SYMBOLS, true),
+            textSize = prefs.getInt(KEY_EDITOR_TEXT_SIZE, 14),
+        ),
+    )
+    val editor: StateFlow<EditorPrefs> = _editor.asStateFlow()
+
+    fun setEditor(editor: EditorPrefs) {
+        prefs.edit()
+            .putBoolean(KEY_EDITOR_WRAP, editor.wordWrap)
+            .putBoolean(KEY_EDITOR_LINE_NUMBERS, editor.lineNumbers)
+            .putBoolean(KEY_EDITOR_HIGHLIGHT, editor.highlight)
+            .putBoolean(KEY_EDITOR_SYMBOLS, editor.symbolBar)
+            .putInt(KEY_EDITOR_TEXT_SIZE, editor.textSize)
+            .apply()
+        _editor.value = editor
+    }
 
     /**
      * One layout per [ViewScope], created the first time it is asked for.
@@ -220,5 +252,10 @@ class AppSettings(context: Context) {
         const val KEY_SORT = "sort_key"
         const val KEY_SORT_DESC = "sort_descending"
         const val KEY_SHOW_HIDDEN = "show_hidden"
+        const val KEY_EDITOR_WRAP = "editor_word_wrap"
+        const val KEY_EDITOR_LINE_NUMBERS = "editor_line_numbers"
+        const val KEY_EDITOR_HIGHLIGHT = "editor_highlight"
+        const val KEY_EDITOR_SYMBOLS = "editor_symbol_bar"
+        const val KEY_EDITOR_TEXT_SIZE = "editor_text_size"
     }
 }

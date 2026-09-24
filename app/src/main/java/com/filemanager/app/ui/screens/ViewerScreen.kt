@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -103,17 +104,30 @@ fun ViewerScreen(
     // Off for another app's file: what is shown is a copy, and saving it
     // would change nothing the sender sees.
     editable: Boolean = true,
+    // A new, empty file: straight into editing.
+    startEditing: Boolean = false,
 ) {
-    val file = remember(path) { File(path) }
-    val shown = kind ?: viewerKind(file.name)
-    val openWith = { onOpenWith(path) }
+    val shown = kind ?: viewerKind(path.substringAfterLast('/'))
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val edit: TextEdit? = if (editable && shown == ViewerKind.TEXT) viewModel(key = "edit $path") { TextEdit() } else null
+    val routeFile = remember(path) { File(path) }
+    // After Save as, the copy is what is shown.
+    val file = edit?.file ?: routeFile
+    val openWith = { onOpenWith(file.path) }
 
-    Crossfade(targetState = edit?.opened != null, animationSpec = PaneFade, label = "edit") { editing ->
+    if (startEditing && edit != null) {
+        LaunchedEffect(edit) {
+            if (!edit.autoStarted) {
+                edit.autoStarted = true
+                startEditing(context, file, edit)
+            }
+        }
+    }
+
+    Crossfade(targetState = edit?.editing == true, animationSpec = PaneFade, label = "edit") { editing ->
         if (editing && edit != null) {
-            TextEditor(file, edit, modifier)
+            TextEditor(edit, modifier)
             return@Crossfade
         }
         OneUiScreen(
