@@ -59,6 +59,35 @@
       code that needs it.
     -->
 
+    <!--
+      The other apps that open downloads, folders and documents, so the
+      Default apps screen can say which one does. Since Android 11 an app
+      sees only the others it names a reason to look for.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW_DOWNLOADS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="resource/folder" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:mimeType="application/pdf" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data
+                android:scheme="content"
+                android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        </intent>
+    </queries>
+
     <application
         android:name=".FileManagerApp"
         android:allowBackup="true"
@@ -102,6 +131,12 @@
                 <data android:mimeType="x-directory/normal" />
                 <data android:mimeType="vnd.android.document/directory" />
                 <data android:mimeType="vnd.android.document/root" />
+            </intent-filter>
+
+            <!-- The Downloads folder, as the Downloads notification opens it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_DOWNLOADS" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
             <!-- Show a file in the viewer: the types it can show. -->

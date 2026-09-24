@@ -1,5 +1,6 @@
 package com.filemanager.app.data.external
 
+import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -34,6 +35,8 @@ sealed interface Incoming {
     companion object {
         /** What [intent] asks for, or null for an ordinary start. */
         fun of(intent: Intent, context: Context): Incoming? = when (intent.action) {
+            // The Downloads notification, and "Downloads" in some launchers.
+            DownloadManager.ACTION_VIEW_DOWNLOADS -> Folder(StorageVolumes.downloadsPath())
             Intent.ACTION_GET_CONTENT -> Pick(
                 requestedTypes(intent.type, intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)),
             )
