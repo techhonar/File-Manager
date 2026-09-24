@@ -135,7 +135,14 @@ class FileRepository(
         val remaining = sources.filterNot { source ->
             val from = File(source)
             val to = File(destination, from.name)
-            if (to.exists() && !overwrite) false else from.renameTo(to)
+            when {
+                // Already where it is going, so there is nothing to do. Passed
+                // on to the copy, an empty folder was copied onto itself
+                // without complaint - and then deleted as the original.
+                from.canonicalPath == to.canonicalPath -> true
+                to.exists() && !overwrite -> false
+                else -> from.renameTo(to)
+            }
         }
         if (remaining.isEmpty()) return@withContext sources.size.toULong()
 
