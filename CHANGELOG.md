@@ -6,6 +6,16 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Extract .rar, .7z and .tar archives, plain or compressed
+- Offer to extract .rar, .7z and .tar files when they are tapped
+- Say in the README which archives the app opens
+- Build the native core for the app's minSdk, not API 21
+- Give the Android link the libpthread UnRAR asks for
+
+## [0.4.4] - 2026-09-24
+
 ### Fixes
 
 - Keep a trashed folder listed when its original cannot all be removed
@@ -15,6 +25,10 @@ commit behind each line explains why the change was made.
 - Open folders with a % or + in their name instead of crashing
 - Open a .rar, .7z or .tar with another app instead of failing to extract it
 - Leave no duplicate in the trash when a file could not be removed
+
+### Behind the scenes
+
+- Add a changelog covering every release so far
 
 ## [0.4.3] - 2026-09-23
 
@@ -266,7 +280,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/techhonar/File-Manager/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/techhonar/File-Manager/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/techhonar/File-Manager/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/techhonar/File-Manager/compare/v0.4.0...v0.4.1
