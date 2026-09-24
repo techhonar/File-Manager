@@ -6,6 +6,14 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Edit text files from the viewer
+
+### Behind the scenes
+
+- Give 0.4.9 its place in the changelog
+
 ## [0.4.9] - 2026-09-24
 
 ### New features
