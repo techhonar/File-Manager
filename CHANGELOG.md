@@ -6,6 +6,17 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Add Update App, which downloads the latest release and opens the installer
+- Add colour themes, wallpaper colours, a dim dark style and custom colours
+- Offer 20 app logos to pick from under Theme
+- Make transitions smoother in every part of the app
+
+### Behind the scenes
+
+- Give 0.4.5 its place in the changelog
+
 ## [0.4.5] - 2026-09-24
 
 ### New features
