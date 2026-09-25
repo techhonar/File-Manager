@@ -1,5 +1,6 @@
 package com.filemanager.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,11 +31,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.BuildConfig
+import com.filemanager.app.data.update.GITHUB_REPOSITORY
 import com.filemanager.app.ui.components.OneUiGroup
+import com.filemanager.app.ui.components.OneUiRow
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.coreVersion
@@ -54,6 +61,8 @@ fun AboutScreen(
     // Reading it crosses into Rust, so do it once rather than on every
     // recomposition.
     val nativeVersion = remember { runCatching { coreVersion() }.getOrDefault("unavailable") }
+    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
 
     OneUiScreen(
         title = "About",
@@ -120,6 +129,29 @@ fun AboutScreen(
                 DetailRow("Build", BuildConfig.VERSION_CODE.toString())
                 DetailRow("Native core", nativeVersion)
                 DetailRow("Package", BuildConfig.APPLICATION_ID)
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            OneUiGroup {
+                OneUiRow(
+                    title = "Source code on GitHub",
+                    subtitle = "github.com/$GITHUB_REPOSITORY",
+                    icon = Icons.Outlined.Code,
+                    onClick = {
+                        runCatching { uriHandler.openUri("https://github.com/$GITHUB_REPOSITORY") }
+                            .onFailure {
+                                Toast.makeText(context, "No browser to open it in", Toast.LENGTH_LONG).show()
+                            }
+                    },
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
             }
 
             Spacer(Modifier.height(32.dp))
