@@ -6,6 +6,14 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+### New features
+
+- Link the source code on GitHub from About
+
+### Behind the scenes
+
+- Give 0.5.0 its place in the changelog
+
 ## [0.5.0] - 2026-09-24
 
 ### New features
