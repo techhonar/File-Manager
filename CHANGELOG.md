@@ -6,6 +6,8 @@ commit behind each line explains why the change was made.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-25
+
 ### New features
 
 - Link the source code on GitHub from About
@@ -13,6 +15,7 @@ commit behind each line explains why the change was made.
 ### Behind the scenes
 
 - Give 0.5.0 its place in the changelog
+- Add the GitHub link in About to the changelog
 
 ## [0.5.0] - 2026-09-24
 
@@ -364,7 +367,8 @@ commit behind each line explains why the change was made.
 
 - Initial commit
 
-[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/techhonar/File-Manager/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/techhonar/File-Manager/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/techhonar/File-Manager/compare/v0.4.10...v0.5.0
 [0.4.10]: https://github.com/techhonar/File-Manager/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/techhonar/File-Manager/compare/v0.4.8...v0.4.9
