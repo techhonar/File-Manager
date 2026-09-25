@@ -23,6 +23,9 @@ import java.io.IOException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
+/** The app's home on GitHub, as owner/name: its releases, and its source. */
+const val GITHUB_REPOSITORY = "techhonar/File-Manager"
+
 /**
  * Update App: find the newest release on GitHub, download its APK, and hand it
  * to Android's installer.
@@ -99,7 +102,7 @@ class AppUpdater(private val context: Context) {
 
     private fun latestRelease(): Release {
         val request = Request.Builder()
-            .url("https://api.github.com/repos/$REPOSITORY/releases/latest")
+            .url("https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest")
             .header("Accept", "application/vnd.github+json")
             .build()
         val body = client.newCall(request).execute().use { response ->
@@ -174,8 +177,6 @@ class AppUpdater(private val context: Context) {
     }
 
     private companion object {
-        /** Where the releases are published. */
-        const val REPOSITORY = "techhonar/File-Manager"
         const val APK_TYPE = "application/vnd.android.package-archive"
         const val PROGRESS_STEP = 256L * 1024
     }
