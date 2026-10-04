@@ -1,7 +1,8 @@
 package com.filemanager.app.ui.screens
 
 import androidx.compose.animation.Crossfade
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,21 +19,29 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -59,6 +68,10 @@ fun RemoteServersScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
+
+    // Asked before it goes: there is no trash for a saved server, and its
+    // password would have to be typed in again.
+    var confirmDelete by remember { mutableStateOf<RemoteServer?>(null) }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -91,7 +104,7 @@ fun RemoteServersScreen(
                 Pane.EMPTY -> Box(Modifier.padding(padding).fillMaxSize(), Alignment.Center) {
                     Text(
                         text = "No network storage yet.\n\nAdd an FTP, SFTP, SMB or " +
-                            "WebDAV server and it will appear here and on the home screen.",
+                            "WebDAV server and it will appear here.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -109,6 +122,7 @@ fun RemoteServersScreen(
                                 server = server,
                                 onClick = { onOpenServer(server) },
                                 onEdit = { viewModel.edit(server) },
+                                onDelete = { confirmDelete = server },
                             )
                         }
                     }
@@ -128,25 +142,57 @@ fun RemoteServersScreen(
             // Only an already-saved server can be deleted, and a new one is
             // the only one not in the list yet.
             onDelete = if (state.servers.any { it.id == draft.id }) {
-                { viewModel.delete(draft) }
+                { confirmDelete = draft }
             } else {
                 null
             },
             onDismiss = viewModel::cancelEdit,
         )
     }
+
+    confirmDelete?.let { server ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            shape = OneUi.CardShape,
+            title = { Text("Delete ${server.label}?") },
+            text = {
+                Text("The saved connection is removed. Nothing on the server itself is touched.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.delete(server)
+                        confirmDelete = null
+                    },
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
+/**
+ * One saved server. Tapping opens it; its menu - on the right, or from a long
+ * press - edits or deletes it. Delete used to be reachable only from inside the
+ * edit form, behind a pencil, where nobody looking for it thought to go.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RemoteServerRow(
     server: RemoteServer,
     onClick: () -> Unit,
     onEdit: () -> Unit,
+    onDelete: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = { menuOpen = true })
             .padding(horizontal = OneUi.ScreenPadding, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -172,8 +218,28 @@ private fun RemoteServerRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        IconButton(onClick = onEdit) {
-            Icon(Icons.Default.Edit, "Edit ${server.label}")
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Default.MoreVert, "More for ${server.label}")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = { Icon(Icons.Default.Edit, null) },
+                    onClick = {
+                        menuOpen = false
+                        onEdit()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    leadingIcon = { Icon(Icons.Default.Delete, null) },
+                    onClick = {
+                        menuOpen = false
+                        onDelete()
+                    },
+                )
+            }
         }
     }
 }

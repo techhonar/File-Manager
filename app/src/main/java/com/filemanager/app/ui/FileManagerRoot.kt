@@ -214,10 +214,6 @@ fun FileManagerRoot(
             .apply { mkdirs() }
     }
 
-    // Watched rather than read once: adding a server from the Network screen
-    // has to show up on the home screen behind it.
-    val remoteServers by app.remoteServers.servers.collectAsState()
-
     // The app's own: one per process, not per screen, since transfers outlive
     // screens and share its connections.
     val remoteRepository = app.remoteRepository
@@ -433,10 +429,6 @@ fun FileManagerRoot(
                         onTrashClick = { navController.navigate(Routes.TRASH) },
                     onFavoritesClick = { navController.navigate(Routes.FAVORITES) },
                         onManageStorageClick = { navController.navigate(Routes.STORAGE) },
-                        remoteServers = remoteServers,
-                        onRemoteServerClick = { server ->
-                            navController.navigate(Routes.remote(server.id))
-                        },
                         onManageNetworkClick = { navController.navigate(Routes.NETWORK) },
                         onFtpServerClick = { navController.navigate(Routes.FTP_SERVER) },
                         modifier = Modifier.padding(padding),
