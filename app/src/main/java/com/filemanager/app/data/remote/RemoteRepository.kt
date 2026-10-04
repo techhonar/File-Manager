@@ -35,7 +35,11 @@ class RemoteRepository(
      * folders on the same server can hold different files called report.pdf,
      * and a cache keyed on the name alone would hand back the wrong one.
      */
-    suspend fun cacheForOpening(server: RemoteServer, entry: RemoteEntry): File =
+    suspend fun cacheForOpening(
+        server: RemoteServer,
+        entry: RemoteEntry,
+        progress: (Long) -> Unit = {},
+    ): File =
         withContext(io) {
             val folder = File(cacheDir, "remote/${server.id}").apply { mkdirs() }
             val target = File(folder, "${entry.path.hashCode().toUInt()}-${entry.name}")
@@ -46,15 +50,24 @@ class RemoteRepository(
             if (target.isFile && target.length() == entry.size && entry.size > 0) {
                 return@withContext target
             }
-            connections.use(server) { it.download(entry.path, target) }
+            connections.use(server) { it.download(entry.path, target, progress) }
             target
         }
 
-    suspend fun download(server: RemoteServer, entry: RemoteEntry, to: File): Unit =
-        withContext(io) { connections.use(server) { it.download(entry.path, to) } }
+    /** [progress] hears the bytes copied so far; see RemoteClient.download. */
+    suspend fun download(
+        server: RemoteServer,
+        entry: RemoteEntry,
+        to: File,
+        progress: (Long) -> Unit = {},
+    ): Unit = withContext(io) { connections.use(server) { it.download(entry.path, to, progress) } }
 
-    suspend fun upload(server: RemoteServer, from: File, toPath: String): Unit =
-        withContext(io) { connections.use(server) { it.upload(from, toPath) } }
+    suspend fun upload(
+        server: RemoteServer,
+        from: File,
+        toPath: String,
+        progress: (Long) -> Unit = {},
+    ): Unit = withContext(io) { connections.use(server) { it.upload(from, toPath, progress) } }
 
     suspend fun delete(server: RemoteServer, entry: RemoteEntry): Unit =
         withContext(io) { connections.use(server) { it.delete(entry.path, entry.isDir) } }

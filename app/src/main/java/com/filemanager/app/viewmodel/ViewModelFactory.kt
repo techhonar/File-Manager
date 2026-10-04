@@ -14,6 +14,7 @@ import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.data.remote.RemoteServer
 import com.filemanager.app.data.remote.RemoteServers
+import com.filemanager.app.data.transfer.TransferCenter
 import uniffi.filemanager_core.SearchSession
 
 /**
@@ -42,6 +43,8 @@ class ViewModelFactory(
     private val remoteRepository: RemoteRepository? = null,
     /** Which server the remote browser should open. */
     private val remoteServer: RemoteServer? = null,
+    /** Where the remote browser's downloads and uploads run. */
+    private val transfers: TransferCenter? = null,
     private val ftpSettings: FtpServerSettings? = null,
     private val ftpController: FtpServerController? = null,
     /** See FtpServerViewModel: the service is started with an Intent, and a
@@ -101,7 +104,7 @@ class ViewModelFactory(
                 server = requireNotNull(remoteServer) { "remoteServer not supplied" },
                 repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
                 clipboard = clipboard,
-                localFiles = repository,
+                transfers = requireNotNull(transfers) { "transfers not supplied" },
             ) as T
 
         modelClass.isAssignableFrom(FtpServerViewModel::class.java) ->

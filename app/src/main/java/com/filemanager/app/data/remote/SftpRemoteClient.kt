@@ -1,9 +1,11 @@
 package com.filemanager.app.data.remote
 
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.common.StreamCopier
 import net.schmizz.sshj.sftp.FileMode
 import net.schmizz.sshj.sftp.SFTPClient
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
+import net.schmizz.sshj.xfer.TransferListener
 import java.io.File
 
 /**
@@ -57,12 +59,26 @@ internal class SftpRemoteClient(server: RemoteServer) : RemoteClient {
             }
     }
 
-    override fun download(path: String, to: File) = wrap("download this file") {
+    override fun download(path: String, to: File, progress: (Long) -> Unit) = wrap("download this file") {
+        reportTo(progress)
         sftp.get(RemotePaths.normalise(path), to.absolutePath)
     }
 
-    override fun upload(from: File, path: String) = wrap("upload this file") {
+    override fun upload(from: File, path: String, progress: (Long) -> Unit) = wrap("upload this file") {
+        reportTo(progress)
         sftp.put(from.absolutePath, RemotePaths.normalise(path))
+    }
+
+    /**
+     * sshj copies the bytes itself, so progress comes from its own listener
+     * rather than a wrapped stream. Set per transfer: a connection is only
+     * ever used by one operation at a time - see RemoteConnections.
+     */
+    private fun reportTo(progress: (Long) -> Unit) {
+        sftp.fileTransfer.transferListener = object : TransferListener {
+            override fun directory(name: String): TransferListener = this
+            override fun file(name: String, size: Long) = StreamCopier.Listener { progress(it) }
+        }
     }
 
     override fun delete(path: String, isDir: Boolean) = wrap("delete this") {

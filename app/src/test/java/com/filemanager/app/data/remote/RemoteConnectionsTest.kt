@@ -118,6 +118,21 @@ class RemoteConnectionsTest {
     }
 
     @Test
+    fun `a connection whose operation failed is not handed to the next`() {
+        // A transfer stopped partway can leave an FTP connection a reply out of
+        // step with its commands; the next operation must not inherit that.
+        File(root, "notes.txt").writeText("hello")
+        val server = server()
+        var opened = 0
+        val connections = RemoteConnections { s -> FtpRemoteClient(s).also { opened++ } }
+
+        runCatching { connections.use(server) { throw RemoteException("stopped partway") } }
+        connections.use(server) { it.list("/") }
+
+        assertEquals(2, opened)
+    }
+
+    @Test
     fun `a finished operation leaves its connection for the next one`() {
         File(root, "notes.txt").writeText("hello")
         val server = server()

@@ -44,11 +44,19 @@ class RemoteConnections(
      */
     fun <T> use(server: RemoteServer, body: (RemoteClient) -> T): T {
         val (client, generation) = lease(server)
-        try {
-            return body(client)
-        } finally {
-            giveBack(server.id, client, generation)
+        val result = try {
+            body(client)
+        } catch (e: Throwable) {
+            // Not handed on to the next operation. A transfer stopped partway -
+            // cancelled, or the network gone - can leave an FTP connection a
+            // reply out of step, so the next command reads the last one's
+            // answer as its own. A refusal that left it sound costs only a
+            // reconnect.
+            runCatching { client.close() }
+            throw e
         }
+        giveBack(server.id, client, generation)
+        return result
     }
 
     private fun lease(server: RemoteServer): Pair<RemoteClient, Int> {

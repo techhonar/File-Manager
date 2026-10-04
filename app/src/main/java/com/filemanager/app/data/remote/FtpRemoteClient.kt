@@ -1,5 +1,7 @@
 package com.filemanager.app.data.remote
 
+import com.filemanager.app.data.transfer.ProgressInputStream
+import com.filemanager.app.data.transfer.ProgressOutputStream
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPReply
@@ -71,16 +73,16 @@ internal class FtpRemoteClient(server: RemoteServer) : RemoteClient {
             }
     }
 
-    override fun download(path: String, to: File) = wrap("download this file") {
-        to.outputStream().use { out ->
+    override fun download(path: String, to: File, progress: (Long) -> Unit) = wrap("download this file") {
+        ProgressOutputStream(to.outputStream(), progress).use { out ->
             if (!client.retrieveFile(RemotePaths.normalise(path), out)) {
                 throw RemoteException("The server would not send the file (${client.replyString.trim()})")
             }
         }
     }
 
-    override fun upload(from: File, path: String) = wrap("upload this file") {
-        from.inputStream().use { input ->
+    override fun upload(from: File, path: String, progress: (Long) -> Unit) = wrap("upload this file") {
+        ProgressInputStream(from.inputStream(), progress).use { input ->
             if (!client.storeFile(RemotePaths.normalise(path), input)) {
                 throw RemoteException("The server would not accept the file (${client.replyString.trim()})")
             }

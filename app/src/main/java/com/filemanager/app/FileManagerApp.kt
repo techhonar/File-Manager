@@ -17,6 +17,10 @@ import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.install.BundleInstaller
 import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.data.remote.RemoteConnections
+import com.filemanager.app.data.remote.RemoteRepository
+import com.filemanager.app.data.transfer.Transfer
+import com.filemanager.app.data.transfer.TransferCenter
+import com.filemanager.app.data.transfer.TransferService
 import com.filemanager.app.data.remote.RemoteServers
 import uniffi.filemanager_core.SearchSession
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +81,27 @@ class FileManagerApp : Application(), ImageLoaderFactory {
      * only lifecycle a socket pool can sensibly follow here.
      */
     val remoteConnections: RemoteConnections by lazy { RemoteConnections() }
+
+    /** Everything that talks to network storage goes through this one. */
+    val remoteRepository: RemoteRepository by lazy { RemoteRepository(remoteConnections, cacheDir) }
+
+    /**
+     * Downloads from and uploads to network storage. Process-wide, so a
+     * transfer outlives the screen it was started from, with a foreground
+     * service and a notification to keep it going and show how far it is.
+     */
+    val transfers: TransferCenter by lazy {
+        TransferCenter(
+            repository = remoteRepository,
+            clipboard = clipboard,
+            trash = { paths -> repository.moveToTrash(paths).size },
+            host = object : TransferCenter.Host {
+                override fun started() = TransferService.start(this@FileManagerApp)
+                override fun finished(transfer: Transfer) =
+                    TransferService.finished(this@FileManagerApp, transfer)
+            },
+        )
+    }
 
     /**
      * The built-in FTP server and its settings.

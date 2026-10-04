@@ -105,6 +105,28 @@ class FtpRoundTripTest {
     }
 
     @Test
+    fun `transfers say how far they have got`() {
+        val data = ByteArray(200_000) { it.toByte() }
+        File(root, "big.bin").writeBytes(data)
+        val port = start()
+
+        client(port).use { ftp ->
+            val got = File(root.parentFile, "got-${System.nanoTime()}.bin")
+            val down = mutableListOf<Long>()
+            ftp.download("/big.bin", got) { down += it }
+            assertEquals(200_000L, down.last())
+            assertTrue("never counts backwards", down.zipWithNext().all { (a, b) -> b >= a })
+            got.delete()
+
+            val send = File(root.parentFile, "send-${System.nanoTime()}.bin").apply { writeBytes(data) }
+            val up = mutableListOf<Long>()
+            ftp.upload(send, "/up.bin") { up += it }
+            assertEquals(200_000L, up.last())
+            send.delete()
+        }
+    }
+
+    @Test
     fun `creates renames and deletes`() {
         client(start()).use { ftp ->
             ftp.makeDirectory("/made")

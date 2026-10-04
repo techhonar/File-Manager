@@ -1,6 +1,11 @@
 package com.filemanager.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -51,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +99,23 @@ fun RemoteBrowserScreen(
     val snackbarState = remember { SnackbarHostState() }
     var renameTarget by remember { mutableStateOf<RemoteEntry?>(null) }
     var showNewFolder by remember { mutableStateOf(false) }
+
+    // A transfer's progress is shown in a notification, which from Android 13
+    // needs the user's agreement. Asked for when a transfer starts, which is
+    // when it means something; declined, the transfer runs all the same.
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Granted or not, the transfer goes ahead. */ }
+    val transferring: (() -> Unit) -> Unit = { start ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        start()
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -143,7 +166,7 @@ fun RemoteBrowserScreen(
                 }
             } else {
                 if (clipboard != null) {
-                    IconButton(onClick = viewModel::pasteFromClipboard) {
+                    IconButton(onClick = { transferring(viewModel::pasteFromClipboard) }) {
                         Icon(Icons.Default.Upload, "Upload copied files")
                     }
                 }
@@ -173,7 +196,9 @@ fun RemoteBrowserScreen(
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
                             TextButton(
-                                onClick = { viewModel.downloadSelection(downloadDirectory) },
+                                onClick = {
+                                    transferring { viewModel.downloadSelection(downloadDirectory) }
+                                },
                             ) {
                                 Icon(Icons.Default.Download, null)
                                 Spacer(Modifier.width(8.dp))
@@ -209,13 +234,32 @@ fun RemoteBrowserScreen(
             // broken.
             state.busy?.let { busy ->
                 Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = busy,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = OneUi.ScreenPadding),
-                    )
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Row(
+                        modifier = Modifier.padding(start = OneUi.ScreenPadding),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = busy,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // A transfer can be stopped here as well as from its
+                        // notification; anything else on this line is quick.
+                        if (state.transferId != null) {
+                            TextButton(onClick = viewModel::cancelTransfer) { Text("Cancel") }
+                        }
+                    }
+                    // Filling as it goes when the size is known, rather than a
+                    // bar that only says something is happening.
+                    val progress = state.progress
+                    if (progress != null) {
+                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
                 }
             }
 

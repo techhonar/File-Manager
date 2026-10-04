@@ -102,6 +102,28 @@ class WebDavClientTest {
     }
 
     @Test
+    fun `transfers say how far they have got`() {
+        val data = ByteArray(200_000) { it.toByte() }
+        File(root, "big.bin").writeBytes(data)
+
+        client().use { dav ->
+            val got = File(root.parentFile, "dav-big-${System.nanoTime()}.bin")
+            val down = mutableListOf<Long>()
+            dav.download("/big.bin", got) { down += it }
+            assertEquals(200_000L, down.last())
+            assertTrue(down.zipWithNext().all { (a, b) -> b >= a })
+            got.delete()
+
+            val send = File(root.parentFile, "dav-up-${System.nanoTime()}.bin").apply { writeBytes(data) }
+            val up = mutableListOf<Long>()
+            dav.upload(send, "/up.bin") { up += it }
+            assertEquals(200_000L, up.last())
+            assertEquals(200_000L, File(root, "up.bin").length())
+            send.delete()
+        }
+    }
+
+    @Test
     fun `names needing encoding survive both ways`() {
         client().use { dav ->
             val send = File(root.parentFile, "s-${System.nanoTime()}.txt")

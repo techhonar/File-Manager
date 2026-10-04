@@ -11,9 +11,17 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
+import android.text.format.Formatter
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.MainActivity
 import com.filemanager.app.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -30,11 +38,17 @@ class FtpService : Service() {
     private val controller: FtpServerController
         get() = (application as FileManagerApp).ftpServer
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** Redraws the notification as transfers come and go; see [watch]. */
+    private var watching: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                watching?.cancel()
                 controller.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -60,6 +74,7 @@ class FtpService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                watch(config)
             }
         }
         // Not sticky: a restart by the system would bring the server back up
@@ -68,13 +83,46 @@ class FtpService : Service() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         controller.stop()
         super.onDestroy()
     }
 
+    /**
+     * Keep the notification saying what is being sent and received.
+     *
+     * Computers send to this server without the phone showing anything, so the
+     * notification is the only place to see that a file is arriving, or how
+     * far it has got. Redrawn at most twice a second: transfers report on
+     * every buffer, and Android drops updates that come faster than it allows.
+     */
+    private fun watch(config: FtpServerConfig) {
+        watching?.cancel()
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        watching = scope.launch {
+            controller.activity.transfers.collect { transfers ->
+                manager.notify(NOTIFICATION_ID, notification(config, transfers))
+                delay(REDRAW_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun startForeground(config: FtpServerConfig) {
         createChannel()
+        val notification = notification(config, emptyList())
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun notification(config: FtpServerConfig, transfers: List<ServerTransfer>): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -88,31 +136,46 @@ class FtpService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val address = NetworkAddress.localIpv4()
-        val notification = Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Sharing ${sharedLabel(config)} over FTP")
-            .setContentText(
-                if (address != null) {
-                    "ftp://$address:${config.port}"
-                } else {
-                    "Not connected to a network"
-                },
-            )
-            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
             .setOngoing(true)
-            .build()
+            // Redrawn for progress; only its first appearance should be noticed.
+            .setOnlyAlertOnce(true)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
+        if (transfers.isEmpty()) {
+            val address = NetworkAddress.localIpv4()
+            builder
+                .setContentText(
+                    if (address != null) {
+                        "ftp://$address:${config.port}"
+                    } else {
+                        "Not connected to a network"
+                    },
+                )
+                .setSmallIcon(R.mipmap.ic_launcher)
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            val size = { bytes: Long -> Formatter.formatShortFileSize(this, bytes) }
+            builder
+                .setContentText(describeServerTransfers(transfers, size))
+                // The system's own moving arrows, so the status bar says a
+                // transfer is under way without the shade being opened.
+                .setSmallIcon(
+                    if (transfers.any { it.receiving }) {
+                        android.R.drawable.stat_sys_download
+                    } else {
+                        android.R.drawable.stat_sys_upload
+                    },
+                )
+            val fraction = serverTransferFraction(transfers)
+            if (fraction != null) {
+                builder.setProgress(PROGRESS_MAX, (fraction * PROGRESS_MAX).toInt(), false)
+            } else {
+                builder.setProgress(0, 0, true)
+            }
         }
+        return builder.build()
     }
 
     /**
@@ -147,6 +210,8 @@ class FtpService : Service() {
         private const val CHANNEL_ID = "ftp_server"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.filemanager.app.STOP_FTP"
+        private const val REDRAW_INTERVAL_MS = 500L
+        private const val PROGRESS_MAX = 1000
 
         fun start(context: Context) {
             val intent = Intent(context, FtpService::class.java)
