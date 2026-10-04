@@ -37,11 +37,16 @@ interface RemoteClient : Closeable {
     /** Directory contents. Not recursive, and never includes "." or "..". */
     fun list(path: String): List<RemoteEntry>
 
-    /** Copy a remote file to [to], which is created or overwritten. */
-    fun download(path: String, to: File)
+    /**
+     * Copy a remote file to [to], which is created or overwritten.
+     *
+     * [progress] hears how many bytes have been copied so far, as they go;
+     * throwing from it stops the copy. See ProgressStreams.
+     */
+    fun download(path: String, to: File, progress: (Long) -> Unit = {})
 
-    /** Copy a local file to [path], overwriting whatever is there. */
-    fun upload(from: File, path: String)
+    /** Copy a local file to [path], overwriting whatever is there. As above. */
+    fun upload(from: File, path: String, progress: (Long) -> Unit = {})
 
     /** Remove one entry. [isDir] because most protocols have separate calls. */
     fun delete(path: String, isDir: Boolean)

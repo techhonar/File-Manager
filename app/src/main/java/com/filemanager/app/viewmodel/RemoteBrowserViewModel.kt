@@ -3,20 +3,24 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileClipboard
-import com.filemanager.app.data.FileRepository
-import com.filemanager.app.data.freeName
-import com.filemanager.app.data.freeRemoteName
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.data.remote.RemoteServer
+import com.filemanager.app.data.transfer.Direction
+import com.filemanager.app.data.transfer.Pacer
+import com.filemanager.app.data.transfer.Transfer
+import com.filemanager.app.data.transfer.TransferCenter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import uniffi.filemanager_core.formatSize
 import java.io.File
 
 data class RemoteBrowserState(
@@ -31,6 +35,12 @@ data class RemoteBrowserState(
     val selectionActive: Boolean = false,
     /** What long-running job is in flight, for the progress line. */
     val busy: String? = null,
+    /** How far that job has got, when that is known; the line runs without
+     *  an end otherwise. */
+    val progress: Float? = null,
+    /** The transfer the line is about, which can be stopped from it. Null for
+     *  anything else. */
+    val transferId: Int? = null,
     val message: String? = null,
     /** Set by the view model, which normalises what the form stored. */
     val basePath: String = "/",
@@ -60,8 +70,8 @@ class RemoteBrowserViewModel(
     server: RemoteServer,
     private val repository: RemoteRepository,
     private val clipboard: FileClipboard,
-    /** Only to finish a move: the originals are local files. */
-    private val localFiles: FileRepository,
+    /** Where downloads and uploads run: they outlive this screen. */
+    private val transfers: TransferCenter,
 ) : ViewModel() {
 
     // Normalised once. The folder is typed into a form, so it arrives with a
@@ -90,6 +100,11 @@ class RemoteBrowserViewModel(
 
     init {
         load(basePath)
+        // A transfer started here carries on when the screen is left; coming
+        // back to the server, it is shown again.
+        transfers.active.value
+            .filter { it.serverId == server.id }
+            .forEach { running -> transfers.follow(running.id)?.let(::follow) }
     }
 
     /**
@@ -146,15 +161,24 @@ class RemoteBrowserViewModel(
             return
         }
         viewModelScope.launch {
-            _state.update { it.copy(busy = "Opening ${entry.name}…") }
-            runCatching { repository.cacheForOpening(_state.value.server, entry) }
+            _state.update { it.copy(busy = "Opening ${entry.name}…", progress = null) }
+            // Opening fetches the whole file first, which for a video is a
+            // download in all but name; the line says how far it has got.
+            val pacer = Pacer(PROGRESS_INTERVAL_MS)
+            runCatching {
+                repository.cacheForOpening(_state.value.server, entry) { bytes ->
+                    if (entry.size > 0 && pacer.due()) {
+                        _state.update { it.copy(progress = (bytes.toFloat() / entry.size).coerceIn(0f, 1f)) }
+                    }
+                }
+            }
                 .onSuccess { file ->
-                    _state.update { it.copy(busy = null) }
+                    _state.update { it.copy(busy = null, progress = null) }
                     _openRequest.value = file
                 }
                 .onFailure { failure ->
                     _state.update {
-                        it.copy(busy = null, message = failure.message ?: "Could not open it")
+                        it.copy(busy = null, progress = null, message = failure.message ?: "Could not open it")
                     }
                 }
         }
@@ -184,54 +208,21 @@ class RemoteBrowserViewModel(
 
     // --- File operations ----------------------------------------------------
 
-    /** Copy the selection into a local folder. */
+    /**
+     * Copy the selection into a local folder.
+     *
+     * Through the app's transfers rather than here, so it goes on - with its
+     * progress in a notification - when the user leaves the screen. See
+     * TransferCenter for what it does with names already taken.
+     */
     fun downloadSelection(into: File) {
         val entries = _state.value.selectedEntries.filterNot { it.isDir }
         if (entries.isEmpty()) {
             _state.update { it.copy(message = "Select files to download") }
             return
         }
-
-        viewModelScope.launch {
-            var done = 0
-            var failed = 0
-            for (entry in entries) {
-                _state.update {
-                    it.copy(busy = "Downloading ${done + 1} of ${entries.size}…")
-                }
-                // Never the name of a file already there. Downloading straight
-                // to Downloads/<name> replaced any file of the user's with that
-                // name - and on failure the cleanup below then deleted it, so a
-                // server that was merely unreachable destroyed a local file the
-                // download had never touched.
-                val target = freeName(
-                    into,
-                    File(entry.name).nameWithoutExtension,
-                    File(entry.name).extension,
-                )
-                runCatching { repository.download(_state.value.server, entry, target) }
-                    .onSuccess { done++ }
-                    .onFailure {
-                        failed++
-                        // A half-written file is worse than none: it looks like
-                        // a download that worked. Safe to remove now that the
-                        // name was free before this began - it is ours.
-                        runCatching { target.delete() }
-                    }
-            }
-            _state.update {
-                it.copy(
-                    busy = null,
-                    selected = emptySet(),
-                    selectionActive = false,
-                    message = if (failed == 0) {
-                        "Downloaded $done to ${into.name}"
-                    } else {
-                        "Downloaded $done, $failed failed"
-                    },
-                )
-            }
-        }
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
+        follow(transfers.download(_state.value.server, entries, into))
     }
 
     /**
@@ -239,8 +230,7 @@ class RemoteBrowserViewModel(
      *
      * A cut that only uploaded was the surprise here: the files appeared on the
      * server and stayed on the phone, and nothing said so. The originals now go
-     * once their upload has been confirmed - and only those, so a transfer that
-     * failed half way leaves the rest where they are.
+     * once their upload has been confirmed - see TransferCenter.upload.
      *
      * Folders are skipped either way. There is no recursive upload here, and
      * quietly flattening one would be worse than saying it was left.
@@ -252,61 +242,66 @@ class RemoteBrowserViewModel(
             _state.update { it.copy(message = "Nothing copied") }
             return
         }
+        val files = paths.map(::File).filter { it.isFile }
+        if (files.isEmpty()) {
+            _state.update { it.copy(message = "Folders cannot be uploaded, only files") }
+            return
+        }
+        val current = _state.value
+        follow(
+            transfers.upload(
+                server = current.server,
+                files = files,
+                folder = current.path,
+                taken = current.entries.mapTo(HashSet()) { it.name },
+                move = pending?.isMove == true,
+                skipped = paths.size - files.size,
+            ),
+        )
+    }
 
+    /** Stop the transfer on the progress line. */
+    fun cancelTransfer() {
+        _state.value.transferId?.let(transfers::cancel)
+    }
+
+    /**
+     * Show [transfer] on the progress line until it is over, then say how it
+     * went - and, after an upload, list the folder again to show the files.
+     */
+    private fun follow(transfer: StateFlow<Transfer>) {
         viewModelScope.launch {
-            val files = paths.map(::File).filter { it.isFile }
-            val skipped = paths.size - files.size
-            val uploaded = mutableListOf<String>()
-            var failed = 0
-
-            // Once for the whole paste, and grown as each name is used, so two
-            // files with the same name - from different folders - do not both
-            // take it and land on top of each other.
-            val taken = _state.value.entries.mapTo(HashSet()) { it.name }
-            for (file in files) {
-                _state.update {
-                    it.copy(busy = "Uploading ${uploaded.size + failed + 1} of ${files.size}…")
+            val last = transfer
+                .onEach { t ->
+                    _state.update {
+                        it.copy(busy = progressLine(t), progress = t.fraction, transferId = t.id)
+                    }
                 }
-                // Not over a file already on the server. Uploads replaced
-                // anything with the same name without asking; the folder's
-                // listing is already in hand, so a clash costs nothing to see.
-                val name = freeRemoteName(taken, file.nameWithoutExtension, file.extension)
-                taken += name
-                val target = RemotePaths.join(_state.value.path, name)
-                runCatching { repository.upload(_state.value.server, file, target) }
-                    .onSuccess { uploaded += file.absolutePath }
-                    .onFailure { failed++ }
-            }
-
-            var moved = 0
-            if (pending?.isMove == true && uploaded.isNotEmpty()) {
-                _state.update { it.copy(busy = "Removing the originals…") }
-                // To the trash rather than deleted outright, which is what a
-                // move does everywhere else in the app and leaves a way back.
-                moved = runCatching { localFiles.moveToTrash(uploaded).size }.getOrDefault(0)
-            }
-
-            // Only once it has all been dealt with: leaving it would invite a
-            // second paste that moves nothing, having already moved it.
-            if (failed == 0) clipboard.clear()
-
+                .first { it.outcome != null }
             _state.update {
-                it.copy(
-                    busy = null,
-                    message = buildString {
-                        append(if (pending?.isMove == true) "Moved " else "Uploaded ")
-                        append(uploaded.size)
-                        if (pending?.isMove == true && moved < uploaded.size) {
-                            append(" (originals kept)")
-                        }
-                        if (failed > 0) append(", $failed failed")
-                        if (skipped > 0) append(", $skipped folders skipped")
-                    },
-                )
+                it.copy(busy = null, progress = null, transferId = null, message = last.outcome?.summary)
             }
-            refresh()
+            if (last.direction == Direction.UPLOAD) refresh()
         }
     }
+
+    /** "Downloading 2 of 5 · 12 MB of 450 MB", or the file's name for one. */
+    private fun progressLine(transfer: Transfer): String {
+        val verb = if (transfer.direction == Direction.DOWNLOAD) "Downloading" else "Uploading"
+        val which = if (transfer.fileCount == 1) {
+            transfer.current ?: "1 file"
+        } else {
+            "${(transfer.filesDone + 1).coerceAtMost(transfer.fileCount)} of ${transfer.fileCount}"
+        }
+        val amount = if (transfer.bytesTotal > 0) {
+            "${size(transfer.bytesDone)} of ${size(transfer.bytesTotal)}"
+        } else {
+            size(transfer.bytesDone)
+        }
+        return "$verb $which · $amount"
+    }
+
+    private fun size(bytes: Long): String = formatSize(bytes.coerceAtLeast(0).toULong())
 
     fun deleteSelection() {
         val entries = _state.value.selectedEntries
@@ -363,4 +358,8 @@ class RemoteBrowserViewModel(
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
+
+    private companion object {
+        const val PROGRESS_INTERVAL_MS = 250L
+    }
 }

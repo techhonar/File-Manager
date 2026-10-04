@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Wifi
-import com.filemanager.app.data.remote.RemoteServer
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SdCard
@@ -73,9 +72,7 @@ fun HomeScreen(
     onTrashClick: () -> Unit,
     onFavoritesClick: () -> Unit,
     onManageStorageClick: () -> Unit,
-    /** The saved network locations, shown between Storage and Utilities. */
-    remoteServers: List<RemoteServer>,
-    onRemoteServerClick: (RemoteServer) -> Unit,
+    /** Network storage and the FTP server, between Storage and Utilities. */
     onManageNetworkClick: () -> Unit,
     onFtpServerClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -161,21 +158,12 @@ fun HomeScreen(
 
         item { SectionHeading("Network") }
         item {
-            // Each saved server first, then the two ways in. A server is what
-            // someone came here for; managing the list is the rarer thing.
-            remoteServers.forEach { server ->
-                HomeRow(
-                    icon = server.type.icon(),
-                    title = server.label,
-                    subtitle = server.summary,
-                    onClick = { onRemoteServerClick(server) },
-                )
-                InsetDivider()
-            }
+            // The ways in, not the servers themselves: those are listed in
+            // Network storage, one tap away, rather than repeated here.
             HomeRow(
                 icon = Icons.Outlined.Storage,
-                title = if (remoteServers.isEmpty()) "Add network storage" else "Manage network storage",
-                subtitle = if (remoteServers.isEmpty()) "FTP, SFTP, SMB or WebDAV" else null,
+                title = "Network storage",
+                subtitle = "FTP, SFTP, SMB or WebDAV",
                 onClick = onManageNetworkClick,
             )
             InsetDivider()

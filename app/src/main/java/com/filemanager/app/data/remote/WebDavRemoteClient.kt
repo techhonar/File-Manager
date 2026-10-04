@@ -1,13 +1,17 @@
 package com.filemanager.app.data.remote
 
+import com.filemanager.app.data.transfer.ProgressInputStream
+import com.filemanager.app.data.transfer.ProgressOutputStream
 import okhttp3.Credentials
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
+import okio.source
 import org.w3c.dom.Element
 import java.io.File
 import java.text.SimpleDateFormat
@@ -100,16 +104,27 @@ internal class WebDavRemoteClient(private val server: RemoteServer) : RemoteClie
         )
     }
 
-    override fun download(path: String, to: File) {
+    override fun download(path: String, to: File, progress: (Long) -> Unit) {
         call(build(path) { get() }, "download this file") { response ->
             val stream = response.body?.byteStream()
                 ?: throw RemoteException("The server sent no content")
-            stream.use { input -> to.outputStream().use { output -> input.copyTo(output) } }
+            stream.use { input ->
+                ProgressOutputStream(to.outputStream(), progress).use { output -> input.copyTo(output) }
+            }
         }
     }
 
-    override fun upload(from: File, path: String) {
-        val body = from.asRequestBody("application/octet-stream".toMediaType())
+    override fun upload(from: File, path: String, progress: (Long) -> Unit) {
+        // The file's own body, read through a counter. OkHttp writes it again
+        // when a server asks for credentials first, which starts the count
+        // over - accurate for each attempt, which is what is on the wire.
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength() = from.length()
+            override fun writeTo(sink: BufferedSink) {
+                ProgressInputStream(from.inputStream(), progress).source().use { sink.writeAll(it) }
+            }
+        }
         call(build(path) { put(body) }, "upload this file") { }
     }
 

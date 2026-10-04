@@ -31,6 +31,9 @@ class FtpServerController {
     private val _running = MutableStateFlow<FtpServerConfig?>(null)
     val running: StateFlow<FtpServerConfig?> = _running.asStateFlow()
 
+    /** What the server is sending and receiving right now, for its notification. */
+    val activity = ServerActivity()
+
     val isRunning: Boolean
         @Synchronized get() = server?.isStopped == false
 
@@ -86,7 +89,7 @@ class FtpServerController {
             // whole of shared storage is reachable; createHome is off because
             // the root is somewhere that already exists and silently creating
             // a directory for a mistyped path would hide the mistake.
-            fileSystem = NativeFileSystemFactory().apply { isCreateHome = false }
+            fileSystem = activity.watch(NativeFileSystemFactory().apply { isCreateHome = false })
             connectionConfig = ConnectionConfigFactory().apply {
                 isAnonymousLoginEnabled = config.anonymous
                 maxLogins = MAX_LOGINS

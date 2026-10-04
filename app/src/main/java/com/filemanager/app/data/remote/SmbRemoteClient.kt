@@ -1,5 +1,7 @@
 package com.filemanager.app.data.remote
 
+import com.filemanager.app.data.transfer.ProgressInputStream
+import com.filemanager.app.data.transfer.ProgressOutputStream
 import com.hierynomus.msdtyp.AccessMask
 import com.hierynomus.msfscc.FileAttributes
 import com.hierynomus.mssmb2.SMB2CreateDisposition
@@ -104,7 +106,7 @@ internal class SmbRemoteClient(server: RemoteServer) : RemoteClient {
             }
     }
 
-    override fun download(path: String, to: File): Unit = wrap("download this file") {
+    override fun download(path: String, to: File, progress: (Long) -> Unit): Unit = wrap("download this file") {
         share.openFile(
             RemotePaths.toSmb(path),
             EnumSet.of(AccessMask.GENERIC_READ),
@@ -114,12 +116,12 @@ internal class SmbRemoteClient(server: RemoteServer) : RemoteClient {
             null,
         ).use { remote ->
             remote.inputStream.use { input ->
-                to.outputStream().use { output -> input.copyTo(output) }
+                ProgressOutputStream(to.outputStream(), progress).use { output -> input.copyTo(output) }
             }
         }
     }
 
-    override fun upload(from: File, path: String): Unit = wrap("upload this file") {
+    override fun upload(from: File, path: String, progress: (Long) -> Unit): Unit = wrap("upload this file") {
         share.openFile(
             RemotePaths.toSmb(path),
             EnumSet.of(AccessMask.GENERIC_WRITE),
@@ -131,7 +133,7 @@ internal class SmbRemoteClient(server: RemoteServer) : RemoteClient {
             null,
         ).use { remote ->
             remote.outputStream.use { output ->
-                from.inputStream().use { input -> input.copyTo(output) }
+                ProgressInputStream(from.inputStream(), progress).use { input -> input.copyTo(output) }
             }
         }
     }

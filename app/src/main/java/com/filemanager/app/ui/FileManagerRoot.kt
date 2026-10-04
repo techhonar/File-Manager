@@ -71,7 +71,6 @@ import com.filemanager.app.data.external.mimeTypeOf
 import com.filemanager.app.data.install.isBundle
 import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.data.update.AppUpdater
-import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.ui.screens.FtpServerScreen
 import com.filemanager.app.ui.screens.RemoteBrowserScreen
 import com.filemanager.app.ui.screens.RemoteServersScreen
@@ -215,15 +214,9 @@ fun FileManagerRoot(
             .apply { mkdirs() }
     }
 
-    // Watched rather than read once: adding a server from the Network screen
-    // has to show up on the home screen behind it.
-    val remoteServers by app.remoteServers.servers.collectAsState()
-
-    // One per process, not per screen: it holds the connection pool, and a
-    // second instance would open its own sockets to the same servers.
-    val remoteRepository = remember(context) {
-        RemoteRepository(app.remoteConnections, context.cacheDir)
-    }
+    // The app's own: one per process, not per screen, since transfers outlive
+    // screens and share its connections.
+    val remoteRepository = app.remoteRepository
 
     val factory = remember(volumes, ownerAppOf, hasRemovableSlot, remoteRepository) {
         ViewModelFactory(
@@ -436,10 +429,6 @@ fun FileManagerRoot(
                         onTrashClick = { navController.navigate(Routes.TRASH) },
                     onFavoritesClick = { navController.navigate(Routes.FAVORITES) },
                         onManageStorageClick = { navController.navigate(Routes.STORAGE) },
-                        remoteServers = remoteServers,
-                        onRemoteServerClick = { server ->
-                            navController.navigate(Routes.remote(server.id))
-                        },
                         onManageNetworkClick = { navController.navigate(Routes.NETWORK) },
                         onFtpServerClick = { navController.navigate(Routes.FTP_SERVER) },
                         modifier = Modifier.padding(padding),
@@ -593,6 +582,7 @@ fun FileManagerRoot(
                             primaryPath = primaryPath,
                             remoteRepository = remoteRepository,
                             remoteServer = server,
+                            transfers = app.transfers,
                         ),
                     )
                     RemoteBrowserScreen(
