@@ -367,8 +367,10 @@ class FileRepository(
 
     // --- Archives ------------------------------------------------------------
 
-    suspend fun listArchive(path: String): List<ArchiveEntry> =
-        withContext(io) { archiveList(path) }
+    /** What the archive holds. [password] is needed only for a 7z or RAR
+     *  whose names are encrypted too. */
+    suspend fun listArchive(path: String, password: String? = null): List<ArchiveEntry> =
+        withContext(io) { archiveList(path, password) }
 
     /** A non-empty [password] encrypts the contents with AES-256. */
     suspend fun compress(

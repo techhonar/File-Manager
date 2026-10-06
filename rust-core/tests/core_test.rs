@@ -229,7 +229,7 @@ fn round_trips_a_zip_archive() {
     assert_eq!(count, 2);
     assert!(zip_path.exists());
 
-    let listed = archive_list(zip_path.to_string_lossy().into_owned()).unwrap();
+    let listed = archive_list(zip_path.to_string_lossy().into_owned(), None).unwrap();
     assert!(listed.iter().any(|e| e.name == "data/one.txt"));
 
     let out = tree.dir("extracted");
@@ -844,7 +844,7 @@ fn creates_an_archive_the_password_is_needed_to_read() {
 
     // And it can still be listed. A zip does not encrypt its index, so showing
     // what is inside must not require the password.
-    let listed = archive_list(locked.to_string_lossy().into_owned()).unwrap();
+    let listed = archive_list(locked.to_string_lossy().into_owned(), None).unwrap();
     assert!(
         listed.iter().any(|e| e.name == "private/notes.txt"),
         "listed {listed:?}",
@@ -1869,7 +1869,7 @@ fn listing_an_archive_gives_each_entry_its_own_time() {
         zip.finish().unwrap();
     }
 
-    let listed = archive_list(zip_path.to_string_lossy().into_owned()).unwrap();
+    let listed = archive_list(zip_path.to_string_lossy().into_owned(), None).unwrap();
 
     // 2020-01-02 03:04:06, the wall-clock time the entry carries.
     assert_eq!(listed[0].modified_ms, 1_577_934_246_000);
@@ -2270,4 +2270,167 @@ fn something_that_is_not_an_archive_is_refused_before_a_folder_is_made() {
 
     assert!(matches!(unpack(&tree, &fake, None), Err(FileError::Archive { .. })));
     assert!(!tree.path().join("out").exists(), "an empty folder was left behind");
+}
+
+/// What `archive` lists as, name by name, sorted.
+fn listed_names(archive: &Path, password: Option<&str>) -> Vec<String> {
+    let mut names: Vec<String> = archive_list(
+        archive.to_string_lossy().into_owned(),
+        password.map(str::to_owned),
+    )
+    .unwrap_or_else(|e| panic!("{}: {e:?}", archive.display()))
+    .into_iter()
+    .map(|e| if e.is_dir { format!("{}/", e.name) } else { e.name })
+    .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn every_kind_of_archive_lists_what_extracting_it_would_write() {
+    let tree = TempTree::new("list-every-kind");
+
+    // A tar, plain and compressed: the hostile names, the link and what was
+    // written through it, and the hard link to outside are all left out -
+    // extraction skips them, so listing them would promise files that never
+    // arrive. The hard link to a file inside is a copy of it, and is listed.
+    let album = vec![
+        "album/".to_string(),
+        "album/again.txt".to_string(),
+        "album/link/through.txt".to_string(),
+        "album/one.txt".to_string(),
+        "album/sub/two.txt".to_string(),
+    ];
+    let tar = tree.path().join("album.tar");
+    fs::write(&tar, sample_tar()).unwrap();
+    assert_eq!(listed_names(&tar, None), album);
+
+    let gzip = tree.path().join("album.tar.gz");
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(&sample_tar()).unwrap();
+    fs::write(&gzip, e.finish().unwrap()).unwrap();
+    assert_eq!(listed_names(&gzip, None), album);
+
+    let sevenz = tree.path().join("album.7z");
+    sample_7z(&sevenz, None, false);
+    assert_eq!(listed_names(&sevenz, None), vec!["album/one.txt", "album/two.txt"]);
+
+    let rar = fixture("version.rar");
+    assert_eq!(listed_names(&rar, None), vec!["VERSION"]);
+    let entry = &archive_list(rar.to_string_lossy().into_owned(), None).unwrap()[0];
+    assert_eq!(entry.size, 11, "unrar-0.4.0");
+    assert!(entry.modified_ms > 1_400_000_000_000, "a RAR's time was not read: {}", entry.modified_ms);
+
+    let single = tree.path().join("notes.txt.gz");
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b"just the one file").unwrap();
+    fs::write(&single, e.finish().unwrap()).unwrap();
+    assert_eq!(listed_names(&single, None), vec!["notes.txt"]);
+
+    let zip_path = tree.path().join("docs.zip");
+    {
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.add_directory("docs/", options).unwrap();
+        zip.start_file("docs/a.txt", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"a").unwrap();
+        zip.start_file("../outside.txt", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"x").unwrap();
+        zip.finish().unwrap();
+    }
+    assert_eq!(listed_names(&zip_path, None), vec!["docs/", "docs/a.txt"]);
+}
+
+#[test]
+fn an_archive_whose_names_are_protected_lists_only_with_its_password() {
+    let tree = TempTree::new("list-protected");
+
+    // Only the contents encrypted: the names are there to read.
+    let open_names = tree.path().join("open-names.7z");
+    sample_7z(&open_names, Some("secret"), false);
+    assert_eq!(listed_names(&open_names, None), vec!["album/one.txt", "album/two.txt"]);
+
+    let hidden_names = tree.path().join("hidden-names.7z");
+    sample_7z(&hidden_names, Some("secret"), true);
+    assert!(matches!(
+        archive_list(hidden_names.to_string_lossy().into_owned(), None),
+        Err(FileError::PasswordRequired),
+    ));
+    assert_eq!(listed_names(&hidden_names, Some("secret")), vec!["album/one.txt", "album/two.txt"]);
+
+    let rar = fixture("comment-hpw-password.rar");
+    assert!(matches!(
+        archive_list(rar.to_string_lossy().into_owned(), None),
+        Err(FileError::PasswordRequired),
+    ));
+    assert_eq!(listed_names(&rar, Some("password")), vec![".gitignore"]);
+}
+
+#[test]
+fn extracting_into_a_folder_never_writes_over_what_is_there() {
+    // Extracting only ever went into a new, empty folder. Into one the user
+    // chose, a file with the same name is theirs.
+    let tree = TempTree::new("extract-keep-existing");
+    let tar = tree.path().join("album.tar");
+    fs::write(&tar, sample_tar()).unwrap();
+    let out = tree.path().join("out");
+    fs::create_dir_all(out.join("album")).unwrap();
+    fs::write(out.join("album/one.txt"), "mine").unwrap();
+
+    unpack(&tree, &tar, None).unwrap();
+
+    assert_eq!(fs::read_to_string(out.join("album/one.txt")).unwrap(), "mine", "overwritten");
+    assert_eq!(fs::read_to_string(out.join("album/one (1).txt")).unwrap(), "one");
+    assert_eq!(
+        fs::read_to_string(out.join("album/again.txt")).unwrap(),
+        "one",
+        "a hard link copied the user's file rather than the archive's",
+    );
+
+    // And the same for a zip, and for a single compressed file.
+    let zip_path = tree.path().join("docs.zip");
+    {
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        zip.start_file("notes.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, b"from the zip").unwrap();
+        zip.finish().unwrap();
+    }
+    fs::write(out.join("notes.txt"), "mine").unwrap();
+    unpack(&tree, &zip_path, None).unwrap();
+    assert_eq!(fs::read_to_string(out.join("notes.txt")).unwrap(), "mine");
+    assert_eq!(fs::read_to_string(out.join("notes (1).txt")).unwrap(), "from the zip");
+
+    let gz = tree.path().join("notes.txt.gz");
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b"from the gz").unwrap();
+    fs::write(&gz, e.finish().unwrap()).unwrap();
+    unpack(&tree, &gz, None).unwrap();
+    assert_eq!(fs::read_to_string(out.join("notes (2).txt")).unwrap(), "from the gz");
+}
+
+#[test]
+fn a_wrong_password_leaves_the_folder_as_it_was() {
+    // Rubbish decrypted under a wrong password used to stay behind, and the
+    // retry - writing beside it rather than over it - came out as "(1)" files.
+    let tree = TempTree::new("extract-wrong-password-cleanup");
+    let archive = tree.path().join("album.7z");
+    sample_7z(&archive, Some("secret"), false);
+
+    assert!(matches!(unpack(&tree, &archive, Some("wrong")), Err(FileError::WrongPassword)));
+    assert!(!tree.path().join("out").exists(), "the folder made for it was left");
+
+    // Into a folder that was already there: what was there stays, and nothing
+    // is added.
+    let out = tree.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    fs::write(out.join("mine.txt"), "mine").unwrap();
+    assert!(matches!(unpack(&tree, &archive, Some("wrong")), Err(FileError::WrongPassword)));
+    let left: Vec<String> = fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, vec!["mine.txt"]);
+
+    unpack(&tree, &archive, Some("secret")).unwrap();
+    assert_7z_unpacked(&tree);
 }
