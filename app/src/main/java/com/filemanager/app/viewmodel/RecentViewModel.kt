@@ -2,8 +2,10 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +21,7 @@ data class RecentState(
     val selected: Set<String> = emptySet(),
     val selectionActive: Boolean = false,
     val message: String? = null,
+    val viewMode: ViewMode = ViewMode.LIST,
 ) {
     val inSelectionMode: Boolean get() = selectionActive || selected.isNotEmpty()
     val allSelected: Boolean
@@ -36,9 +39,12 @@ class RecentViewModel(
     private val repository: FileRepository,
     private val clipboard: FileClipboard,
     private val rootPath: String,
+    private val settings: AppSettings,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(RecentState())
+    private val _state = MutableStateFlow(
+        RecentState(viewMode = settings.viewMode(ViewScope.Recent).value.toViewMode()),
+    )
     val state: StateFlow<RecentState> = _state.asStateFlow()
 
     private var scan: CancelToken? = null
@@ -68,6 +74,12 @@ class RecentViewModel(
                     _state.update { it.copy(isLoading = false) }
                 }
         }
+    }
+
+    /** Kept for next time, apart from every other list's: see ViewScope. */
+    fun setViewMode(mode: ViewMode) {
+        settings.setViewMode(ViewScope.Recent, mode.toSetting())
+        _state.update { it.copy(viewMode = mode) }
     }
 
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }

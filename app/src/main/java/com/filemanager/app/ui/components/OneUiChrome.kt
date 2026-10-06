@@ -34,8 +34,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,10 +67,11 @@ fun OneUiScreen(
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     snackbarHost: @Composable () -> Unit = {},
+    /** Passed in by a screen that needs to know whether the title is open. */
+    titleState: TitleState = rememberTitleState(),
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val scrollBehavior =
-        TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(titleState.appBar)
 
     Scaffold(
         modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -105,6 +109,27 @@ fun OneUiScreen(
         snackbarHost = snackbarHost,
         content = content,
     )
+}
+
+/**
+ * How far a [OneUiScreen]'s title has collapsed.
+ *
+ * Material's own state for it, wrapped: that is experimental, and taking it
+ * as a parameter made every screen opt in to it, not only the one that asks.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Stable
+class TitleState internal constructor(internal val appBar: TopAppBarState) {
+    /** All the way open, give or take the rounding a scroll can leave in
+     *  the fraction. */
+    val isOpen: Boolean get() = appBar.collapsedFraction < 0.01f
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun rememberTitleState(): TitleState {
+    val appBar = rememberTopAppBarState()
+    return remember(appBar) { TitleState(appBar) }
 }
 
 /** Which of a list screen's panes is showing: a spinner, an error, "empty", or the list. */

@@ -89,6 +89,9 @@ value class ViewScope(val key: String) {
         /** Search results with no category filter, or more than one. */
         val Search = ViewScope("search")
 
+        /** Recent files. */
+        val Recent = ViewScope("recent")
+
         /** One category tile - Images, Video, Audio, and so on. */
         fun category(name: String) = ViewScope("category_$name")
     }

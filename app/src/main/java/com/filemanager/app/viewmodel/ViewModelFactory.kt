@@ -88,7 +88,7 @@ class ViewModelFactory(
             FavoritesViewModel(repository, paths, settings, StorageVolumes::isMounted) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
-            RecentViewModel(repository, clipboard, primaryPath) as T
+            RecentViewModel(repository, clipboard, primaryPath, settings) as T
 
         modelClass.isAssignableFrom(TrashViewModel::class.java) ->
             TrashViewModel(repository) as T

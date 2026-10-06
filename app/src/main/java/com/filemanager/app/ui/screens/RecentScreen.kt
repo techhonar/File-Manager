@@ -7,7 +7,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -27,13 +32,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.AnimatedBottomBar
+import com.filemanager.app.ui.components.FileDetailRow
+import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.Pane
 import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
+import com.filemanager.app.ui.components.ViewModeMenu
 import com.filemanager.app.viewmodel.RecentViewModel
+import com.filemanager.app.viewmodel.ViewMode
 import uniffi.filemanager_core.FileEntry
 
 /** Everything modified in the last week, newest first, and actionable. */
@@ -48,6 +57,10 @@ fun RecentScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
+    // Out here, so the place in the list outlasts the pane swapping in and
+    // out below it.
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -86,6 +99,7 @@ fun RecentScreen(
                     onToggle = viewModel::toggleSelectAll,
                 )
             } else if (state.entries.isNotEmpty()) {
+                ViewModeMenu(current = state.viewMode, onSelect = viewModel::setViewMode)
                 IconButton(onClick = viewModel::enterSelectionMode) {
                     Icon(Icons.Default.SelectAll, "Select items")
                 }
@@ -120,22 +134,68 @@ fun RecentScreen(
                     )
                 }
 
-                else -> LazyColumn(
-                    modifier = Modifier.padding(padding).fillMaxSize(),
-                    contentPadding = contentPadding,
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        Box(Modifier.animateItem()) {
-                            SearchResultRow(
-                                entry = entry,
-                                isSelected = entry.path in state.selected,
-                                selectionMode = state.inSelectionMode,
-                                onClick = {
-                                    if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                                    else onOpenFile(entry)
-                                },
-                                onLongClick = { viewModel.toggleSelection(entry.path) },
-                            )
+                else -> {
+                    val onClick = { entry: FileEntry ->
+                        if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                        else onOpenFile(entry)
+                    }
+                    val listModifier = Modifier.padding(padding).fillMaxSize()
+                    when (state.viewMode) {
+                        ViewMode.GRID -> LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 108.dp),
+                            state = gridState,
+                            modifier = listModifier,
+                            contentPadding = contentPadding,
+                        ) {
+                            items(state.entries, key = { it.path }) { entry ->
+                                Box(Modifier.animateItem()) {
+                                    FileGridCell(
+                                        entry = entry,
+                                        isSelected = entry.path in state.selected,
+                                        selectionMode = state.inSelectionMode,
+                                        onClick = { onClick(entry) },
+                                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    )
+                                }
+                            }
+                        }
+
+                        ViewMode.DETAILED -> LazyColumn(
+                            state = listState,
+                            modifier = listModifier,
+                            contentPadding = contentPadding,
+                        ) {
+                            items(state.entries, key = { it.path }) { entry ->
+                                Box(Modifier.animateItem()) {
+                                    FileDetailRow(
+                                        entry = entry,
+                                        isSelected = entry.path in state.selected,
+                                        selectionMode = state.inSelectionMode,
+                                        onClick = { onClick(entry) },
+                                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    )
+                                }
+                            }
+                        }
+
+                        // Rows that say which folder each file is in: recent
+                        // files come from all over the phone.
+                        ViewMode.LIST -> LazyColumn(
+                            state = listState,
+                            modifier = listModifier,
+                            contentPadding = contentPadding,
+                        ) {
+                            items(state.entries, key = { it.path }) { entry ->
+                                Box(Modifier.animateItem()) {
+                                    SearchResultRow(
+                                        entry = entry,
+                                        isSelected = entry.path in state.selected,
+                                        selectionMode = state.inSelectionMode,
+                                        onClick = { onClick(entry) },
+                                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
