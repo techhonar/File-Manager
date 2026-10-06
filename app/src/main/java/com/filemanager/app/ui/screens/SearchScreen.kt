@@ -12,6 +12,7 @@ import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.isExtractable
 import com.filemanager.app.ui.components.ExtractDialogHost
 import com.filemanager.app.ui.components.InlineResultActions
+import com.filemanager.app.ui.components.ResultActionsMenu
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -308,15 +309,22 @@ fun SearchScreen(
                                             isSelected = entry.path in state.selected,
                                             selectionMode = state.inSelectionMode,
                                             onClick = {
-                                                when {
-                                                    state.inSelectionMode -> viewModel.toggleSelection(entry.path)
-                                                    // As in a folder: an archive
-                                                    // asks about unpacking.
-                                                    isExtractable(entry.name) -> viewModel.extractor.open(entry)
-                                                    else -> onOpenFile(entry)
-                                                }
+                                                // As in the lists: what can be
+                                                // done with it, rather than
+                                                // opening it straight away.
+                                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
+                                                else expandedPath = entry.path
                                             },
                                             onLongClick = { viewModel.toggleSelection(entry.path) },
+                                        )
+                                        ResultActionsMenu(
+                                            expanded = expandedPath == entry.path && !state.inSelectionMode,
+                                            onDismiss = { expandedPath = null },
+                                            onOpen = { onOpenFile(entry) },
+                                            onExtract = extractFor(entry),
+                                            onOpenWith = { onOpenWith(entry.path) },
+                                            onCopyPath = { onCopyPath(entry.path) },
+                                            onShowInFolder = { onShowInFolder(entry.path) },
                                         )
                                     }
                                 }

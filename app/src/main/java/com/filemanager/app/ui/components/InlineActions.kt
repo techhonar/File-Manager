@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Unarchive
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -71,14 +73,63 @@ fun InlineResultActions(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            InlineAction(Icons.AutoMirrored.Filled.OpenInNew, "Open", onOpen)
-            onExtract?.let { InlineAction(Icons.Default.Unarchive, "Extract", it) }
-            InlineAction(Icons.Default.ContentCopy, "Copy path", onCopyPath)
-            InlineAction(Icons.Default.FolderOpen, "Show in folder", onShowInFolder)
-            InlineAction(Icons.Default.Apps, "Open with", onOpenWith)
+            resultActions(onOpen, onExtract, onCopyPath, onShowInFolder, onOpenWith).forEach {
+                InlineAction(it.icon, it.label, it.onClick)
+            }
         }
     }
 }
+
+/**
+ * The same actions as a menu, for a result shown as a tile in a grid.
+ *
+ * A row unfolding beneath a tile would sit under the whole row of tiles,
+ * with nothing to say which one it was for. A menu opens on the tile that
+ * was tapped.
+ */
+@Composable
+fun ResultActionsMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onOpen: () -> Unit,
+    onOpenWith: () -> Unit,
+    onCopyPath: () -> Unit,
+    onShowInFolder: () -> Unit,
+    /** For an archive the app can unpack; null for anything else. */
+    onExtract: (() -> Unit)? = null,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        resultActions(onOpen, onExtract, onCopyPath, onShowInFolder, onOpenWith).forEach { action ->
+            DropdownMenuItem(
+                text = { Text(action.label) },
+                leadingIcon = {
+                    Icon(action.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                },
+                onClick = {
+                    onDismiss()
+                    action.onClick()
+                },
+            )
+        }
+    }
+}
+
+private class ResultAction(val icon: ImageVector, val label: String, val onClick: () -> Unit)
+
+/** What can be done with a result, in the order offered, as a row or a menu. */
+private fun resultActions(
+    onOpen: () -> Unit,
+    onExtract: (() -> Unit)?,
+    onCopyPath: () -> Unit,
+    onShowInFolder: () -> Unit,
+    onOpenWith: () -> Unit,
+): List<ResultAction> = listOfNotNull(
+    ResultAction(Icons.AutoMirrored.Filled.OpenInNew, "Open", onOpen),
+    onExtract?.let { ResultAction(Icons.Default.Unarchive, "Extract", it) },
+    ResultAction(Icons.Default.ContentCopy, "Copy path", onCopyPath),
+    ResultAction(Icons.Default.FolderOpen, "Show in folder", onShowInFolder),
+    ResultAction(Icons.Default.Apps, "Open with", onOpenWith),
+)
 
 @Composable
 private fun RowScope.InlineAction(icon: ImageVector, label: String, onClick: () -> Unit) {
