@@ -597,10 +597,7 @@ class BrowserViewModel(
      * Asking before an archive is unpacked, and unpacking it: shared with
      * search, so it works the same wherever an archive is tapped.
      */
-    val extractor = ExtractController(repository, volumeRoots, viewModelScope) { message, _ ->
-        _messages.value = message
-        refresh()
-    }
+    val extractor = ExtractController(repository, volumeRoots, viewModelScope) { refresh() }
 
     fun consumeMessage() {
         _messages.value = null

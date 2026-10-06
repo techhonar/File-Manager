@@ -102,6 +102,8 @@ fun SearchScreen(
     onOpenWith: (String) -> Unit,
     onCopyPath: (String) -> Unit,
     onShowInFolder: (String) -> Unit,
+    /** Open a folder in the browser: where an archive was just extracted. */
+    onOpenFolder: (String) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /**
@@ -435,7 +437,7 @@ fun SearchScreen(
         }
     }
 
-    ExtractDialogHost(viewModel.extractor, volumes)
+    ExtractDialogHost(viewModel.extractor, volumes, snackbarState, onShowFolder = onOpenFolder)
 
     RenameDialogHost(
         target = renameTarget,

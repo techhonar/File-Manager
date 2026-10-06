@@ -27,14 +27,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,15 +56,45 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.ExtractController
 import com.filemanager.app.viewmodel.ExtractState
 import uniffi.filemanager_core.formatSize
+import java.io.File
 
 /**
  * Extracting an archive, for whichever screen [controller] belongs to: the
- * question, and the folder picker when the user wants it somewhere else.
+ * question, the folder picker when the user wants it somewhere else, and how
+ * it went, said on [snackbarState] - with "Show in folder", which takes the
+ * user to the files through [onShowFolder].
+ *
+ * [currentFolder] is the folder on screen, if any. Files extracted into it
+ * are already in view, so the way there is not offered.
  */
 @Composable
-fun ExtractDialogHost(controller: ExtractController, volumes: List<StorageVolume>) {
+fun ExtractDialogHost(
+    controller: ExtractController,
+    volumes: List<StorageVolume>,
+    snackbarState: SnackbarHostState,
+    onShowFolder: (String) -> Unit,
+    currentFolder: String? = null,
+) {
     val state by controller.state.collectAsState()
     val picker by controller.picker.state.collectAsState()
+    val outcome by controller.outcome.collectAsState()
+    val showFolder by rememberUpdatedState(onShowFolder)
+    val here by rememberUpdatedState(currentFolder)
+
+    LaunchedEffect(outcome) {
+        val ended = outcome ?: return@LaunchedEffect
+        val onScreen = here?.let(::File)
+        val folder = ended.folder?.takeUnless { File(it) == onScreen }
+        val result = snackbarState.showSnackbar(
+            message = ended.message,
+            actionLabel = folder?.let { "Show in folder" },
+            // Long rather than the default for one with an action, which
+            // stays until it is tapped and holds back everything said after.
+            duration = if (folder != null) SnackbarDuration.Long else SnackbarDuration.Short,
+        )
+        controller.consumeOutcome()
+        if (result == SnackbarResult.ActionPerformed && folder != null) showFolder(folder)
+    }
 
     state?.let { current ->
         ExtractDialog(

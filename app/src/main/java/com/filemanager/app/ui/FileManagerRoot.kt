@@ -519,6 +519,7 @@ fun FileManagerRoot(
                             Routes.browse(path.substringBeforeLast('/'), highlight = path),
                         )
                     },
+                    onOpenFolder = { path -> navController.navigate(Routes.browse(path)) },
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
                     autoFocus = categoryName == null,
