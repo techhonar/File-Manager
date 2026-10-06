@@ -52,7 +52,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -93,8 +92,10 @@ import java.io.File
 import kotlinx.coroutines.delay
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
+import com.filemanager.app.ui.components.rememberTitleState
 import com.filemanager.app.ui.components.Pane
 import com.filemanager.app.ui.components.PaneFade
+import com.filemanager.app.ui.components.PullToRefreshFromTop
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
@@ -141,6 +142,8 @@ fun BrowserScreen(
     // at the top the moment they ticked a file halfway down a long folder.
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
+    // Read when a pull starts: see the refresh below.
+    val titleState = rememberTitleState()
 
     // Scroll the highlighted file into view once the folder has loaded, then
     // let the marker fade. Keyed on the path and the entries so it runs after
@@ -208,6 +211,7 @@ fun BrowserScreen(
         },
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
+        titleState = titleState,
         navigationIcon = {
             if (state.inSelectionMode) {
                 IconButton(onClick = viewModel::clearSelection) {
@@ -306,12 +310,17 @@ fun BrowserScreen(
             // The indicator is the only thing shown. The rescan itself is
             // deliberately silent - a spinner over the list would make a
             // refresh look like a reload of something that is already correct.
-            PullToRefreshBox(
+            PullToRefreshFromTop(
                 isRefreshing = isRefreshing,
                 onRefresh = {
                     isRefreshing = true
                     viewModel.refreshQuietly()
                 },
+                atTop = {
+                    if (state.viewMode == ViewMode.GRID) !gridState.canScrollBackward
+                    else !listState.canScrollBackward
+                },
+                titleState = titleState,
                 modifier = Modifier.fillMaxSize(),
             ) {
                 FileList(
