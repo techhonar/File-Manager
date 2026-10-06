@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileEntry
@@ -20,6 +21,12 @@ data class StorageState(
     val summary: StorageSummary? = null,
     val largest: List<FileEntry> = emptyList(),
     val duplicates: List<DuplicateGroup> = emptyList(),
+    /**
+     * The copies ticked for the trash in each duplicate set, by its hash. The
+     * oldest of each starts unticked - the one kept when nothing is changed,
+     * as the single button used to keep it - and the rest ticked.
+     */
+    val duplicateMarks: Map<String, Set<String>> = emptyMap(),
     val isLoading: Boolean = true,
     val isScanningDuplicates: Boolean = false,
     val duplicateProgress: String = "",
@@ -45,6 +52,9 @@ class StorageViewModel(
     private val repository: FileRepository,
     private val rootPath: String,
 ) : ViewModel() {
+
+    /** Where the duplicates were looked for, which their paths are shown from. */
+    val root: String get() = rootPath
 
     // --- Selection ----------------------------------------------------------
     //
@@ -208,6 +218,9 @@ class StorageViewModel(
                     _state.update {
                         it.copy(
                             duplicates = groups,
+                            duplicateMarks = groups.associate { group ->
+                                group.hash to group.files.drop(1).mapTo(HashSet()) { file -> file.path }
+                            },
                             isScanningDuplicates = false,
                             duplicateProgress = "",
                         )
@@ -220,32 +233,59 @@ class StorageViewModel(
         }
     }
 
+    /** Tick or untick one copy in a duplicate set for the trash. */
+    fun toggleDuplicate(hash: String, path: String) = _state.update { current ->
+        val marks = current.duplicateMarks[hash].orEmpty()
+        val next = if (path in marks) marks - path else marks + path
+        current.copy(duplicateMarks = current.duplicateMarks + (hash to next))
+    }
+
     /**
-     * Keep the first copy in each group, trash the rest.
+     * Trash the copies ticked in [group].
      *
-     * "First" is the oldest - the core orders each group that way on purpose,
-     * because this keeps it.
+     * Which ones used to be decided for the user - every copy but the oldest,
+     * with no way to see where any of them was. Each is listed with its folder
+     * now, and the user ticks the ones to go: any of them, or every one.
      */
-    fun deleteDuplicates(group: DuplicateGroup) {
-        val extras = group.files.drop(1).map { it.path }
-        if (extras.isEmpty()) return
+    fun trashDuplicates(group: DuplicateGroup) {
+        val marked = _state.value.duplicateMarks[group.hash].orEmpty()
+        if (marked.isEmpty()) return
 
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(extras) }
-                .onSuccess {
-                    _state.update { current ->
-                        current.copy(
-                            duplicates = current.duplicates.filterNot { it.hash == group.hash },
-                            message = "${extras.size} copies moved to trash, " +
-                                "kept ${group.files.first().name}",
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    // Said. A failure here used to leave the group on screen
-                    // with nothing to indicate the button had done anything.
-                    _state.update { it.copy(message = error.userMessage("Could not remove the copies")) }
-                }
+            val result = runCatching { repository.moveToTrash(marked.toList()) }
+            // From the disk rather than the result: a failure partway through
+            // leaves some trashed and some not.
+            val left = group.files.filter { File(it.path).exists() }
+            val trashed = group.files.size - left.size
+            _state.update { current ->
+                current.copy(
+                    duplicates = current.duplicates.mapNotNull { set ->
+                        when {
+                            set.hash != group.hash -> set
+                            // A single copy is not a duplicate any more.
+                            left.size < 2 -> null
+                            else -> set.copy(files = left, wastedBytes = set.size * (left.size - 1).toULong())
+                        }
+                    },
+                    duplicateMarks = if (left.size < 2) {
+                        current.duplicateMarks - group.hash
+                    } else {
+                        current.duplicateMarks + (group.hash to emptySet())
+                    },
+                    message = result.fold(
+                        onSuccess = {
+                            when (left.size) {
+                                0 -> "Moved all $trashed copies to trash"
+                                1 -> "Moved $trashed to trash, kept ${left.single().name}"
+                                else -> "Moved $trashed to trash"
+                            }
+                        },
+                        // Said. A failure here used to leave the set on screen
+                        // with nothing to indicate the button had done anything.
+                        onFailure = { it.userMessage("Could not move them to the trash") },
+                    ),
+                )
+            }
         }
     }
 
