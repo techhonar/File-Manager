@@ -49,14 +49,10 @@ import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.TextInputDialog
+import com.filemanager.app.ui.components.ViewModeMenu
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.viewmodel.ViewMode
 import androidx.compose.material3.Icon
@@ -596,30 +592,3 @@ private val CATEGORY_CHIPS = listOf(
 private class PinnedResults {
     var results: List<FileEntry>? = null
 }
-
-/** List or grid, for a screen a category tile lands on. */
-@Composable
-private fun ViewModeMenu(current: ViewMode, onSelect: (ViewMode) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-
-    IconButton(onClick = { expanded = true }) {
-        Icon(
-            if (current == ViewMode.GRID) Icons.Default.GridView else Icons.AutoMirrored.Filled.List,
-            "Change view",
-        )
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        listOf(
-            ViewMode.LIST to "List",
-            ViewMode.DETAILED to "Detailed list",
-            ViewMode.GRID to "Grid",
-        ).forEach { (mode, label) ->
-            DropdownMenuItem(
-                text = { Text(label) },
-                trailingIcon = { if (current == mode) Icon(Icons.Default.Check, null) },
-                onClick = { onSelect(mode); expanded = false },
-            )
-        }
-    }
-}
-
