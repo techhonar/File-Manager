@@ -53,6 +53,14 @@ data class ExtractState(
         get() = if (intoFolder) File(location, folderName).path else location
 }
 
+/** How an extraction ended, to be said once. */
+data class ExtractOutcome(
+    val message: String,
+    /** The folder the files went into, so the way there can be offered -
+     *  null when no files were written. */
+    val folder: String? = null,
+)
+
 /**
  * Asking before extracting an archive, and then extracting it - for every
  * screen that can, so it is the same everywhere.
@@ -62,14 +70,15 @@ data class ExtractState(
  * did, or straight into a folder, the archive's own or any other. Nothing
  * already there is written over - see the core's archive_extract.
  *
- * [onDone] is told how it ended, with something to say and where the files
- * went. [scope] is the owner's, so it all stops with the screen.
+ * [onDone] is told when an extraction ends, however it ended, so the owner
+ * can look again at what is on disk. [scope] is the owner's, so it all stops
+ * with the screen.
  */
 class ExtractController(
     private val repository: FileRepository,
     volumeRoots: List<String>,
     private val scope: CoroutineScope,
-    private val onDone: (message: String, destination: String) -> Unit,
+    private val onDone: () -> Unit,
 ) {
     /** Choosing a folder to extract into. */
     val picker = FolderPicker(repository, volumeRoots, scope)
@@ -78,6 +87,13 @@ class ExtractController(
 
     /** Null when nothing is being extracted or asked about. */
     val state: StateFlow<ExtractState?> = _state.asStateFlow()
+
+    private val _outcome = MutableStateFlow<ExtractOutcome?>(null)
+
+    /** How the last extraction ended, until it has been said. Kept here
+     *  rather than with the owner's other messages, so the way to the files
+     *  is offered the same on every screen. */
+    val outcome: StateFlow<ExtractOutcome?> = _outcome.asStateFlow()
 
     private var cancel: CancelToken? = null
 
@@ -184,7 +200,8 @@ class ExtractController(
                 .onSuccess { count ->
                     _state.value = null
                     val files = if (count == 1uL) "1 file" else "$count files"
-                    onDone("Extracted $files to ${File(destination).name}", destination)
+                    // An empty archive leaves nothing to go and look at.
+                    finish("Extracted $files to ${File(destination).name}", destination.takeIf { count > 0uL })
                 }
                 .onFailure { failure ->
                     // The folder made for it, if nothing went into it. The core
@@ -198,7 +215,7 @@ class ExtractController(
                     when {
                         token.isCancelled() -> {
                             _state.value = null
-                            onDone("Extraction stopped", destination)
+                            finish("Extraction stopped")
                         }
                         // Matched on the exception type, not its text: a
                         // variant with no fields has an empty message.
@@ -207,11 +224,22 @@ class ExtractController(
                         }
                         else -> {
                             _state.value = null
-                            onDone(failure.userMessage("Could not extract"), destination)
+                            finish(failure.userMessage("Could not extract"))
                         }
                     }
                 }
         }
+    }
+
+    /** End with [message], offering [folder] when files went into it. */
+    private fun finish(message: String, folder: String? = null) {
+        _outcome.value = ExtractOutcome(message, folder)
+        onDone()
+    }
+
+    /** The outcome has been shown. */
+    fun consumeOutcome() {
+        _outcome.value = null
     }
 
     /** Stop an extraction under way. What was written stays, but for the

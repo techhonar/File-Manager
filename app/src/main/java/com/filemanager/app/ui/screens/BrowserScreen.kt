@@ -384,7 +384,13 @@ fun BrowserScreen(
         )
     }
 
-    ExtractDialogHost(viewModel.extractor, volumes)
+    ExtractDialogHost(
+        viewModel.extractor,
+        volumes,
+        snackbarState,
+        onShowFolder = viewModel::load,
+        currentFolder = state.path,
+    )
 
     state.detailsTarget?.let { target ->
         DetailsDialog(
