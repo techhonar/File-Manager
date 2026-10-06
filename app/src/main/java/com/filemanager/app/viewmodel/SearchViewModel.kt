@@ -119,6 +119,16 @@ class SearchViewModel(
     )
     val state: StateFlow<SearchState> = _state.asStateFlow()
 
+    /**
+     * Extracting an archive found here, as the browser does it. The search is
+     * run again afterwards: what came out of it may well belong in the list -
+     * photos from a zip, in Images.
+     */
+    val extractor = ExtractController(repository, roots, viewModelScope) { message, _ ->
+        _state.update { it.copy(message = message) }
+        scheduleWalk()
+    }
+
     private var searchJob: Job? = null
     private var cancelToken: CancelToken? = null
 

@@ -12,10 +12,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
-import com.filemanager.app.data.archiveBaseName
 import com.filemanager.app.data.freeName
 import com.filemanager.app.data.PathPrefs
-import com.filemanager.app.data.isWrongPassword
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -78,17 +76,6 @@ data class BrowserState(
     val detailsTarget: FileEntry? = null,
     /** Null until the walk and the MediaStore lookup come back. */
     val details: FileDetails? = null,
-    /** Archive awaiting the user's confirmation before it is unpacked. */
-    val extractTarget: FileEntry? = null,
-    /**
-     * The folder it will be unpacked into, decided when the dialog opens.
-     *
-     * Held so the dialog and the extraction agree - they used to work the
-     * name out separately, and neither checked whether it was taken.
-     */
-    val extractDestination: String? = null,
-    val extractNeedsPassword: Boolean = false,
-    val extractWrongPassword: Boolean = false,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     /**
@@ -607,88 +594,12 @@ class BrowserViewModel(
     }
 
     /**
-     * Ask before unpacking, rather than extracting on a single tap.
-     *
-     * Whether a password is needed is settled here, before anything is
-     * written - an encrypted archive discovered partway through would leave
-     * half a folder behind.
+     * Asking before an archive is unpacked, and unpacking it: shared with
+     * search, so it works the same wherever an archive is tapped.
      */
-    fun confirmExtract(entry: FileEntry) {
-        _state.update {
-            it.copy(
-                extractTarget = entry,
-                // Decided now, so the dialog names the folder that will
-                // actually be written. A couple of stat calls at most.
-                extractDestination = extractDestinationFor(entry.path).absolutePath,
-                extractNeedsPassword = false,
-                extractWrongPassword = false,
-            )
-        }
-        viewModelScope.launch {
-            val needs = repository.archiveNeedsPassword(entry.path)
-            _state.update { current ->
-                if (current.extractTarget?.path != entry.path) current
-                else current.copy(extractNeedsPassword = needs)
-            }
-        }
-    }
-
-    fun dismissExtract() = _state.update {
-        it.copy(
-            extractTarget = null,
-            extractDestination = null,
-            extractNeedsPassword = false,
-            extractWrongPassword = false,
-        )
-    }
-
-    /** A folder beside the archive, named after it, that does not exist yet. */
-    private fun extractDestinationFor(archivePath: String): File {
-        val archive = File(archivePath)
-        return freeName(archive.parentFile ?: File("/"), archiveBaseName(archive.name))
-    }
-
-    fun extract(archivePath: String, password: String? = null) {
-        // The folder the dialog promised. Worked out again only if the dialog
-        // was skipped, and never the plain archive name when that is taken.
-        val destination = _state.value.extractDestination
-            ?: extractDestinationFor(archivePath).absolutePath
-
-        viewModelScope.launch {
-            _state.update { it.copy(isLoading = true, extractTarget = null) }
-            runCatching { repository.extract(archivePath, destination, password) }
-                .onSuccess {
-                    _state.update { s -> s.copy(extractDestination = null) }
-                    _messages.value = "Extracted $it files"
-                    refresh()
-                }
-                .onFailure { error ->
-                    // The folder is made before the first entry is read, so a
-                    // wrong password left an empty one behind - and the next
-                    // attempt, finding it taken, would have unpacked into
-                    // "name (1)" beside it. A folder with anything in it is a
-                    // partial extraction and stays, so it can be seen.
-                    File(destination).let { dir ->
-                        if (dir.isDirectory && dir.list()?.isEmpty() == true) dir.delete()
-                    }
-                    _state.update { s -> s.copy(isLoading = false) }
-                    // Matched on the exception type, not its text: a variant
-                    // with no fields has an empty message, so a string test
-                    // never fired and the prompt silently never reopened.
-                    if (error.isWrongPassword()) {
-                        _state.update { s ->
-                            s.copy(
-                                extractTarget = s.entries.firstOrNull { it.path == archivePath },
-                                extractNeedsPassword = true,
-                                extractWrongPassword = true,
-                            )
-                        }
-                    } else {
-                        _state.update { s -> s.copy(extractDestination = null) }
-                        _messages.value = error.userMessage("Could not extract")
-                    }
-                }
-        }
+    val extractor = ExtractController(repository, volumeRoots, viewModelScope) { message, _ ->
+        _messages.value = message
+        refresh()
     }
 
     fun consumeMessage() {

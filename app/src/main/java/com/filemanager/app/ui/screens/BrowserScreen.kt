@@ -84,11 +84,11 @@ import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.CompressDialog
 import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
-import com.filemanager.app.data.archiveBaseName
+import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.freeName
 import com.filemanager.app.data.isExtractable
 import androidx.activity.compose.BackHandler
-import com.filemanager.app.ui.components.ExtractDialog
+import com.filemanager.app.ui.components.ExtractDialogHost
 import java.io.File
 import kotlinx.coroutines.delay
 import com.filemanager.app.ui.components.FileRow
@@ -127,6 +127,8 @@ fun BrowserScreen(
     picking: Boolean = false,
     /** A new text file was made; open it for typing. */
     onEditNewFile: (String) -> Unit = {},
+    /** The phone's storage, for choosing where an archive is extracted. */
+    volumes: List<StorageVolume> = emptyList(),
 ) {
     val state by viewModel.state.collectAsState()
     val clipboard by viewModel.clipboardContents.collectAsState()
@@ -382,19 +384,7 @@ fun BrowserScreen(
         )
     }
 
-    state.extractTarget?.let { target ->
-        ExtractDialog(
-            archiveName = target.name,
-            // From the view model, which checked the name is free. Worked out
-            // here it could promise a folder that already existed.
-            destinationName = state.extractDestination?.substringAfterLast('/')
-                ?: archiveBaseName(target.name),
-            needsPassword = state.extractNeedsPassword,
-            wrongPassword = state.extractWrongPassword,
-            onExtract = { password -> viewModel.extract(target.path, password) },
-            onDismiss = viewModel::dismissExtract,
-        )
-    }
+    ExtractDialogHost(viewModel.extractor, volumes)
 
     state.detailsTarget?.let { target ->
         DetailsDialog(
@@ -483,7 +473,7 @@ private fun FileList(
                         // single tap, and undoing it by hand is worse. Only the
                         // kinds the core can read - anything else, an .iso say,
                         // goes to whichever app on the phone opens it.
-                        offerExtract && isExtractable(entry.name) -> viewModel.confirmExtract(entry)
+                        offerExtract && isExtractable(entry.name) -> viewModel.extractor.open(entry)
                         else -> onOpenFile(entry)
                     }
                 }

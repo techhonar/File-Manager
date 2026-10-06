@@ -485,6 +485,7 @@ fun FileManagerRoot(
                     onNavigateBack = { navController.popBackStack() },
                     picking = picking != null,
                     onEditNewFile = { path -> navController.navigate(Routes.viewer(path, edit = true)) },
+                    volumes = volumes,
                 )
             }
 
@@ -521,6 +522,7 @@ fun FileManagerRoot(
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
                     autoFocus = categoryName == null,
+                    volumes = volumes,
                 )
             }
 
