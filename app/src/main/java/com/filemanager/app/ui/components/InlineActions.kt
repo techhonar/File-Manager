@@ -5,6 +5,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,6 +47,8 @@ fun InlineResultActions(
     onCopyPath: () -> Unit,
     onShowInFolder: () -> Unit,
     modifier: Modifier = Modifier,
+    /** For an archive the app can unpack; null for anything else. */
+    onExtract: (() -> Unit)? = null,
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -54,6 +59,9 @@ fun InlineResultActions(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // Five actions for an archive are wider than a narrow phone;
+                // they scroll rather than the last one being cut off.
+                .horizontalScroll(rememberScrollState())
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(
                     start = OneUi.ScreenPadding + 60.dp,
@@ -64,6 +72,7 @@ fun InlineResultActions(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             InlineAction(Icons.AutoMirrored.Filled.OpenInNew, "Open", onOpen)
+            onExtract?.let { InlineAction(Icons.Default.Unarchive, "Extract", it) }
             InlineAction(Icons.Default.ContentCopy, "Copy path", onCopyPath)
             InlineAction(Icons.Default.FolderOpen, "Show in folder", onShowInFolder)
             InlineAction(Icons.Default.Apps, "Open with", onOpenWith)

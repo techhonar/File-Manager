@@ -8,6 +8,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import com.filemanager.app.ui.components.AnimatedBottomBar
+import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.data.isExtractable
+import com.filemanager.app.ui.components.ExtractDialogHost
 import com.filemanager.app.ui.components.InlineResultActions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
@@ -109,8 +112,19 @@ fun SearchScreen(
      * be in the way.
      */
     autoFocus: Boolean = true,
+    /** The phone's storage, for choosing where an archive is extracted. */
+    volumes: List<StorageVolume> = emptyList(),
 ) {
     val state by viewModel.state.collectAsState()
+    // An archive found here can be unpacked from here, as in a folder; the
+    // action shows only for the kinds the app can open.
+    val extractFor: (FileEntry) -> (() -> Unit)? = { entry ->
+        if (isExtractable(entry.name)) {
+            { viewModel.extractor.open(entry) }
+        } else {
+            null
+        }
+    }
     val snackbarState = remember { SnackbarHostState() }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     // Hoisted so switching layout or entering selection does not send the
@@ -296,8 +310,13 @@ fun SearchScreen(
                                             isSelected = entry.path in state.selected,
                                             selectionMode = state.inSelectionMode,
                                             onClick = {
-                                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                                                else onOpenFile(entry)
+                                                when {
+                                                    state.inSelectionMode -> viewModel.toggleSelection(entry.path)
+                                                    // As in a folder: an archive
+                                                    // asks about unpacking.
+                                                    isExtractable(entry.name) -> viewModel.extractor.open(entry)
+                                                    else -> onOpenFile(entry)
+                                                }
                                             },
                                             onLongClick = { viewModel.toggleSelection(entry.path) },
                                         )
@@ -328,6 +347,7 @@ fun SearchScreen(
                                                 visible = expandedPath == entry.path &&
                                                     !state.inSelectionMode,
                                                 onOpen = { onOpenFile(entry) },
+                                                onExtract = extractFor(entry),
                                             onOpenWith = { onOpenWith(entry.path) },
                                                 onCopyPath = { onCopyPath(entry.path) },
                                                 onShowInFolder = {
@@ -386,6 +406,7 @@ fun SearchScreen(
                                         InlineResultActions(
                                             visible = expandedPath == entry.path && !state.inSelectionMode,
                                             onOpen = { onOpenFile(entry) },
+                                            onExtract = extractFor(entry),
                                             onOpenWith = { onOpenWith(entry.path) },
                                             onCopyPath = { onCopyPath(entry.path) },
                                             onShowInFolder = {
@@ -413,6 +434,8 @@ fun SearchScreen(
             }
         }
     }
+
+    ExtractDialogHost(viewModel.extractor, volumes)
 
     RenameDialogHost(
         target = renameTarget,

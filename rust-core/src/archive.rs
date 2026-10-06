@@ -1,12 +1,15 @@
-//! Archives: zips made, listed and extracted, and 7z, RAR and tar archives
-//! - plain or compressed - extracted.
+//! Archives: zips made, and every kind the app opens - zip, 7z, RAR and tar,
+//! plain or compressed - listed and extracted.
 
 use crate::cancel::{CancelToken, ProgressListener};
 use crate::errors::{FileError, Result};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{AesMode, CompressionMethod, ZipArchive, ZipWriter};
@@ -21,32 +24,58 @@ pub struct ArchiveEntry {
     pub modified_ms: u64,
 }
 
-/// List a zip's contents without extracting it. Zips only: nothing in the app
-/// lists any other kind.
+/// List an archive's contents without extracting it - what extracting it
+/// would write, so it can be shown before anything is.
 ///
-/// Reads the index only, so an encrypted archive lists without a password -
-/// which is what the format allows, since a zip never encrypts its index. Done
-/// with the decrypting reader instead, listing a protected archive failed
-/// outright with "Password required to decrypt file", and the app had no way
-/// to show what was inside one it had just written.
+/// Every kind the app extracts. Names that extraction would skip - climbing
+/// out of the folder, absolute, or links - are left out here too, so the list
+/// is what will arrive, under the names it will arrive as.
+///
+/// A zip never encrypts its index, so it lists without a password; done with
+/// the decrypting reader instead, listing a protected zip failed outright. A
+/// 7z or RAR can encrypt its names as well, and one of those lists only with
+/// `password` - without it the answer is PasswordRequired.
 #[uniffi::export]
-pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
-    let file = File::open(&archive_path)
-        .map_err(|e| FileError::from_io(e, Path::new(&archive_path)))?;
-    let mut zip = ZipArchive::new(BufReader::new(file))?;
-
-    let mut entries = Vec::with_capacity(zip.len());
-    for i in 0..zip.len() {
-        let entry = zip.by_index_raw(i)?;
-        entries.push(ArchiveEntry {
-            name: entry.name().to_string(),
-            size: entry.size(),
-            compressed_size: entry.compressed_size(),
-            is_dir: entry.is_dir(),
-            modified_ms: entry.last_modified().map_or(0, zip_time_ms),
-        });
+pub fn archive_list(archive_path: String, password: Option<String>) -> Result<Vec<ArchiveEntry>> {
+    let path = Path::new(&archive_path);
+    match detect(path)? {
+        Format::Zip => list_zip(path),
+        Format::SevenZ => list_7z(path, password),
+        Format::Rar => list_rar(path, password),
+        Format::Tar => {
+            let file = File::open(path).map_err(|e| FileError::from_io(e, path))?;
+            list_tar(BufReader::new(file))
+        }
+        Format::Compressed(kind) => list_compressed(path, kind),
     }
-    Ok(entries)
+}
+
+/// One entry as listed: under the name extraction would write it as, or None
+/// for one extraction would skip.
+fn listed(name: &str, size: u64, compressed_size: u64, is_dir: bool, modified_ms: u64) -> Option<ArchiveEntry> {
+    let safe = sanitize_entry_name(name)?;
+    Some(ArchiveEntry {
+        name: safe.to_string_lossy().into_owned(),
+        size,
+        compressed_size,
+        is_dir,
+        modified_ms,
+    })
+}
+
+/// Milliseconds since the epoch for a calendar date and wall-clock time, read
+/// as UTC: the formats that store one this way store no zone with it.
+fn civil_ms(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> u64 {
+    // Days from 1970-01-01 to the date, by the usual civil-calendar formula.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    u64::try_from(seconds).map_or(0, |s| s * 1_000)
 }
 
 /// A zip timestamp as milliseconds since the epoch.
@@ -55,20 +84,31 @@ pub fn archive_list(archive_path: String) -> Result<Vec<ArchiveEntry>> {
 /// a wall-clock time and no zone, so this is that time read as UTC: formatted
 /// in UTC it shows what the archive says, which is all there is to know.
 fn zip_time_ms(time: zip::DateTime) -> u64 {
-    // Days from 1970-01-01 to the date, by the usual civil-calendar formula.
-    let (y, m, d) = (i64::from(time.year()), i64::from(time.month()), i64::from(time.day()));
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    civil_ms(
+        i64::from(time.year()),
+        i64::from(time.month()),
+        i64::from(time.day()),
+        i64::from(time.hour()),
+        i64::from(time.minute()),
+        i64::from(time.second()),
+    )
+}
 
-    let seconds = days * 86_400
-        + i64::from(time.hour()) * 3_600
-        + i64::from(time.minute()) * 60
-        + i64::from(time.second());
-    u64::try_from(seconds).map_or(0, |s| s * 1_000)
+/// An MS-DOS date and time, as RAR stores them, in milliseconds since the epoch.
+fn dos_time_ms(stamp: u32) -> u64 {
+    let (date, time) = (i64::from(stamp >> 16), i64::from(stamp & 0xFFFF));
+    civil_ms(
+        1980 + ((date >> 9) & 0x7F),
+        (date >> 5) & 0x0F,
+        date & 0x1F,
+        time >> 11,
+        (time >> 5) & 0x3F,
+        (time & 0x1F) * 2,
+    )
+}
+
+fn system_time_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Zip `sources` into `dest_path`. Directories go in recursively.
@@ -219,10 +259,16 @@ pub fn archive_extract(
     // leaves nothing behind.
     let format = detect(archive)?;
     let dest = Path::new(&dest_dir);
-    std::fs::create_dir_all(dest).map_err(|e| FileError::from_io(e, dest))?;
+    let job = Job {
+        dest,
+        listener: &listener,
+        cancel: &cancel,
+        made: RefCell::new(Vec::new()),
+        writing: RefCell::new(None),
+    };
+    job.make_dir(dest)?;
 
-    let job = Job { dest, listener: &listener, cancel: &cancel };
-    match format {
+    let result = match format {
         Format::Zip => extract_zip(archive, password, &job),
         Format::SevenZ => extract_7z(archive, password, &job),
         Format::Rar => extract_rar(archive, password, &job),
@@ -231,7 +277,11 @@ pub fn archive_extract(
             extract_tar(BufReader::new(file), &job)
         }
         Format::Compressed(kind) => extract_compressed(archive, kind, &job),
+    };
+    if let Err(e) = &result {
+        job.clean_up(matches!(e, FileError::WrongPassword | FileError::PasswordRequired));
     }
+    result
 }
 
 /// What an archive is, going by its first bytes rather than its name.
@@ -304,11 +354,15 @@ fn read_head(reader: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(head)
 }
 
-/// Where an extraction is going, and who is watching it.
+/// Where an extraction is going, who is watching it, and what it has made.
 struct Job<'a> {
     dest: &'a Path,
     listener: &'a Option<Arc<dyn ProgressListener>>,
     cancel: &'a Option<Arc<CancelToken>>,
+    /// Files and folders this extraction made, in the order it made them.
+    made: RefCell<Vec<PathBuf>>,
+    /// The file being written now, until it is finished.
+    writing: RefCell<Option<PathBuf>>,
 }
 
 impl Job<'_> {
@@ -316,6 +370,15 @@ impl Job<'_> {
     /// would land outside the destination.
     fn out_path(&self, name: &str) -> Option<PathBuf> {
         sanitize_entry_name(name).map(|rel| self.dest.join(rel))
+    }
+
+    /// Where a file named `name` is written: as [`Self::out_path`], but never
+    /// over anything already there. Extracting only ever went into a new,
+    /// empty folder; now it can go into one the user chose, where a file with
+    /// the same name is theirs. It stays, and the one from the archive gets a
+    /// number - "notes (1).txt" - as a clash does everywhere else in the app.
+    fn file_path(&self, name: &str) -> Option<PathBuf> {
+        self.out_path(name).map(|path| free_path(&path))
     }
 
     fn check(&self) -> Result<()> {
@@ -327,15 +390,79 @@ impl Job<'_> {
 
     /// A file written: count it and say so. `total` is 0 when not known.
     fn wrote(&self, done: u64, total: u64, path: &Path) {
+        self.writing.borrow_mut().take();
         if let Some(l) = self.listener {
             l.on_progress(done, total, path.to_string_lossy().into_owned());
         }
     }
+
+    /// Make `path` and whatever above it is missing, noting each folder made.
+    fn make_dir(&self, path: &Path) -> Result<()> {
+        let missing: Vec<PathBuf> = path
+            .ancestors()
+            .take_while(|p| std::fs::symlink_metadata(p).is_err())
+            .map(Path::to_path_buf)
+            .collect();
+        std::fs::create_dir_all(path).map_err(|e| FileError::from_io(e, path))?;
+        self.made.borrow_mut().extend(missing.into_iter().rev());
+        Ok(())
+    }
+
+    /// A file is about to be written at `path`: its parent made, and the file
+    /// noted, so a failure can take it away again.
+    fn start_file(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            self.make_dir(parent)?;
+        }
+        self.made.borrow_mut().push(path.to_path_buf());
+        *self.writing.borrow_mut() = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    /// After a failure. The file it cut short goes, always: half a file looks
+    /// like a whole one. Everything else this extraction made goes too when
+    /// the password was the problem, since none of it is right - a wrong one
+    /// decrypts into rubbish - and the retry must find the folder as it was,
+    /// or every file it writes lands beside the rubbish as "name (1)".
+    /// Otherwise the rest stays: part of a damaged archive is worth seeing.
+    fn clean_up(&self, everything: bool) {
+        if let Some(partial) = self.writing.borrow_mut().take() {
+            let _ = std::fs::remove_file(partial);
+        }
+        if everything {
+            for made in self.made.borrow().iter().rev() {
+                // Folders only once empty, which those made here are, once the
+                // files made in them are gone.
+                if made.is_dir() {
+                    let _ = std::fs::remove_dir(made);
+                } else {
+                    let _ = std::fs::remove_file(made);
+                }
+            }
+        }
+    }
 }
 
-fn make_dir(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(|e| FileError::from_io(e, path))
+/// `path` if nothing is there, else the first "name (n).ext" beside it that is
+/// free. Anything counts as there, a dangling link included: writing to a
+/// link would write wherever it points.
+fn free_path(path: &Path) -> PathBuf {
+    let taken = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    if !taken(path) {
+        return path.to_path_buf();
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    (1u32..)
+        .map(|n| parent.join(format!("{stem} ({n}){extension}")))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| path.to_path_buf())
 }
+
 
 /// Why copying one entry out stopped.
 enum CopyError {
@@ -347,10 +474,8 @@ enum CopyError {
 }
 
 /// Copy one entry's contents to `out`, telling a read failure from a write one.
-fn copy_entry(from: &mut dyn Read, out: &Path) -> std::result::Result<(), CopyError> {
-    if let Some(parent) = out.parent() {
-        make_dir(parent).map_err(CopyError::Write)?;
-    }
+fn copy_entry(job: &Job, from: &mut dyn Read, out: &Path) -> std::result::Result<(), CopyError> {
+    job.start_file(out).map_err(CopyError::Write)?;
     let file = File::create(out).map_err(|e| CopyError::Write(FileError::from_io(e, out)))?;
     let mut writer = BufWriter::new(file);
     let mut buffer = vec![0u8; 64 * 1024];
@@ -371,6 +496,24 @@ fn damaged(err: std::io::Error) -> FileError {
 }
 
 // --- Zip ------------------------------------------------------------------------
+
+fn list_zip(path: &Path) -> Result<Vec<ArchiveEntry>> {
+    let file = File::open(path).map_err(|e| FileError::from_io(e, path))?;
+    let mut zip = ZipArchive::new(BufReader::new(file))?;
+
+    let mut entries = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i)?;
+        entries.extend(listed(
+            entry.name(),
+            entry.size(),
+            entry.compressed_size(),
+            entry.is_dir(),
+            entry.last_modified().map_or(0, zip_time_ms),
+        ));
+    }
+    Ok(entries)
+}
 
 fn zip_is_encrypted(path: &Path) -> Result<bool> {
     let file = File::open(path).map_err(|e| FileError::from_io(e, path))?;
@@ -412,12 +555,11 @@ fn extract_zip(archive: &Path, password: Option<String>, job: &Job) -> Result<u6
         };
 
         if entry.is_dir() {
-            make_dir(&out_path)?;
+            job.make_dir(&out_path)?;
             continue;
         }
-        if let Some(parent) = out_path.parent() {
-            make_dir(parent)?;
-        }
+        let out_path = free_path(&out_path);
+        job.start_file(&out_path)?;
 
         let mut out = BufWriter::new(
             File::create(&out_path).map_err(|e| FileError::from_io(e, &out_path))?,
@@ -448,6 +590,30 @@ fn sevenz_is_encrypted(path: &Path) -> Result<bool> {
     }
 }
 
+fn list_7z(path: &Path, password: Option<String>) -> Result<Vec<ArchiveEntry>> {
+    let secret = match password.as_deref() {
+        Some(pw) => sevenz_rust2::Password::from(pw),
+        None => sevenz_rust2::Password::empty(),
+    };
+    let reader =
+        sevenz_rust2::ArchiveReader::open(path, secret).map_err(|e| sevenz_error(e, path))?;
+    Ok(reader
+        .archive()
+        .files
+        .iter()
+        // An anti-item marks a deletion in an update archive: nothing is written.
+        .filter(|f| !f.is_anti_item)
+        .filter_map(|f| {
+            let modified = if f.has_last_modified_date {
+                system_time_ms(SystemTime::from(f.last_modified_date))
+            } else {
+                0
+            };
+            listed(&f.name, f.size, f.compressed_size, f.is_directory, modified)
+        })
+        .collect())
+}
+
 fn extract_7z(archive: &Path, password: Option<String>, job: &Job) -> Result<u64> {
     let secret = match password.as_deref() {
         Some(pw) => sevenz_rust2::Password::from(pw),
@@ -474,13 +640,14 @@ fn extract_7z(archive: &Path, password: Option<String>, job: &Job) -> Result<u64
             return Ok(true);
         };
         if entry.is_directory {
-            if let Err(e) = make_dir(&out) {
+            if let Err(e) = job.make_dir(&out) {
                 stopped = Some(e);
                 return Ok(false);
             }
             return Ok(true);
         }
-        match copy_entry(data, &out) {
+        let out = free_path(&out);
+        match copy_entry(job, data, &out) {
             Ok(()) => {}
             // Handed back to the library, which knows whether the archive is
             // encrypted and so whether bad data means a bad password.
@@ -530,6 +697,31 @@ fn rar_is_encrypted(path: &Path) -> Result<bool> {
     Ok(false)
 }
 
+fn list_rar(path: &Path, password: Option<String>) -> Result<Vec<ArchiveEntry>> {
+    let has_password = password.is_some();
+    let opened = match password.as_deref() {
+        Some(pw) => unrar::Archive::with_password(path, pw),
+        None => unrar::Archive::new(path),
+    };
+    let listing = opened.open_for_listing().map_err(|e| rar_error(e, has_password))?;
+    let mut entries = Vec::new();
+    for entry in listing {
+        let entry = entry.map_err(|e| rar_error(e, has_password))?;
+        // Not written on extraction; see extract_rar.
+        if is_rar_link(&entry) {
+            continue;
+        }
+        entries.extend(listed(
+            &entry.filename.to_string_lossy(),
+            entry.unpacked_size,
+            0,
+            entry.is_directory(),
+            dos_time_ms(entry.file_time),
+        ));
+    }
+    Ok(entries)
+}
+
 fn extract_rar(archive: &Path, password: Option<String>, job: &Job) -> Result<u64> {
     let has_password = password.is_some();
     let opened = match password.as_deref() {
@@ -552,13 +744,12 @@ fn extract_rar(archive: &Path, password: Option<String>, job: &Job) -> Result<u6
         cursor = match out {
             None => header.skip(),
             Some(out) if entry.is_directory() => {
-                make_dir(&out)?;
+                job.make_dir(&out)?;
                 header.skip()
             }
             Some(out) => {
-                if let Some(parent) = out.parent() {
-                    make_dir(parent)?;
-                }
+                let out = free_path(&out);
+                job.start_file(&out)?;
                 let next = header.extract_to(&out);
                 if next.is_ok() {
                     done += 1;
@@ -597,54 +788,104 @@ fn rar_error(err: unrar::error::UnrarError, password_given: bool) -> FileError {
 
 // --- Tar, and single compressed files -------------------------------------------
 
+fn list_tar(reader: impl Read) -> Result<Vec<ArchiveEntry>> {
+    let mut tar = tar::Archive::new(reader);
+    let mut entries = Vec::new();
+    // Files listed so far, for the hard links among them: extraction copies
+    // one only from a file the archive itself holds, earlier in it.
+    let mut files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    for entry in tar.entries().map_err(damaged)? {
+        let entry = entry.map_err(damaged)?;
+        let kind = entry.header().entry_type();
+        let modified = entry.header().mtime().map_or(0, |s| s.saturating_mul(1_000));
+        let name = entry.path().map_err(damaged)?.to_string_lossy().into_owned();
+        let Some(rel) = sanitize_entry_name(&name) else { continue };
+
+        let item = if kind.is_dir() {
+            listed(&name, 0, 0, true, modified)
+        } else if kind.is_file() {
+            files.insert(rel);
+            listed(&name, entry.size(), 0, false, modified)
+        } else if kind.is_hard_link() {
+            let target = entry
+                .link_name()
+                .ok()
+                .flatten()
+                .and_then(|t| sanitize_entry_name(&t.to_string_lossy()));
+            if target.is_some_and(|t| files.contains(&t)) {
+                files.insert(rel);
+                listed(&name, 0, 0, false, modified)
+            } else {
+                None
+            }
+        } else {
+            // Symbolic links, devices, pipes: not written, so not listed.
+            None
+        };
+        entries.extend(item);
+    }
+    Ok(entries)
+}
+
 fn extract_tar(reader: impl Read, job: &Job) -> Result<u64> {
     let mut tar = tar::Archive::new(reader);
     let mut done = 0u64;
+    // Where each name in the archive was written by this extraction, which is
+    // not always where the name says: a file already there keeps its place.
+    let mut written: HashMap<PathBuf, PathBuf> = HashMap::new();
 
     for entry in tar.entries().map_err(damaged)? {
         job.check()?;
         let mut entry = entry.map_err(damaged)?;
         let kind = entry.header().entry_type();
         let name = entry.path().map_err(damaged)?.to_string_lossy().into_owned();
-        let Some(out) = job.out_path(&name) else { continue };
+        let Some(rel) = sanitize_entry_name(&name) else { continue };
 
         if kind.is_dir() {
-            make_dir(&out)?;
+            job.make_dir(&job.dest.join(&rel))?;
             continue;
         }
-        if kind.is_file() {
-            match copy_entry(&mut entry, &out) {
+        let out = if kind.is_file() {
+            let Some(out) = job.file_path(&name) else { continue };
+            match copy_entry(job, &mut entry, &out) {
                 Ok(()) => {}
                 Err(CopyError::Read(e)) => return Err(damaged(e)),
                 Err(CopyError::Write(e)) => return Err(e),
             }
+            out
         } else if kind.is_hard_link() {
             // A second name for a file unpacked earlier, which is how tar
             // stores a duplicate. Copied rather than linked - shared storage
-            // on a phone cannot hold a hard link - and only from inside the
-            // folder, like everything else.
+            // on a phone cannot hold a hard link - and only from a file this
+            // extraction wrote: never one that was in the folder already, and
+            // never from outside it.
             let target = entry.link_name().map_err(damaged)?;
-            let Some(from) = target.and_then(|t| job.out_path(&t.to_string_lossy())) else {
+            let Some(from) = target
+                .and_then(|t| sanitize_entry_name(&t.to_string_lossy()))
+                .and_then(|t| written.get(&t).cloned())
+            else {
                 continue;
             };
-            if !from.is_file() {
-                continue;
-            }
+            let Some(out) = job.file_path(&name) else { continue };
+            job.start_file(&out)?;
             std::fs::copy(&from, &out).map_err(|e| FileError::from_io(e, &out))?;
+            out
         } else {
             // Symbolic links, devices, pipes: not written.
             continue;
-        }
+        };
+        written.insert(rel, out.clone());
         done += 1;
         job.wrote(done, 0, &out);
     }
     Ok(done)
 }
 
-/// A gzip, bzip2, xz or zstd stream: a compressed tar, or one file on its own.
-fn extract_compressed(archive: &Path, kind: Compression, job: &Job) -> Result<u64> {
+/// The archive, decompressed as it is read.
+fn decompressed(archive: &Path, kind: Compression) -> Result<Box<dyn Read>> {
     let file = BufReader::new(File::open(archive).map_err(|e| FileError::from_io(e, archive))?);
-    let mut stream: Box<dyn Read> = match kind {
+    Ok(match kind {
         Compression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(file)),
         Compression::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(file)),
         Compression::Xz => Box::new(lzma_rust2::XzReader::new(file, true)),
@@ -652,7 +893,36 @@ fn extract_compressed(archive: &Path, kind: Compression, job: &Job) -> Result<u6
             ruzstd::decoding::StreamingDecoder::new(file)
                 .map_err(|e| FileError::Archive { detail: e.to_string() })?,
         ),
-    };
+    })
+}
+
+/// What a single compressed file comes out as: the archive's name without
+/// its compression extension.
+fn single_name(archive: &Path) -> String {
+    archive
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "file".into())
+}
+
+/// A compressed tar's entries, or the one file a compressed file holds. Its
+/// size is not known without decompressing it all, so it is listed as 0.
+fn list_compressed(archive: &Path, kind: Compression) -> Result<Vec<ArchiveEntry>> {
+    let mut stream = decompressed(archive, kind)?;
+    let head = read_head(&mut stream).map_err(damaged)?;
+    if is_tar(&head) {
+        return list_tar(std::io::Cursor::new(head).chain(stream));
+    }
+    let modified = std::fs::metadata(archive)
+        .and_then(|m| m.modified())
+        .map_or(0, system_time_ms);
+    Ok(listed(&single_name(archive), 0, 0, false, modified).into_iter().collect())
+}
+
+/// A gzip, bzip2, xz or zstd stream: a compressed tar, or one file on its own.
+fn extract_compressed(archive: &Path, kind: Compression, job: &Job) -> Result<u64> {
+    let mut stream = decompressed(archive, kind)?;
 
     // Looked at rather than trusted from the name: "backup.gz" is as often a
     // tar as "backup.tar.gz" is.
@@ -664,14 +934,9 @@ fn extract_compressed(archive: &Path, kind: Compression, job: &Job) -> Result<u6
     }
 
     // One file, named after the archive without its compression extension.
-    let name = archive
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "file".into());
-    let out = job.dest.join(name);
+    let out = free_path(&job.dest.join(single_name(archive)));
     job.check()?;
-    match copy_entry(&mut whole, &out) {
+    match copy_entry(job, &mut whole, &out) {
         Ok(()) => {}
         Err(CopyError::Read(e)) => return Err(damaged(e)),
         Err(CopyError::Write(e)) => return Err(e),

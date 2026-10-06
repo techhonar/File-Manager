@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.StorageVolume
-import com.filemanager.app.data.userMessage
 import com.filemanager.app.data.ftpd.FtpServerConfig
 import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
@@ -14,27 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import uniffi.filemanager_core.FileEntry
-import uniffi.filemanager_core.SortKey
-import uniffi.filemanager_core.SortOptions
 import java.io.File
-
-/**
- * Choosing which folder the server shares.
- *
- * Its own state rather than a path typed into a field: the path has to exist,
- * and a person typing /storage/emulated/0/DCIM by hand gets it wrong more
- * often than not - usually by guessing "sdcard" or a capital letter.
- */
-data class FolderPickerState(
-    val path: String,
-    val folders: List<FileEntry> = emptyList(),
-    val isLoading: Boolean = true,
-    /** False at a volume root. Going above one reaches directories the app
-     *  cannot read, which would look like an empty folder rather than a wall. */
-    val canGoUp: Boolean = false,
-    val error: String? = null,
-)
 
 data class FtpServerUiState(
     /** What the form currently shows, saved or not. */
@@ -87,7 +66,12 @@ class FtpServerViewModel(
     )
     val state: StateFlow<FtpServerUiState> = _state.asStateFlow()
 
+    private val folderPicker = FolderPicker(repository, volumes.map { it.path }, viewModelScope)
+
     init {
+        viewModelScope.launch {
+            folderPicker.state.collect { picker -> _state.update { it.copy(picker = picker) } }
+        }
         viewModelScope.launch {
             // The server can also be stopped from its notification, so the
             // screen follows the controller rather than assuming its own
@@ -150,78 +134,17 @@ class FtpServerViewModel(
         val start = _state.value.draft.rootPath.takeIf { File(it).isDirectory }
             ?: volumes.firstOrNull()?.path
             ?: return
-        browseTo(start)
+        folderPicker.open(start)
     }
 
-    fun pickerOpen(path: String) = browseTo(path)
+    fun pickerOpen(path: String) = folderPicker.enter(path)
 
-    fun pickerUp() {
-        val current = _state.value.picker ?: return
-        if (!current.canGoUp) return
-        browseTo(File(current.path).parent ?: return)
+    fun pickerUp() = folderPicker.up()
+
+    fun pickerConfirm() {
+        val chosen = folderPicker.choose() ?: return
+        _state.update { it.copy(draft = it.draft.copy(rootPath = chosen)) }
     }
 
-    fun pickerConfirm() = _state.update { current ->
-        val chosen = current.picker?.path ?: return@update current
-        current.copy(draft = current.draft.copy(rootPath = chosen), picker = null)
-    }
-
-    fun pickerCancel() = _state.update { it.copy(picker = null) }
-
-    private fun browseTo(path: String) {
-        _state.update {
-            it.copy(
-                picker = FolderPickerState(
-                    path = path,
-                    isLoading = true,
-                    canGoUp = canGoUp(path),
-                ),
-            )
-        }
-        viewModelScope.launch {
-            runCatching { repository.list(path, showHidden = false, sort = FOLDER_SORT) }
-                .onSuccess { entries ->
-                    _state.update { current ->
-                        // Ignore a listing that came back after the user moved
-                        // on, which over a slow card is not hypothetical.
-                        if (current.picker?.path != path) return@update current
-                        current.copy(
-                            picker = current.picker.copy(
-                                // Only folders. This picks somewhere to serve
-                                // from, and listing the files as well would
-                                // bury the folders in a full camera roll.
-                                folders = entries.filter { it.isDir },
-                                isLoading = false,
-                                error = null,
-                            ),
-                        )
-                    }
-                }
-                .onFailure { failure ->
-                    _state.update { current ->
-                        if (current.picker?.path != path) return@update current
-                        current.copy(
-                            picker = current.picker.copy(
-                                isLoading = false,
-                                // userMessage: this listing comes from the
-                                // core, whose errors often have an empty
-                                // message - and `?:` catches null, not "".
-                                error = failure.userMessage("Could not open that folder"),
-                            ),
-                        )
-                    }
-                }
-        }
-    }
-
-    /** False at a volume root, and anywhere outside one. */
-    private fun canGoUp(path: String): Boolean {
-        val normalised = File(path).absolutePath
-        if (volumes.any { it.path == normalised }) return false
-        return volumes.any { normalised.startsWith(it.path + "/") }
-    }
-
-    private companion object {
-        val FOLDER_SORT = SortOptions(SortKey.NAME, descending = false, dirsFirst = true)
-    }
+    fun pickerCancel() = folderPicker.close()
 }

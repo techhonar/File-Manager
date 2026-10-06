@@ -62,6 +62,15 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.StorageViewModel
 import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileEntry
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import uniffi.filemanager_core.formatSize
 
 /**
@@ -165,10 +174,14 @@ fun StorageScreen(
                         isScanning = state.isScanningDuplicates,
                         progress = state.duplicateProgress,
                         groups = state.duplicates,
+                        marks = state.duplicateMarks,
+                        root = viewModel.root,
                         reclaimable = state.reclaimable,
                         onScan = viewModel::scanDuplicates,
                         onCancel = viewModel::cancelScan,
-                        onClean = viewModel::deleteDuplicates,
+                        onToggle = viewModel::toggleDuplicate,
+                        onTrash = viewModel::trashDuplicates,
+                        onOpen = onOpenFile,
                     )
                 }
             }
@@ -201,11 +214,19 @@ private fun DuplicateSection(
     isScanning: Boolean,
     progress: String,
     groups: List<DuplicateGroup>,
+    /** The copies ticked for the trash in each set, by its hash. */
+    marks: Map<String, Set<String>>,
+    /** Where the scan looked, which paths are shown from. */
+    root: String,
     reclaimable: ULong,
     onScan: () -> Unit,
     onCancel: () -> Unit,
-    onClean: (DuplicateGroup) -> Unit,
+    onToggle: (hash: String, path: String) -> Unit,
+    onTrash: (DuplicateGroup) -> Unit,
+    onOpen: (FileEntry) -> Unit,
 ) {
+    // Sets on show. Each is several rows now, so they come twenty at a time.
+    var shown by remember(groups.size) { mutableIntStateOf(GROUPS_AT_A_TIME) }
     // AnimatedContent rather than a cross-fade: the three states are
     // different heights, and the card should grow into the next one
     // rather than jump.
@@ -258,26 +279,19 @@ private fun DuplicateSection(
                     )
                     Spacer(Modifier.height(16.dp))
 
-                    groups.take(20).forEach { group ->
-                        Column(Modifier.padding(vertical = 10.dp)) {
-                            Text(
-                                text = group.files.first().name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = "${group.files.size} copies  ·  ${formatSize(group.size)} each",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { onClean(group) }, shape = OneUi.PillShape) {
-                                    Text("Keep one, trash ${group.files.size - 1}")
-                                }
-                            }
+                    groups.take(shown).forEach { group ->
+                        DuplicateGroupCard(
+                            group = group,
+                            marked = marks[group.hash].orEmpty(),
+                            root = root,
+                            onToggle = { path -> onToggle(group.hash, path) },
+                            onTrash = { onTrash(group) },
+                            onOpen = onOpen,
+                        )
+                    }
+                    if (groups.size > shown) {
+                        TextButton(onClick = { shown += GROUPS_AT_A_TIME }) {
+                            Text("Show ${minOf(GROUPS_AT_A_TIME, groups.size - shown)} more")
                         }
                     }
                 }
@@ -366,3 +380,94 @@ private fun StorageCard(summary: StorageSummary) {
         StorageLegend(summary.byCategory)
     }
 }
+
+private const val GROUPS_AT_A_TIME = 20
+
+/**
+ * One set of identical files: every copy, where it is, and a tick for each one
+ * to go. The oldest starts unticked, as the one kept when nothing is changed.
+ */
+@Composable
+private fun DuplicateGroupCard(
+    group: DuplicateGroup,
+    marked: Set<String>,
+    root: String,
+    onToggle: (String) -> Unit,
+    onTrash: () -> Unit,
+    onOpen: (FileEntry) -> Unit,
+) {
+    Column(Modifier.padding(vertical = 10.dp)) {
+        Text(
+            text = "${group.files.size} copies  ·  ${formatSize(group.size)} each",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        group.files.forEach { file ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle(file.path) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = file.path in marked, onCheckedChange = { onToggle(file.path) })
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // Where it is: the whole point of choosing between copies
+                    // that are otherwise the same.
+                    Text(
+                        text = "${shownFolder(file.path, root)}  ·  ${shownDate(file.modifiedMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // To look before choosing; a tap on the row ticks it.
+                IconButton(onClick = { onOpen(file) }) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, "Open ${file.name}")
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        val count = group.files.count { it.path in marked }
+        val all = count == group.files.size
+        Button(
+            onClick = onTrash,
+            enabled = count > 0,
+            shape = OneUi.PillShape,
+            colors = if (all) {
+                ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                )
+            } else {
+                ButtonDefaults.buttonColors()
+            },
+        ) {
+            Text(
+                when {
+                    count == 0 -> "Tick the copies to trash"
+                    all -> "Trash all $count copies"
+                    else -> "Trash $count, keep ${group.files.size - count}"
+                },
+            )
+        }
+    }
+}
+
+/** The folder [path] is in, from the top of the storage: "Internal storage/DCIM/Camera". */
+private fun shownFolder(path: String, root: String): String {
+    val folder = path.substringBeforeLast('/', "")
+    if (folder != root && !folder.startsWith("$root/")) return folder
+    val rest = folder.removePrefix(root).trim('/')
+    return if (rest.isEmpty()) "Internal storage" else "Internal storage/$rest"
+}
+
+private fun shownDate(modifiedMs: ULong): String =
+    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(modifiedMs.toLong()))
