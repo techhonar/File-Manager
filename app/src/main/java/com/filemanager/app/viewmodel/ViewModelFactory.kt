@@ -90,6 +90,9 @@ class ViewModelFactory(
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
             RecentViewModel(repository, clipboard, primaryPath, settings) as T
 
+        modelClass.isAssignableFrom(ExtractViewModel::class.java) ->
+            ExtractViewModel(repository, volumes.map { File(it.path).absolutePath }) as T
+
         modelClass.isAssignableFrom(TrashViewModel::class.java) ->
             TrashViewModel(repository) as T
 
