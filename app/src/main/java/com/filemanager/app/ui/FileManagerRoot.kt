@@ -37,6 +37,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,8 +70,8 @@ import com.filemanager.app.data.ftpd.FtpService
 import com.filemanager.app.data.external.Incoming
 import com.filemanager.app.data.external.accepts
 import com.filemanager.app.data.external.mimeTypeOf
-import com.filemanager.app.data.install.isBundle
-import com.filemanager.app.data.viewer.viewerKind
+import com.filemanager.app.data.Opening
+import com.filemanager.app.data.openingFor
 import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.ui.screens.FtpServerScreen
 import com.filemanager.app.ui.screens.RemoteBrowserScreen
@@ -84,6 +86,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.filemanager.app.data.ShareFiles
 import com.filemanager.app.data.StorageVolumes
+import com.filemanager.app.ui.components.ExtractDialogHost
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.screens.AboutScreen
 import com.filemanager.app.ui.screens.BrowserScreen
@@ -97,6 +100,7 @@ import com.filemanager.app.ui.screens.ThemeScreen
 import com.filemanager.app.ui.screens.TrashScreen
 import com.filemanager.app.ui.screens.ViewerScreen
 import com.filemanager.app.viewmodel.BrowserViewModel
+import com.filemanager.app.viewmodel.ExtractViewModel
 import com.filemanager.app.ui.screens.FavoritesScreen
 import com.filemanager.app.viewmodel.FavoritesViewModel
 import com.filemanager.app.viewmodel.HomeViewModel
@@ -238,22 +242,40 @@ fun FileManagerRoot(
         )
     }
 
-    // A split-APK bundle is installed here rather than handed on: no app on
-    // the phone opens one, so handing it on did nothing at all.
-    // Text, PDFs and Word documents open in the app's own viewer, which can
-    // still hand them to another app.
-    val openPath: (String) -> Unit = { path ->
-        when {
-            // Choosing for another app: a tap sends the file there instead.
-            picking != null ->
-                if (accepts(picking.types, mimeTypeOf(path.substringAfterLast('/')))) {
-                    onPick(path)
-                } else {
-                    toast(context, "The app you're choosing for can't take this kind of file")
-                }
-            isBundle(path) -> app.bundleInstaller.install(path)
-            viewerKind(path.substringAfterLast('/')) != null -> navController.navigate(Routes.viewer(path))
-            else -> openWithExternalApp(context, path)
+    // Extracting an archive opened from a screen with no extract of its own:
+    // see ExtractViewModel. How it went is said on a snackbar of its own, over
+    // whichever screen it was opened from.
+    val archives: ExtractViewModel = viewModel(factory = factory)
+    val archiveSnackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // A split-APK bundle is installed here, and an archive asks about being
+    // extracted, as it does in a folder: handed on, either did nothing at all
+    // on a phone with no app that takes one. Text, PDFs and Word documents
+    // open in the app's own viewer, which can still hand them to another app.
+    val openPath: (String) -> Unit = open@{ path ->
+        val name = path.substringAfterLast('/')
+        // Choosing for another app: a tap sends the file there instead.
+        if (picking != null) {
+            if (accepts(picking.types, mimeTypeOf(name))) {
+                onPick(path)
+            } else {
+                toast(context, "The app you're choosing for can't take this kind of file")
+            }
+            return@open
+        }
+        when (openingFor(name)) {
+            Opening.INSTALL -> app.bundleInstaller.install(path)
+            Opening.EXTRACT -> scope.launch {
+                runCatching { app.repository.entriesFor(listOf(path)) }.getOrNull()
+                    ?.singleOrNull()
+                    ?.let(archives.extractor::open)
+            }
+            Opening.VIEW -> navController.navigate(Routes.viewer(path))
+            // Said, rather than nothing happening at all.
+            Opening.HAND_ON -> if (!openWithExternalApp(context, path)) {
+                toast(context, "No app can open this file")
+            }
         }
     }
     val openFile: (FileEntry) -> Unit = { entry -> openPath(entry.path) }
@@ -277,7 +299,6 @@ fun FileManagerRoot(
             toast(context, "Path copied")
         }
     }
-    val scope = rememberCoroutineScope()
 
     /**
      * Share files, expanding any folder into the files it contains.
@@ -337,6 +358,13 @@ fun FileManagerRoot(
         onCancel = app.updater::cancel,
         onDismiss = app.updater::dismiss,
         onRetry = app.updater::update,
+    )
+
+    ExtractDialogHost(
+        archives.extractor,
+        volumes,
+        archiveSnackbar,
+        onShowFolder = { navController.navigate(Routes.browse(it)) },
     )
 
     LaunchedEffect(openFolder) {
@@ -650,6 +678,14 @@ fun FileManagerRoot(
                     .onSizeChanged { pickBarHeight = with(density) { it.height.toDp() } },
             )
         }
+
+        SnackbarHost(
+            archiveSnackbar,
+            Modifier
+                .fillMaxSize()
+                .wrapContentHeight(Alignment.Bottom)
+                .navigationBarsPadding(),
+        )
     }
 }
 
