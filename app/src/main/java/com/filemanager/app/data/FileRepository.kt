@@ -38,7 +38,9 @@ import uniffi.filemanager_core.largestFiles
 import uniffi.filemanager_core.listDir
 import uniffi.filemanager_core.recentFiles
 import uniffi.filemanager_core.storageSummary
+import uniffi.filemanager_core.trashDelete
 import uniffi.filemanager_core.trashEmpty
+import uniffi.filemanager_core.trashEntries
 import uniffi.filemanager_core.trashList
 import uniffi.filemanager_core.trashMoveMany
 import uniffi.filemanager_core.trashPurgeExpired
@@ -407,6 +409,46 @@ class FileRepository(
 
     suspend fun restoreFromTrash(id: String): String =
         withContext(io) { trashRestore(trashDir, id) }
+
+    /** Permanently delete one trashed item. */
+    suspend fun deleteFromTrash(id: String) = withContext(io) { trashDelete(trashDir, id) }
+
+    /**
+     * The trash's items, each with the entry its row draws: the kind it is,
+     * from its name; the day it was deleted as its date, as One UI's trash
+     * dates them; and the copy in the trash as its path, which is what a
+     * photo's thumbnail is read from.
+     */
+    suspend fun trashRows(): List<Pair<TrashItem, FileEntry>> = withContext(io) {
+        val items = trashList(trashDir, TRASH_RETENTION_DAYS)
+        // trash_entries lists the same items with their kinds; matched by
+        // where each came from and when it went, which no two share.
+        val kinds = trashEntries(trashDir, TRASH_RETENTION_DAYS)
+            .associate { (it.path to it.modifiedMs) to it.category }
+        items.map { item ->
+            item to FileEntry(
+                name = item.name,
+                path = trashedPath(item.id),
+                size = item.size,
+                isDir = item.isDir,
+                isHidden = false,
+                modifiedMs = item.deletedAtMs,
+                category = kinds[item.originalPath to item.deletedAtMs]
+                    ?: if (item.isDir) FileCategory.DIRECTORY else FileCategory.OTHER,
+            )
+        }
+    }
+
+    /**
+     * Where the core keeps a trashed item: `files/<id>` in the trash - see
+     * trash_layout in trash.rs. Renamed there, it keeps its own last-modified
+     * time and content, which is what Details and a thumbnail read.
+     */
+    fun trashedPath(id: String): String = File(File(trashDir, "files"), id).path
+
+    /** When each trashed item was last changed, before it was deleted. */
+    suspend fun trashedModifiedMs(ids: List<String>): List<Long> =
+        withContext(io) { ids.map { File(trashedPath(it)).lastModified() } }
 
     suspend fun restoreAll(ids: List<String>) = withContext(io) {
         ids.forEach { trashRestore(trashDir, it) }

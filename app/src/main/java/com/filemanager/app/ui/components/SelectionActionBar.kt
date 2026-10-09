@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.MoreVert
@@ -32,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,19 +60,13 @@ fun SelectionActionBar(
     onShare: (() -> Unit)? = null,
     more: List<MoreAction> = emptyList(),
 ) {
-    // White on the light page, with a shadow under it; lifted a step above the
-    // cards in dark mode, as One UI's is, where no shadow shows against black.
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val barColor = if (dark) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+    val barColor = floatingBarColor()
 
-    Surface(
+    FloatingBar(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        shape = OneUi.GroupShape,
-        color = barColor,
-        shadowElevation = 6.dp,
     ) {
         Row(Modifier.padding(horizontal = 4.dp, vertical = 6.dp)) {
             onMove?.let { BarAction(Icons.AutoMirrored.Outlined.DriveFileMove, "Move", it) }
@@ -107,6 +103,52 @@ fun SelectionActionBar(
             }
         }
     }
+}
+
+/** One action on a [CompactActionBar]. */
+class BarItem(val icon: ImageVector, val label: String, val onClick: () -> Unit)
+
+/**
+ * A few actions on a pill floating over the bottom, as wide as they need
+ * rather than the screen: One UI's bar for a list with only a handful of
+ * things to do, as the trash has.
+ */
+@Composable
+fun CompactActionBar(items: List<BarItem>, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        FloatingBar {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                items.forEach { BarActionContent(it.icon, it.label, it.onClick, Modifier.width(76.dp)) }
+            }
+        }
+    }
+}
+
+/**
+ * White on the light page, with a shadow under it; lifted a step above the
+ * cards in dark mode, as One UI's is, where no shadow shows against black.
+ */
+@Composable
+private fun floatingBarColor(): Color {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+}
+
+@Composable
+private fun FloatingBar(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Surface(
+        modifier = modifier,
+        shape = OneUi.GroupShape,
+        color = floatingBarColor(),
+        shadowElevation = 6.dp,
+        content = content,
+    )
 }
 
 /** An equal share of the bar's width, so the five line up however wide the phone is. */
