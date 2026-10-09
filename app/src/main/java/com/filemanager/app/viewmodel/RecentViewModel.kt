@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.FileEntry
+import java.io.File
 
 data class RecentState(
     val entries: List<FileEntry> = emptyList(),
@@ -40,6 +42,10 @@ class RecentViewModel(
     private val clipboard: FileClipboard,
     private val rootPath: String,
     private val settings: AppSettings,
+    /** Favourites and pins, which a rename has to carry to the new name. */
+    private val paths: PathPrefs,
+    /** See BrowserViewModel: passed in so no view model holds a Context. */
+    ownerAppOf: suspend (String) -> String? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -48,6 +54,12 @@ class RecentViewModel(
     val state: StateFlow<RecentState> = _state.asStateFlow()
 
     private var scan: CancelToken? = null
+
+    /** The details sheet, opened from the selection's More menu. */
+    val details = DetailsController(repository, ownerAppOf, viewModelScope)
+
+    /** Which paths are favourites, so the menu can offer the opposite. */
+    val favorites: StateFlow<Set<String>> = paths.favorites
 
     init {
         refresh()
@@ -142,6 +154,46 @@ class RecentViewModel(
                 .onFailure { e ->
                     _state.update { it.copy(message = e.userMessage("Could not delete")) }
                 }
+        }
+    }
+
+    /** Favourite the selection, or unfavourite it when it all is already. */
+    fun toggleFavorite() {
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+        paths.toggleFavorite(selected)
+        val message = if (selected.all { paths.isFavorite(it) }) "Added to favourites" else "Removed from favourites"
+        _state.update { it.copy(selected = emptySet(), selectionActive = false, message = message) }
+    }
+
+    fun rename(path: String, newName: String) {
+        viewModelScope.launch {
+            val newPath = File(File(path).parentFile, newName).absolutePath
+            val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
+            if (!ok) {
+                // Only claim a clash when there is one: a rename can also be
+                // refused for want of permission.
+                val message = if (File(newPath).exists()) {
+                    "A file named \"$newName\" already exists"
+                } else {
+                    "Could not rename \"${File(path).name}\""
+                }
+                _state.update { it.copy(message = message) }
+                return@launch
+            }
+            paths.move(path, newPath)
+            // Swapped in where it was: a rename leaves when a file was last
+            // changed alone, so it keeps its place in the list.
+            val renamed = runCatching { repository.entriesFor(listOf(newPath)) }.getOrNull()?.firstOrNull()
+            _state.update { current ->
+                current.copy(
+                    entries = if (renamed != null) {
+                        current.entries.map { if (it.path == path) renamed else it }
+                    } else {
+                        current.entries.filterNot { it.path == path }
+                    },
+                )
+            }
         }
     }
 

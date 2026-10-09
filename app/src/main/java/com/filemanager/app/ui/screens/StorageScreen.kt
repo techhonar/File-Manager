@@ -13,7 +13,6 @@ import androidx.compose.ui.draw.alpha
 import uniffi.filemanager_core.StorageSummary
 import kotlin.math.roundToInt
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,7 +27,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,6 +70,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import uniffi.filemanager_core.formatSize
+import com.filemanager.app.ui.components.selectionTitle
+import com.filemanager.app.ui.components.CancelSelection
 
 /**
  * Storage analysis: the usage breakdown, an on-demand duplicate scan, then
@@ -104,7 +104,11 @@ fun StorageScreen(
     OneUiScreen(
         title = if (state.inSelectionMode) {
             // The figure is the point of the screen, so it goes in the title.
-            "${state.selected.size} selected  ·  ${formatSize(state.selectedBytes)}"
+            if (state.selected.isEmpty()) {
+                selectionTitle(0)
+            } else {
+                "${selectionTitle(state.selected.size)}  ·  ${formatSize(state.selectedBytes)}"
+            }
         } else {
             "Storage"
         },
@@ -112,17 +116,12 @@ fun StorageScreen(
         snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
             if (state.inSelectionMode) {
-                IconButton(onClick = viewModel::clearSelection) {
-                    Icon(Icons.Default.Close, "Cancel selection")
-                }
+                SelectAllToggle(allSelected = state.allSelected, onToggle = viewModel::toggleSelectAll)
             }
         },
         actions = {
             if (state.inSelectionMode) {
-                SelectAllToggle(
-                    allSelected = state.allSelected,
-                    onToggle = viewModel::toggleSelectAll,
-                )
+                CancelSelection(onCancel = viewModel::clearSelection)
             } else if (state.largest.isNotEmpty()) {
                 IconButton(onClick = viewModel::enterSelectionMode) {
                     Icon(Icons.Default.SelectAll, "Select items")
@@ -130,10 +129,10 @@ fun StorageScreen(
             }
         },
         bottomBar = {
-            AnimatedBottomBar(visible = state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 SelectionActionBar(
-                    onDelete = viewModel::deleteSelection,
                     onShare = { onShare(state.selected.toList()) },
+                    onDelete = viewModel::deleteSelection,
                 )
             }
         },

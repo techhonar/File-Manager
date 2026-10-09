@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +43,13 @@ import com.filemanager.app.ui.components.ViewModeMenu
 import com.filemanager.app.viewmodel.RecentViewModel
 import com.filemanager.app.viewmodel.ViewMode
 import uniffi.filemanager_core.FileEntry
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.filemanager.app.ui.components.selectionTitle
+import com.filemanager.app.ui.components.selectionMoreActions
+import com.filemanager.app.ui.components.DetailsDialogHost
+import com.filemanager.app.ui.components.RenameDialog
+import com.filemanager.app.ui.components.CancelSelection
 
 /** Everything modified in the last week, newest first, and actionable. */
 @Composable
@@ -54,9 +60,16 @@ fun RecentScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    onOpenWith: (String) -> Unit = {},
+    /** The folder a file is in, with the file marked. */
+    onShowInFolder: (String) -> Unit = {},
+    /** Puts files on the clipboard, for pasting into another app. */
+    onCopyToClipboard: (List<String>) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
+    val favorites by viewModel.favorites.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     // Out here, so the place in the list outlasts the pane swapping in and
     // out below it.
     val listState = rememberLazyListState()
@@ -76,28 +89,21 @@ fun RecentScreen(
     }
 
     OneUiScreen(
-        title = if (state.inSelectionMode) "${state.selected.size} selected" else "Recent files",
+        title = if (state.inSelectionMode) selectionTitle(state.selected.size) else "Recent files",
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
-            IconButton(
-                onClick = {
-                    if (state.inSelectionMode) viewModel.clearSelection() else onNavigateBack()
-                },
-            ) {
-                Icon(
-                    if (state.inSelectionMode) Icons.Default.Close
-                    else Icons.AutoMirrored.Filled.ArrowBack,
-                    if (state.inSelectionMode) "Cancel selection" else "Back",
-                )
+            if (state.inSelectionMode) {
+                SelectAllToggle(allSelected = state.allSelected, onToggle = viewModel::toggleSelectAll)
+            } else {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
             }
         },
         actions = {
             if (state.inSelectionMode) {
-                SelectAllToggle(
-                    allSelected = state.allSelected,
-                    onToggle = viewModel::toggleSelectAll,
-                )
+                CancelSelection(onCancel = viewModel::clearSelection)
             } else if (state.entries.isNotEmpty()) {
                 ViewModeMenu(current = state.viewMode, onSelect = viewModel::setViewMode)
                 IconButton(onClick = viewModel::enterSelectionMode) {
@@ -106,12 +112,29 @@ fun RecentScreen(
             }
         },
         bottomBar = {
-            AnimatedBottomBar(visible = state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 SelectionActionBar(
-                    onDelete = viewModel::deleteSelection,
-                    onCopy = viewModel::copySelection,
                     onMove = viewModel::cutSelection,
+                    onCopy = viewModel::copySelection,
                     onShare = { onShare(state.selected.toList()) },
+                    onDelete = viewModel::deleteSelection,
+                    more = selectionMoreActions(
+                        selected = state.entries.filter { it.path in state.selected },
+                        allFavorite = state.selected.all { it in favorites },
+                        onCopyToClipboard = {
+                            onCopyToClipboard(state.selected.toList())
+                            viewModel.clearSelection()
+                        },
+                        onDetails = viewModel.details::show,
+                        onRename = { renameTarget = it },
+                        onFavorite = viewModel::toggleFavorite,
+                        onOpenWith = { onOpenWith(it.path) },
+                        // Recent files come from all over the phone.
+                        onShowInFolder = {
+                            viewModel.clearSelection()
+                            onShowInFolder(it.path)
+                        },
+                    ),
                 )
             }
         },
@@ -202,4 +225,16 @@ fun RecentScreen(
             }
         }
     }
+
+    DetailsDialogHost(viewModel.details, onShare = { onShare(listOf(it)) })
+
+    RenameDialog(
+        target = renameTarget,
+        onRename = { path, name ->
+            viewModel.rename(path, name)
+            viewModel.clearSelection()
+            renameTarget = null
+        },
+        onDismiss = { renameTarget = null },
+    )
 }

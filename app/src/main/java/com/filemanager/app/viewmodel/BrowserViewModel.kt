@@ -26,20 +26,6 @@ import uniffi.filemanager_core.SortOptions
 import java.io.File
 
 /** What the browser screen renders. */
-/**
- * The parts of a file's details that have to be fetched.
- *
- * Everything else comes straight off the FileEntry; these three need either a
- * subtree walk or a MediaStore query, so the sheet shows what it has and fills
- * these in when they land.
- */
-data class FileDetails(
-    val folderBytes: ULong? = null,
-    val fileCount: ULong? = null,
-    val folderCount: ULong? = null,
-    val ownerApp: String? = null,
-)
-
 /** How the file list is laid out. */
 enum class ViewMode {
     /** Icon, name, and a single quiet line of date and size. */
@@ -72,10 +58,6 @@ data class BrowserState(
      * avoid.
      */
     val highlightPath: String? = null,
-    /** Set while the details sheet is open. */
-    val detailsTarget: FileEntry? = null,
-    /** Null until the walk and the MediaStore lookup come back. */
-    val details: FileDetails? = null,
     /** Paths the user has ticked. Empty means normal (non-selection) mode. */
     val selected: Set<String> = emptySet(),
     /**
@@ -331,35 +313,8 @@ class BrowserViewModel(
         _state.update { it.copy(viewMode = mode) }
     }
 
-    fun showDetails(entry: FileEntry) {
-        _state.update { it.copy(detailsTarget = entry, details = null) }
-
-        viewModelScope.launch {
-            // One walk covers size and contents; tree_stats returns both, so
-            // asking for them separately would traverse twice.
-            val stats = if (entry.isDir) {
-                runCatching { repository.stats(listOf(entry.path)) }.getOrNull()
-            } else {
-                null
-            }
-            val owner = runCatching { ownerAppOf(entry.path) }.getOrNull()
-
-            _state.update { current ->
-                // Discard a result that arrives after the sheet moved on.
-                if (current.detailsTarget?.path != entry.path) return@update current
-                current.copy(
-                    details = FileDetails(
-                        folderBytes = stats?.totalBytes,
-                        fileCount = stats?.fileCount,
-                        folderCount = stats?.dirCount,
-                        ownerApp = owner,
-                    ),
-                )
-            }
-        }
-    }
-
-    fun dismissDetails() = _state.update { it.copy(detailsTarget = null, details = null) }
+    /** The details sheet, opened from the selection's More menu. */
+    val details = DetailsController(repository, ownerAppOf, viewModelScope)
 
     /** Clears the marker once it has been shown for long enough to notice. */
     fun clearHighlight() = _state.update { it.copy(highlightPath = null) }

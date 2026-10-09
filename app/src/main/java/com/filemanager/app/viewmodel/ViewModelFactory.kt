@@ -79,6 +79,7 @@ class ViewModelFactory(
                 downloadsPath = StorageVolumes.downloadsPath(),
                 paths = paths,
                 session = requireNotNull(searchSession) { "searchSession not supplied" },
+                ownerAppOf = ownerAppOf,
             ) as T
 
         modelClass.isAssignableFrom(StorageViewModel::class.java) ->
@@ -88,7 +89,7 @@ class ViewModelFactory(
             FavoritesViewModel(repository, paths, settings, StorageVolumes::isMounted) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
-            RecentViewModel(repository, clipboard, primaryPath, settings) as T
+            RecentViewModel(repository, clipboard, primaryPath, settings, paths, ownerAppOf) as T
 
         modelClass.isAssignableFrom(ExtractViewModel::class.java) ->
             ExtractViewModel(repository, volumes.map { File(it.path).absolutePath }) as T

@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -88,8 +87,8 @@ fun FileGridCell(
             }
 
             if (selectionMode) {
-                Box(Modifier.fillMaxSize().padding(4.dp), Alignment.TopStart) {
-                    Checkbox(checked = isSelected, onCheckedChange = { onClick() })
+                Box(Modifier.fillMaxSize().padding(8.dp), Alignment.TopStart) {
+                    SelectionCheck(checked = isSelected, overImage = true)
                 }
             }
         }

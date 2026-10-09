@@ -8,11 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
@@ -27,20 +25,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.NoteAdd
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
-import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarOutline
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sort
@@ -54,10 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -67,21 +50,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
 import com.filemanager.app.data.viewer.ViewerKind
 import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.CompressDialog
-import com.filemanager.app.ui.components.DetailsDialog
 import com.filemanager.app.viewmodel.ViewMode
 import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.freeName
@@ -104,6 +84,12 @@ import com.filemanager.app.viewmodel.BrowserViewModel
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.SortKey
 import uniffi.filemanager_core.SortOptions
+import com.filemanager.app.ui.components.selectionTitle
+import com.filemanager.app.ui.components.selectionMoreActions
+import com.filemanager.app.ui.components.MoreAction
+import com.filemanager.app.ui.components.DetailsDialogHost
+import com.filemanager.app.ui.components.RenameDialog
+import com.filemanager.app.ui.components.CancelSelection
 
 /**
  * The folder browser.
@@ -121,6 +107,8 @@ fun BrowserScreen(
     onShare: (List<String>) -> Unit,
     onOpenWith: (String) -> Unit,
     onNavigateBack: () -> Unit,
+    /** Puts files on the clipboard, for pasting into another app. */
+    onCopyToClipboard: (List<String>) -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     // Choosing a file for another app, where tapping an archive picks it
@@ -204,19 +192,13 @@ fun BrowserScreen(
     // file was ticked - taking its scroll position with it and dropping the
     // user back at the top of the folder.
     OneUiScreen(
-        title = if (state.inSelectionMode) {
-            "${state.selected.size} selected"
-        } else {
-            folderName
-        },
+        title = if (state.inSelectionMode) selectionTitle(state.selected.size) else folderName,
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
         titleState = titleState,
         navigationIcon = {
             if (state.inSelectionMode) {
-                IconButton(onClick = viewModel::clearSelection) {
-                    Icon(Icons.Default.Close, "Cancel selection")
-                }
+                SelectAllToggle(allSelected = state.allSelected, onToggle = viewModel::toggleSelectAll)
             } else {
                 IconButton(onClick = { if (!viewModel.navigateUp()) onNavigateBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Up")
@@ -225,27 +207,7 @@ fun BrowserScreen(
         },
         actions = {
             if (state.inSelectionMode) {
-                SelectAllToggle(
-                    allSelected = state.allSelected,
-                    onToggle = viewModel::toggleSelectAll,
-                )
-                SelectionOverflowMenu(
-                    single = state.selected.singleOrNull()
-                        ?.let { p -> state.entries.firstOrNull { it.path == p } },
-                    allHidden = state.selected.isNotEmpty() && state.selected.all {
-                        it.substringAfterLast('/').startsWith(".")
-                    },
-                    allFavorite = state.selected.isNotEmpty() &&
-                        state.selected.all { it in state.favorites },
-                    allPinned = state.selected.isNotEmpty() &&
-                        state.selected.all { it in state.pinned },
-                    onRename = { renameTarget = it },
-                    onDetails = viewModel::showDetails,
-                    onFavorite = viewModel::toggleFavorite,
-                    onPin = viewModel::togglePinned,
-                    onHide = viewModel::toggleSelectionHidden,
-                    onOpenWith = { path -> onOpenWith(path) },
-                )
+                CancelSelection(onCancel = viewModel::clearSelection)
             } else {
                 if (clipboard != null) {
                     IconButton(onClick = viewModel::paste) {
@@ -270,25 +232,43 @@ fun BrowserScreen(
             }
         },
         bottomBar = {
-            AnimatedBottomBar(visible = state.inSelectionMode) {
+            // Only with something chosen: "Select items" with nothing ticked
+            // has nothing for it to act on.
+            AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
+                val selected = state.entries.filter { it.path in state.selected }
                 SelectionActionBar(
-                    onCopy = viewModel::copy,
                     onMove = viewModel::cut,
-                    onDelete = viewModel::deleteSelected,
+                    onCopy = viewModel::copy,
                     onShare = { onShare(state.selected.toList()) },
-                    onDetails = state.selected.singleOrNull()?.let { path ->
-                        { state.entries.firstOrNull { it.path == path }
-                            ?.let(viewModel::showDetails) }
-                    },
-                    // Offered for one file as well as many. Compressing a
-                    // single file is the usual reason to want a password on
-                    // it, and refusing to until a second is ticked is an odd
-                    // rule to have to discover.
-                    onCompress = if (state.selected.isNotEmpty()) {
-                        { showCompressDialog = true }
-                    } else {
-                        null
-                    },
+                    onDelete = viewModel::deleteSelected,
+                    more = selectionMoreActions(
+                        selected = selected,
+                        allFavorite = state.selected.all { it in state.favorites },
+                        onCopyToClipboard = {
+                            onCopyToClipboard(state.selected.toList())
+                            viewModel.clearSelection()
+                        },
+                        onDetails = viewModel.details::show,
+                        onRename = { renameTarget = it },
+                        onFavorite = viewModel::toggleFavorite,
+                        onOpenWith = { onOpenWith(it.path) },
+                    ) + listOf(
+                        // What only a folder's own list can do: they change
+                        // how it lists, or write into it.
+                        MoreAction("Compress", group = 2) { showCompressDialog = true },
+                        MoreAction(
+                            if (state.selected.all { it in state.pinned }) "Unpin" else "Pin to top",
+                            group = 2,
+                            onClick = viewModel::togglePinned,
+                        ),
+                        // A name starting with a dot is what hidden means, so
+                        // the label follows what the selection is now.
+                        MoreAction(
+                            if (state.selected.all { it.substringAfterLast('/').startsWith(".") }) "Unhide" else "Hide",
+                            group = 2,
+                            onClick = viewModel::toggleSelectionHidden,
+                        ),
+                    ),
                 )
             }
         },
@@ -401,32 +381,17 @@ fun BrowserScreen(
         currentFolder = state.path,
     )
 
-    state.detailsTarget?.let { target ->
-        DetailsDialog(
-            entry = target,
-            details = state.details,
-            onDismiss = viewModel::dismissDetails,
-            onShare = {
-                onShare(listOf(target.path))
-                viewModel.dismissDetails()
-            },
-        )
-    }
+    DetailsDialogHost(viewModel.details, onShare = { onShare(listOf(it)) })
 
-    renameTarget?.let { target ->
-        TextInputDialog(
-            title = "Rename",
-            label = "New name",
-            initial = target.name,
-            confirmLabel = "Rename",
-            onConfirm = { name ->
-                viewModel.rename(target.path, name)
-                viewModel.clearSelection()
-                renameTarget = null
-            },
-            onDismiss = { renameTarget = null },
-        )
-    }
+    RenameDialog(
+        target = renameTarget,
+        onRename = { path, name ->
+            viewModel.rename(path, name)
+            viewModel.clearSelection()
+            renameTarget = null
+        },
+        onDismiss = { renameTarget = null },
+    )
 }
 
 @Composable
@@ -753,72 +718,6 @@ private fun MenuSectionLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp),
     )
-}
-
-/** Actions that only make sense for exactly one selected file. */
-@Composable
-private fun SelectionOverflowMenu(
-    single: FileEntry?,
-    allHidden: Boolean,
-    allFavorite: Boolean,
-    allPinned: Boolean,
-    onRename: (FileEntry) -> Unit,
-    onDetails: (FileEntry) -> Unit,
-    onFavorite: () -> Unit,
-    onPin: () -> Unit,
-    onHide: () -> Unit,
-    onOpenWith: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    // Enabled for any selection: favourite, pin and hide all work on several
-    // at once. Only rename, details and open-with need exactly one.
-    IconButton(onClick = { expanded = true }) {
-        Icon(Icons.Default.MoreVert, "More actions")
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        DropdownMenuItem(
-            // The action toggles, so the label has to say which way it will go.
-            text = { Text(if (allFavorite) "Remove from favourites" else "Add to favourites") },
-            leadingIcon = {
-                Icon(if (allFavorite) Icons.Default.Star else Icons.Default.StarOutline, null)
-            },
-            onClick = { onFavorite(); expanded = false },
-        )
-        DropdownMenuItem(
-            text = { Text(if (allPinned) "Unpin" else "Pin to top") },
-            leadingIcon = { Icon(Icons.Default.PushPin, null) },
-            onClick = { onPin(); expanded = false },
-        )
-        DropdownMenuItem(
-            // A name starting with a dot is what hidden means, so the label
-            // follows what the selection currently is.
-            text = { Text(if (allHidden) "Unhide" else "Hide") },
-            leadingIcon = {
-                Icon(if (allHidden) Icons.Default.Visibility else Icons.Default.VisibilityOff, null)
-            },
-            onClick = { onHide(); expanded = false },
-        )
-        HorizontalDivider()
-        DropdownMenuItem(
-            text = { Text("Open with") },
-            leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
-            enabled = single != null && !single.isDir,
-            onClick = { single?.let { onOpenWith(it.path) }; expanded = false },
-        )
-        DropdownMenuItem(
-            text = { Text("Rename") },
-            leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null) },
-            enabled = single != null,
-            onClick = { single?.let(onRename); expanded = false },
-        )
-        DropdownMenuItem(
-            text = { Text("Details") },
-            leadingIcon = { Icon(Icons.Default.Info, null) },
-            enabled = single != null,
-            onClick = { single?.let(onDetails); expanded = false },
-        )
-    }
 }
 
 /** Long enough to notice the row, short enough not to look stuck. */
