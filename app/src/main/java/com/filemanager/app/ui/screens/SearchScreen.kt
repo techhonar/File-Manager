@@ -11,8 +11,6 @@ import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.isExtractable
 import com.filemanager.app.ui.components.ExtractDialogHost
-import com.filemanager.app.ui.components.InlineResultActions
-import com.filemanager.app.ui.components.ResultActionsMenu
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -49,7 +45,6 @@ import com.filemanager.app.ui.components.Pane
 import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
-import com.filemanager.app.ui.components.TextInputDialog
 import com.filemanager.app.ui.components.ViewModeMenu
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -85,6 +80,11 @@ import com.filemanager.app.viewmodel.Category
 import com.filemanager.app.viewmodel.SearchViewModel
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
+import com.filemanager.app.ui.components.selectionTitle
+import com.filemanager.app.ui.components.selectionMoreActions
+import com.filemanager.app.ui.components.DetailsDialogHost
+import com.filemanager.app.ui.components.RenameDialog
+import com.filemanager.app.ui.components.CancelSelection
 
 /**
  * Global search. Typing drives a debounced scan in Rust; the category chips
@@ -97,7 +97,6 @@ fun SearchScreen(
     onOpenFile: (FileEntry) -> Unit,
     onShare: (List<String>) -> Unit,
     onOpenWith: (String) -> Unit,
-    onCopyPath: (String) -> Unit,
     onShowInFolder: (String) -> Unit,
     /** Open a folder in the browser: where an archive was just extracted. */
     onOpenFolder: (String) -> Unit,
@@ -113,15 +112,19 @@ fun SearchScreen(
     autoFocus: Boolean = true,
     /** The phone's storage, for choosing where an archive is extracted. */
     volumes: List<StorageVolume> = emptyList(),
+    /** Puts files on the clipboard, for pasting into another app. */
+    onCopyToClipboard: (List<String>) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
-    // An archive found here can be unpacked from here, as in a folder; the
-    // action shows only for the kinds the app can open.
-    val extractFor: (FileEntry) -> (() -> Unit)? = { entry ->
-        if (isExtractable(entry.name)) {
-            { viewModel.extractor.open(entry) }
-        } else {
-            null
+    val favorites by viewModel.favorites.collectAsState()
+    // A tap opens, as in a folder - an archive asking about extracting it
+    // here, so the results take in what came out of it. Everything else a
+    // result can have done to it is in the selection's bar, a long-press away.
+    val onResultClick: (FileEntry) -> Unit = { entry ->
+        when {
+            state.inSelectionMode -> viewModel.toggleSelection(entry.path)
+            !entry.isDir && isExtractable(entry.name) -> viewModel.extractor.open(entry)
+            else -> onOpenFile(entry)
         }
     }
     val snackbarState = remember { SnackbarHostState() }
@@ -174,10 +177,6 @@ fun SearchScreen(
             gridState.requestScrollToItem(0)
         }
     }
-    // Which result has its actions unfolded. One at a time, so the list does
-    // not turn into a column of expanded panels.
-    var expandedPath by remember { mutableStateOf<String?>(null) }
-
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbarState.showSnackbar(it)
@@ -200,7 +199,7 @@ fun SearchScreen(
         // it twice is two calls - which means no smart cast, and the second
         // read is still nullable however the first one turned out.
         title = if (state.inSelectionMode) {
-            "${state.selected.size} selected"
+            selectionTitle(state.selected.size)
         } else {
             state.category?.label() ?: "Search"
         },
@@ -208,24 +207,12 @@ fun SearchScreen(
         snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
             if (state.inSelectionMode) {
-                IconButton(onClick = viewModel::clearSelection) {
-                    Icon(Icons.Default.Close, "Cancel selection")
-                }
+                SelectAllToggle(allSelected = state.allSelected, onToggle = viewModel::toggleSelectAll)
             }
         },
         actions = {
             if (state.inSelectionMode) {
-                SelectAllToggle(
-                    allSelected = state.allSelected,
-                    onToggle = viewModel::toggleSelectAll,
-                )
-                // Rename applies to exactly one file, so it is an action here
-                // rather than a sixth icon in the bottom bar.
-                val single = state.selected.singleOrNull()
-                    ?.let { p -> state.results.firstOrNull { it.path == p } }
-                IconButton(onClick = { renameTarget = single }, enabled = single != null) {
-                    Icon(Icons.Default.DriveFileRenameOutline, "Rename")
-                }
+                CancelSelection(onCancel = viewModel::clearSelection)
             } else if (state.results.isNotEmpty()) {
                 // A category opens this screen, so the layout choice has to be
                 // reachable here - it was only ever in the browser.
@@ -236,12 +223,30 @@ fun SearchScreen(
             }
         },
         bottomBar = {
-            AnimatedBottomBar(visible = state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 SelectionActionBar(
-                    onCopy = viewModel::copySelection,
                     onMove = viewModel::cutSelection,
-                    onDelete = viewModel::deleteSelection,
+                    onCopy = viewModel::copySelection,
                     onShare = { onShare(state.selected.toList()) },
+                    onDelete = viewModel::deleteSelection,
+                    more = selectionMoreActions(
+                        selected = state.results.filter { it.path in state.selected },
+                        allFavorite = state.selected.all { it in favorites },
+                        onCopyToClipboard = {
+                            onCopyToClipboard(state.selected.toList())
+                            viewModel.clearSelection()
+                        },
+                        onDetails = viewModel.details::show,
+                        onRename = { renameTarget = it },
+                        onFavorite = viewModel::toggleFavorite,
+                        onOpenWith = { onOpenWith(it.path) },
+                        // A result is usually somewhere the user was not
+                        // expecting, so where it is is worth a tap.
+                        onShowInFolder = {
+                            viewModel.clearSelection()
+                            onShowInFolder(it.path)
+                        },
+                    ),
                 )
             }
         },
@@ -308,23 +313,8 @@ fun SearchScreen(
                                             entry = entry,
                                             isSelected = entry.path in state.selected,
                                             selectionMode = state.inSelectionMode,
-                                            onClick = {
-                                                // As in the lists: what can be
-                                                // done with it, rather than
-                                                // opening it straight away.
-                                                if (state.inSelectionMode) viewModel.toggleSelection(entry.path)
-                                                else expandedPath = entry.path
-                                            },
+                                            onClick = { onResultClick(entry) },
                                             onLongClick = { viewModel.toggleSelection(entry.path) },
-                                        )
-                                        ResultActionsMenu(
-                                            expanded = expandedPath == entry.path && !state.inSelectionMode,
-                                            onDismiss = { expandedPath = null },
-                                            onOpen = { onOpenFile(entry) },
-                                            onExtract = extractFor(entry),
-                                            onOpenWith = { onOpenWith(entry.path) },
-                                            onCopyPath = { onCopyPath(entry.path) },
-                                            onShowInFolder = { onShowInFolder(entry.path) },
                                         )
                                     }
                                 }
@@ -334,34 +324,13 @@ fun SearchScreen(
                             LazyColumn(state = listState, contentPadding = contentPadding) {
                                 items(state.results, key = { it.path }) { entry ->
                                     Box(Modifier.animateItem(placementSpec = null)) {
-                                        Column {
-                                            FileDetailRow(
-                                                entry = entry,
-                                                isSelected = entry.path in state.selected,
-                                                selectionMode = state.inSelectionMode,
-                                                onClick = {
-                                                    when {
-                                                        state.inSelectionMode ->
-                                                            viewModel.toggleSelection(entry.path)
-                                                        expandedPath == entry.path -> expandedPath = null
-                                                        else -> expandedPath = entry.path
-                                                    }
-                                                },
-                                                onLongClick = { viewModel.toggleSelection(entry.path) },
-                                            )
-                                            InlineResultActions(
-                                                visible = expandedPath == entry.path &&
-                                                    !state.inSelectionMode,
-                                                onOpen = { onOpenFile(entry) },
-                                                onExtract = extractFor(entry),
-                                            onOpenWith = { onOpenWith(entry.path) },
-                                                onCopyPath = { onCopyPath(entry.path) },
-                                                onShowInFolder = {
-                                                    expandedPath = null
-                                                    onShowInFolder(entry.path)
-                                                },
-                                            )
-                                        }
+                                        FileDetailRow(
+                                            entry = entry,
+                                            isSelected = entry.path in state.selected,
+                                            selectionMode = state.inSelectionMode,
+                                            onClick = { onResultClick(entry) },
+                                            onLongClick = { viewModel.toggleSelection(entry.path) },
+                                        )
                                     }
                                 }
                             }
@@ -391,36 +360,13 @@ fun SearchScreen(
                             }
                             items(state.results, key = { it.path }) { entry ->
                                 Box(Modifier.animateItem(placementSpec = null)) {
-                                    Column {
-                                        SearchResultRow(
-                                            entry = entry,
-                                            isSelected = entry.path in state.selected,
-                                            selectionMode = state.inSelectionMode,
-                                            onClick = {
-                                                when {
-                                                    state.inSelectionMode ->
-                                                        viewModel.toggleSelection(entry.path)
-                                                    // A result is usually somewhere the
-                                                    // user was not expecting, so offer to
-                                                    // locate it rather than only open it.
-                                                    expandedPath == entry.path -> expandedPath = null
-                                                    else -> expandedPath = entry.path
-                                                }
-                                            },
-                                            onLongClick = { viewModel.toggleSelection(entry.path) },
-                                        )
-                                        InlineResultActions(
-                                            visible = expandedPath == entry.path && !state.inSelectionMode,
-                                            onOpen = { onOpenFile(entry) },
-                                            onExtract = extractFor(entry),
-                                            onOpenWith = { onOpenWith(entry.path) },
-                                            onCopyPath = { onCopyPath(entry.path) },
-                                            onShowInFolder = {
-                                                expandedPath = null
-                                                onShowInFolder(entry.path)
-                                            },
-                                        )
-                                    }
+                                    SearchResultRow(
+                                        entry = entry,
+                                        isSelected = entry.path in state.selected,
+                                        selectionMode = state.inSelectionMode,
+                                        onClick = { onResultClick(entry) },
+                                        onLongClick = { viewModel.toggleSelection(entry.path) },
+                                    )
                                 }
                             }
                         }
@@ -443,10 +389,13 @@ fun SearchScreen(
 
     ExtractDialogHost(viewModel.extractor, volumes, snackbarState, onShowFolder = onOpenFolder)
 
-    RenameDialogHost(
+    DetailsDialogHost(viewModel.details, onShare = { onShare(listOf(it)) })
+
+    RenameDialog(
         target = renameTarget,
-        onConfirm = { path, name ->
+        onRename = { path, name ->
             viewModel.rename(path, name)
+            viewModel.clearSelection()
             renameTarget = null
         },
         onDismiss = { renameTarget = null },
@@ -563,24 +512,6 @@ private fun EmptyMessage(text: String) {
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun RenameDialogHost(
-    target: FileEntry?,
-    onConfirm: (String, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    target?.let {
-        TextInputDialog(
-            title = "Rename",
-            label = "New name",
-            initial = it.name,
-            confirmLabel = "Rename",
-            onConfirm = { name -> onConfirm(it.path, name) },
-            onDismiss = onDismiss,
         )
     }
 }

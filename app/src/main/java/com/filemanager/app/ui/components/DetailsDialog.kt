@@ -13,9 +13,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.filemanager.app.viewmodel.DetailsController
 import com.filemanager.app.viewmodel.FileDetails
 import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.FileEntry
@@ -116,6 +119,23 @@ private fun DetailRow(label: String, value: String) {
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** The details sheet [controller] has open, if any. [onShare] is handed its path. */
+@Composable
+fun DetailsDialogHost(controller: DetailsController, onShare: (String) -> Unit) {
+    val sheet by controller.sheet.collectAsState()
+    sheet?.let { open ->
+        DetailsDialog(
+            entry = open.entry,
+            details = open.details,
+            onDismiss = controller::dismiss,
+            onShare = {
+                onShare(open.entry.path)
+                controller.dismiss()
+            },
         )
     }
 }

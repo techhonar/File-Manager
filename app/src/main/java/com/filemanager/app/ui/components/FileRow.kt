@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -59,12 +58,10 @@ fun FileRow(
 ) {
     // Fades out rather than vanishing, so the eye is led to the row instead of
     // being startled by it.
+    // A chosen row is marked by its tick alone, as One UI marks it; a
+    // tinted row as well said the same thing twice.
     val highlight by animateColorAsState(
-        targetValue = when {
-            isSelected -> MaterialTheme.colorScheme.primaryContainer
-            isHighlighted -> MaterialTheme.colorScheme.primaryContainer
-            else -> Color.Transparent
-        },
+        targetValue = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         animationSpec = tween(durationMillis = 400),
         label = "rowHighlight",
     )
@@ -79,8 +76,8 @@ fun FileRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {
-            Checkbox(checked = isSelected, onCheckedChange = { onClick() })
-            Spacer(Modifier.width(8.dp))
+            SelectionCheck(checked = isSelected)
+            Spacer(Modifier.width(14.dp))
         }
 
         FileThumbnail(entry)
@@ -184,17 +181,14 @@ fun SearchResultRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-            )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .defaultMinSize(minHeight = OneUi.RowHeight)
             .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {
-            Checkbox(checked = isSelected, onCheckedChange = { onClick() })
-            Spacer(Modifier.width(8.dp))
+            SelectionCheck(checked = isSelected)
+            Spacer(Modifier.width(14.dp))
         }
         FileThumbnail(entry, size = 44)
         Spacer(Modifier.width(16.dp))
@@ -242,17 +236,14 @@ fun FileDetailRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-            )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .defaultMinSize(minHeight = 84.dp)
             .padding(horizontal = OneUi.ScreenPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {
-            Checkbox(checked = isSelected, onCheckedChange = { onClick() })
-            Spacer(Modifier.width(8.dp))
+            SelectionCheck(checked = isSelected)
+            Spacer(Modifier.width(14.dp))
         }
 
         FileThumbnail(entry)

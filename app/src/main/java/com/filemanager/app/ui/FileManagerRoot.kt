@@ -2,6 +2,7 @@ package com.filemanager.app.ui
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.net.Uri
@@ -278,7 +279,11 @@ fun FileManagerRoot(
             }
         }
     }
-    val openFile: (FileEntry) -> Unit = { entry -> openPath(entry.path) }
+    // A folder - a favourite, or found by a search - opens in the browser:
+    // handed on as a file, it did nothing at all.
+    val openFile: (FileEntry) -> Unit = { entry ->
+        if (entry.isDir) navController.navigate(Routes.browse(entry.path)) else openPath(entry.path)
+    }
 
     /**
      * Always shows the chooser, where opening normally goes straight to the
@@ -290,13 +295,19 @@ fun FileManagerRoot(
         }
     }
 
-    val copyPath: (String) -> Unit = { path ->
-        val clip = context.getSystemService(ClipboardManager::class.java)
-        clip?.setPrimaryClip(ClipData.newPlainText("Path", path))
-        // Android 13 and up shows its own copy confirmation, so a second one
-        // here would be duplicate noise.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            toast(context, "Path copied")
+    // The folder a file is in, with the file marked: for lists drawn from all
+    // over the phone, where that is not obvious.
+    val showInFolder: (String) -> Unit = { path ->
+        navController.navigate(Routes.browse(path.substringBeforeLast('/'), highlight = path))
+    }
+
+    val copyToClipboard: (List<String>) -> Unit = { paths ->
+        if (!copyFilesToClipboard(context, paths)) {
+            toast(context, "Could not copy to the clipboard")
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            // Android 13 and up shows its own copy confirmation, so a second
+            // one here would be duplicate noise.
+            toast(context, "Copied to clipboard")
         }
     }
 
@@ -470,6 +481,9 @@ fun FileManagerRoot(
                 viewModel = vm,
                 onOpenFile = openFile,
                 onShare = shareFiles,
+                onOpenWith = openWith,
+                onShowInFolder = showInFolder,
+                onCopyToClipboard = copyToClipboard,
                 onNavigateBack = { navController.popBackStack() },
             )
         }
@@ -510,6 +524,7 @@ fun FileManagerRoot(
                     onOpenFile = openFile,
                     onShare = shareFiles,
                     onOpenWith = openWith,
+                    onCopyToClipboard = copyToClipboard,
                     onNavigateBack = { navController.popBackStack() },
                     picking = picking != null,
                     onEditNewFile = { path -> navController.navigate(Routes.viewer(path, edit = true)) },
@@ -541,12 +556,8 @@ fun FileManagerRoot(
                     onOpenFile = openFile,
                     onShare = shareFiles,
                     onOpenWith = openWith,
-                    onCopyPath = copyPath,
-                    onShowInFolder = { path ->
-                        navController.navigate(
-                            Routes.browse(path.substringBeforeLast('/'), highlight = path),
-                        )
-                    },
+                    onCopyToClipboard = copyToClipboard,
+                    onShowInFolder = showInFolder,
                     onOpenFolder = { path -> navController.navigate(Routes.browse(path)) },
                     // Arriving from a category tile means the user wants to see
                     // that category, not to type - so no keyboard.
@@ -565,11 +576,7 @@ fun FileManagerRoot(
             FavoritesScreen(
                 viewModel = vm,
                 onOpenFile = openFile,
-                onShowInFolder = { path ->
-                    navController.navigate(
-                            Routes.browse(path.substringBeforeLast('/'), highlight = path),
-                        )
-                },
+                onShowInFolder = showInFolder,
                 onNavigateBack = { navController.popBackStack() },
             )
         }
@@ -757,6 +764,29 @@ private fun HomeOverflowMenu(
             onClick = { onAbout(); expanded = false },
         )
     }
+}
+
+/**
+ * Put files on the clipboard, as One UI's Copy to clipboard does: each as
+ * the file itself, for an app that takes one pasted - a photo into a chat -
+ * with its path as the text pasted anywhere else.
+ */
+internal fun copyFilesToClipboard(context: android.content.Context, paths: List<String>): Boolean {
+    val items = paths.mapNotNull { path ->
+        // Guarded for the reason openWithExternalApp gives.
+        val uri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
+        }.getOrNull() ?: return@mapNotNull null
+        ClipData.Item(path, null, uri)
+    }
+    if (items.isEmpty()) return false
+    val types = paths.map { mimeTypeOf(it.substringAfterLast('/')) ?: "application/octet-stream" } +
+        ClipDescription.MIMETYPE_TEXT_PLAIN
+    val clip = ClipData(ClipDescription("Files", types.distinct().toTypedArray()), items.first())
+    items.drop(1).forEach(clip::addItem)
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return false
+    clipboard.setPrimaryClip(clip)
+    return true
 }
 
 /**

@@ -109,6 +109,8 @@ class SearchViewModel(
      * cleared and a collector then got round to the object behind it.
      */
     private val session: SearchSession,
+    /** See BrowserViewModel: passed in so no view model holds a Context. */
+    ownerAppOf: suspend (String) -> String? = { null },
 ) : ViewModel() {
 
     // Seeded at construction rather than in an init block: properties are
@@ -125,6 +127,12 @@ class SearchViewModel(
      * photos from a zip, in Images.
      */
     val extractor = ExtractController(repository, roots, viewModelScope) { scheduleWalk() }
+
+    /** The details sheet, opened from the selection's More menu. */
+    val details = DetailsController(repository, ownerAppOf, viewModelScope)
+
+    /** Which paths are favourites, so the menu can offer the opposite. */
+    val favorites: StateFlow<Set<String>> = paths.favorites
 
     private var searchJob: Job? = null
     private var cancelToken: CancelToken? = null
@@ -662,6 +670,15 @@ class SearchViewModel(
                 message = message,
             )
         }
+    }
+
+    /** Favourite the selection, or unfavourite it when it all is already. */
+    fun toggleFavorite() {
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+        paths.toggleFavorite(selected)
+        val message = if (selected.all { paths.isFavorite(it) }) "Added to favourites" else "Removed from favourites"
+        _state.update { it.copy(selected = emptySet(), selectionActive = false, message = message) }
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }

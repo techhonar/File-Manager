@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Star
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.StarOutline
@@ -56,6 +54,8 @@ import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.FavoritesViewModel
 import uniffi.filemanager_core.FileEntry
+import com.filemanager.app.ui.components.selectionTitle
+import com.filemanager.app.ui.components.CancelSelection
 
 @Composable
 fun FavoritesScreen(
@@ -79,28 +79,21 @@ fun FavoritesScreen(
     BackHandler(enabled = state.inSelectionMode) { viewModel.clearSelection() }
 
     OneUiScreen(
-        title = if (state.inSelectionMode) "${state.selected.size} selected" else "Favourites",
+        title = if (state.inSelectionMode) selectionTitle(state.selected.size) else "Favourites",
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarState) },
         navigationIcon = {
-            IconButton(
-                onClick = {
-                    if (state.inSelectionMode) viewModel.clearSelection() else onNavigateBack()
-                },
-            ) {
-                Icon(
-                    if (state.inSelectionMode) Icons.Default.Close
-                    else Icons.AutoMirrored.Filled.ArrowBack,
-                    if (state.inSelectionMode) "Cancel selection" else "Back",
-                )
+            if (state.inSelectionMode) {
+                SelectAllToggle(allSelected = state.allSelected, onToggle = viewModel::toggleSelectAll)
+            } else {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
             }
         },
         actions = {
             if (state.inSelectionMode) {
-                SelectAllToggle(
-                    allSelected = state.allSelected,
-                    onToggle = viewModel::toggleSelectAll,
-                )
+                CancelSelection(onCancel = viewModel::clearSelection)
             } else {
                 // Offered even when the list looks empty: every favourite may
                 // be hidden, and this is the switch that brings them back.
@@ -116,7 +109,7 @@ fun FavoritesScreen(
             }
         },
         bottomBar = {
-            AnimatedBottomBar(visible = state.inSelectionMode) {
+            AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 // Only the mark is removed here; the files themselves are left
                 // alone, so this bar carries one action and not the usual set.
                 Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
