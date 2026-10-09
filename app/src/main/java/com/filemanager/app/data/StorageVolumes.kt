@@ -100,3 +100,13 @@ object StorageVolumes {
         label to Environment.getExternalStoragePublicDirectory(type)
     }.filter { (_, dir) -> dir.exists() }
 }
+
+/** "Internal storage/Download" for /storage/emulated/0/Download. */
+fun shownPath(path: String, volumes: List<StorageVolume>): String {
+    val volume = volumes
+        .filter { path == it.path || path.startsWith(it.path + "/") }
+        .maxByOrNull { it.path.length }
+        ?: return path
+    val rest = path.removePrefix(volume.path).trim('/')
+    return if (rest.isEmpty()) volume.name else "${volume.name}/$rest"
+}

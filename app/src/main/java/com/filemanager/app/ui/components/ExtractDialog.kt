@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.filemanager.app.data.ArchiveRow
 import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.data.shownPath
 import com.filemanager.app.data.archiveSummary
 import com.filemanager.app.data.visibleRows
 import com.filemanager.app.ui.theme.OneUi
@@ -384,14 +385,4 @@ private fun ContentRow(row: ArchiveRow, open: Boolean, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-}
-
-/** "Internal storage/Download" for /storage/emulated/0/Download. */
-private fun shownPath(path: String, volumes: List<StorageVolume>): String {
-    val volume = volumes
-        .filter { path == it.path || path.startsWith(it.path + "/") }
-        .maxByOrNull { it.path.length }
-        ?: return path
-    val rest = path.removePrefix(volume.path).trim('/')
-    return if (rest.isEmpty()) volume.name else "${volume.name}/$rest"
 }

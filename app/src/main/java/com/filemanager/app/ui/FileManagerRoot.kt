@@ -672,7 +672,7 @@ fun FileManagerRoot(
 
             composable(Routes.TRASH) {
                 val vm: TrashViewModel = viewModel(factory = factory)
-                TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() })
+                TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() }, volumes = volumes)
             }
         }
 

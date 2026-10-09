@@ -63,6 +63,8 @@ import com.filemanager.app.ui.theme.OneUi
 fun OneUiScreen(
     title: String,
     modifier: Modifier = Modifier,
+    /** A quieter line under the title, as One UI puts "2 items" under "Trash". */
+    subtitle: String? = null,
     navigationIcon: @Composable () -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
@@ -79,18 +81,29 @@ fun OneUiScreen(
         topBar = {
             LargeTopAppBar(
                 title = {
-                    // Crossfaded, so a new folder's name or the selection
-                    // count replaces the old one instead of snapping to it.
-                    AnimatedContent(
-                        targetState = title,
-                        transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(120)) },
-                        label = "title",
-                    ) { shown ->
-                        Text(
-                            text = shown,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    Column {
+                        // Crossfaded, so a new folder's name or the selection
+                        // count replaces the old one instead of snapping to it.
+                        AnimatedContent(
+                            targetState = title,
+                            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(120)) },
+                            label = "title",
+                        ) { shown ->
+                            Text(
+                                text = shown,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (subtitle != null) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 },
                 navigationIcon = navigationIcon,

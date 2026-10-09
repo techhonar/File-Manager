@@ -55,6 +55,8 @@ fun FileRow(
     modifier: Modifier = Modifier,
     isPinned: Boolean = false,
     isHighlighted: Boolean = false,
+    /** False to draw the kind's icon rather than a picture of the file. */
+    preview: Boolean = true,
 ) {
     // Fades out rather than vanishing, so the eye is led to the row instead of
     // being startled by it.
@@ -80,7 +82,7 @@ fun FileRow(
             Spacer(Modifier.width(14.dp))
         }
 
-        FileThumbnail(entry)
+        FileThumbnail(entry, preview = preview)
         Spacer(Modifier.width(16.dp))
 
         Column(Modifier.weight(1f)) {
@@ -120,13 +122,15 @@ fun FileRow(
  * scrolling a folder of 2,000 photos does not decode them all.
  */
 @Composable
-private fun FileThumbnail(entry: FileEntry, size: Int = 46) {
+private fun FileThumbnail(entry: FileEntry, size: Int = 46, preview: Boolean = true) {
     // Video frames and installer icons are loaded by decoders registered on
     // the app's ImageLoader; without those this would draw nothing for them.
-    val showsPreview = entry.category == FileCategory.IMAGE ||
-        entry.category == FileCategory.VIDEO ||
-        entry.category == FileCategory.APK ||
-        entry.category == FileCategory.AUDIO
+    val showsPreview = preview && (
+        entry.category == FileCategory.IMAGE ||
+            entry.category == FileCategory.VIDEO ||
+            entry.category == FileCategory.APK ||
+            entry.category == FileCategory.AUDIO
+        )
 
     if (showsPreview) {
         Box(
