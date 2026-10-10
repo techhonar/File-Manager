@@ -10,16 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -27,11 +18,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import com.filemanager.app.ui.components.AnimatedBottomBar
@@ -50,13 +38,33 @@ import androidx.compose.ui.unit.dp
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.Pane
 import com.filemanager.app.ui.components.PaneFade
-import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.FavoritesViewModel
 import uniffi.filemanager_core.FileEntry
 import com.filemanager.app.ui.components.selectionTitle
 import com.filemanager.app.ui.components.CancelSelection
+import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import com.filemanager.app.ui.components.BarItem
+import com.filemanager.app.ui.components.CompactActionBar
+import com.filemanager.app.ui.components.DetailsDialogHost
+import com.filemanager.app.ui.components.DragHandle
+import com.filemanager.app.ui.components.FileRow
+import com.filemanager.app.ui.components.RenameDialog
+import com.filemanager.app.ui.components.RowDrag
+import com.filemanager.app.ui.components.selectionMoreActions
 
+/**
+ * Favourites, as One UI lays them out: in the order the user keeps them, a
+ * tap opening one, and a hold choosing it - then dragged by its handle to a
+ * new place, or acted on from a small bar: Unfavourite, Share, Delete, More.
+ */
 @Composable
 fun FavoritesScreen(
     viewModel: FavoritesViewModel,
@@ -65,9 +73,18 @@ fun FavoritesScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    onShare: (List<String>) -> Unit = {},
+    onOpenWith: (String) -> Unit = {},
+    /** Puts files on the clipboard, for pasting into another app. */
+    onCopyToClipboard: (List<String>) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    val listState = rememberLazyListState()
+    // A row dragged by its handle; while it is, the order on screen is its.
+    val drag = remember { RowDrag<FileEntry> { it.path } }
+    val entries by rememberUpdatedState(state.entries)
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -110,37 +127,34 @@ fun FavoritesScreen(
         },
         bottomBar = {
             AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
-                // Only the mark is removed here; the files themselves are left
-                // alone, so this bar carries one action and not the usual set.
-                Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
-                    Column {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding()
-                                .padding(vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                        ) {
-                            // Locating a favourite is the other thing this
-                            // list is for, and it only means anything for one.
-                            val single = state.selected.singleOrNull()
-                            TextButton(
-                                onClick = { single?.let(onShowInFolder) },
-                                enabled = single != null,
-                            ) {
-                                Icon(Icons.Default.FolderOpen, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Show in folder")
-                            }
-                            TextButton(onClick = viewModel::removeSelected) {
-                                Icon(Icons.Default.StarOutline, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Remove")
-                            }
-                        }
-                    }
-                }
+                // "all" once everything is chosen, as One UI words it.
+                val all = state.allSelected
+                CompactActionBar(
+                    items = listOf(
+                        // Only the mark goes; the files are left alone.
+                        BarItem(Icons.Outlined.StarOutline, "Unfavourite", viewModel::removeSelected),
+                        BarItem(Icons.Outlined.Share, "Share") { onShare(state.selected.toList()) },
+                        BarItem(Icons.Outlined.Delete, if (all) "Delete all" else "Delete", viewModel::deleteSelection),
+                    ),
+                    more = selectionMoreActions(
+                        selected = state.entries.filter { it.path in state.selected },
+                        allFavorite = true,
+                        onCopyToClipboard = {
+                            onCopyToClipboard(state.selected.toList())
+                            viewModel.clearSelection()
+                        },
+                        onDetails = viewModel.details::show,
+                        onRename = { renameTarget = it },
+                        // Unfavourite is on the bar.
+                        onFavorite = null,
+                        onOpenWith = { onOpenWith(it.path) },
+                        // Locating a favourite is the other thing this list is for.
+                        onShowInFolder = {
+                            viewModel.clearSelection()
+                            onShowInFolder(it.path)
+                        },
+                    ),
+                )
             }
         },
     ) { padding ->
@@ -174,12 +188,28 @@ fun FavoritesScreen(
                 }
 
                 else -> LazyColumn(
+                    state = listState,
                     modifier = Modifier.padding(padding).fillMaxSize(),
                     contentPadding = contentPadding,
                 ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        Box(Modifier.animateItem()) {
-                            SearchResultRow(
+                    items(drag.order ?: state.entries, key = { it.path }) { entry ->
+                        val lifted = drag.dragging == entry.path
+                        Box(
+                            if (lifted) {
+                                // Over its neighbours and under the finger, not
+                                // eased into its new place as they are.
+                                Modifier
+                                    .zIndex(1f)
+                                    .graphicsLayer {
+                                        translationY = drag.offsetOf(entry.path)
+                                        shadowElevation = 8.dp.toPx()
+                                    }
+                                    .background(MaterialTheme.colorScheme.surface)
+                            } else {
+                                Modifier.animateItem()
+                            },
+                        ) {
+                            FileRow(
                                 entry = entry,
                                 isSelected = entry.path in state.selected,
                                 selectionMode = state.inSelectionMode,
@@ -188,6 +218,22 @@ fun FavoritesScreen(
                                     else onOpenFile(entry)
                                 },
                                 onLongClick = { viewModel.toggleSelection(entry.path) },
+                                // The handle, while choosing, as One UI has it.
+                                trailing = if (state.inSelectionMode) {
+                                    {
+                                        DragHandle(
+                                            onStart = {
+                                                val height = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.key == entry.path }?.size ?: 0
+                                                drag.start(entries, entry.path, height)
+                                            },
+                                            onDrag = drag::drag,
+                                            onEnd = { drag.end()?.let { moved -> viewModel.reorder(moved.map { it.path }) } },
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
                             )
                         }
                     }
@@ -195,6 +241,18 @@ fun FavoritesScreen(
             }
         }
     }
+
+    DetailsDialogHost(viewModel.details, onShare = { onShare(listOf(it)) })
+
+    RenameDialog(
+        target = renameTarget,
+        onRename = { path, name ->
+            viewModel.rename(path, name)
+            viewModel.clearSelection()
+            renameTarget = null
+        },
+        onDismiss = { renameTarget = null },
+    )
 }
 
 /**

@@ -26,7 +26,8 @@ fun selectionMoreActions(
     onCopyToClipboard: () -> Unit,
     onDetails: (FileEntry) -> Unit,
     onRename: (FileEntry) -> Unit,
-    onFavorite: () -> Unit,
+    /** Null where favouriting is on the bar itself, as in Favourites. */
+    onFavorite: (() -> Unit)?,
     onOpenWith: (FileEntry) -> Unit,
     onShowInFolder: ((FileEntry) -> Unit)? = null,
 ): List<MoreAction> {
@@ -40,7 +41,9 @@ fun selectionMoreActions(
             add(MoreAction("Rename") { onRename(single) })
         }
         // The label says which way it goes, as the action toggles.
-        add(MoreAction(if (allFavorite) "Remove from favourites" else "Add to favourites", onClick = onFavorite))
+        if (onFavorite != null) {
+            add(MoreAction(if (allFavorite) "Remove from favourites" else "Add to favourites", onClick = onFavorite))
+        }
         if (single != null && !single.isDir) add(MoreAction("Open with", group = 1) { onOpenWith(single) })
         if (single != null && onShowInFolder != null) {
             add(MoreAction("Show in folder", group = 1) { onShowInFolder(single) })

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
+import com.filemanager.app.data.userMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import com.filemanager.app.data.AppSettings
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.filemanager_core.FileEntry
+import java.io.File
 
 data class FavoritesState(
     val entries: List<FileEntry> = emptyList(),
@@ -51,17 +53,23 @@ class FavoritesViewModel(
     /** Whether the storage a path is on is present. Passed in so no
      *  ViewModel reaches for the framework; see StorageVolumes.isMounted. */
     private val isMounted: (String) -> Boolean,
+    /** See BrowserViewModel: passed in so no view model holds a Context. */
+    ownerAppOf: suspend (String) -> String? = { null },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FavoritesState())
     val state: StateFlow<FavoritesState> = _state.asStateFlow()
+
+    /** The details sheet, opened from the selection's More menu. */
+    val details = DetailsController(repository, ownerAppOf, viewModelScope)
 
     init {
         viewModelScope.launch {
             // Re-resolve when either the marks or the hidden-files preference
             // changes: a favourite that has just been hidden should disappear
             // from here too, which it did not before.
-            combine(paths.favorites, settings.showHidden) { favorites, showHidden ->
+            // The ordered list, not the set: a drag changes only the order.
+            combine(paths.favoriteOrder, settings.showHidden) { favorites, showHidden ->
                 favorites to showHidden
             }.collect { (favorites, showHidden) ->
                 _state.update { it.copy(showHidden = showHidden) }
@@ -73,19 +81,19 @@ class FavoritesViewModel(
     /** Show or hide the hidden favourites. Shared with every other list. */
     fun toggleShowHidden() = settings.setShowHidden(!_state.value.showHidden)
 
-    private suspend fun resolve(favorites: Set<String>, showHidden: Boolean) {
+    private suspend fun resolve(favorites: List<String>, showHidden: Boolean) {
         if (favorites.isEmpty()) {
             _state.value = FavoritesState(isLoading = false, showHidden = showHidden)
             return
         }
-        val resolved = repository.entriesFor(favorites.toList())
+        val resolved = repository.entriesFor(favorites)
 
         // Resolved, not shown. A hidden favourite still exists - it is only
         // filtered out of the list below - and counting it as missing here
         // dropped the mark, so turning hidden files back on showed nothing and
         // the favourite was gone for good.
         val found = resolved.map { it.path }.toSet()
-        val missing = favorites - found
+        val missing = favorites.toSet() - found
 
         // Forget the ones that have gone, so the list does not keep shrinking
         // silently every time it is opened - but only from storage that is
@@ -95,12 +103,14 @@ class FavoritesViewModel(
         val gone = missing.filter(isMounted)
         if (gone.isNotEmpty()) paths.forget(gone)
 
-        val visible = resolved.filter { showHidden || !it.isHidden }
+        // In the user's order, which the favourites themselves keep.
+        val place = favorites.withIndex().associate { (index, path) -> path to index }
+        val visible = resolved.filter { showHidden || !it.isHidden }.sortedBy { place[it.path] }
         val shown = visible.map { it.path }.toSet()
 
         _state.update { current ->
             current.copy(
-                entries = visible.sortedBy { it.name.lowercase() },
+                entries = visible,
                 isLoading = false,
                 missingCount = gone.size,
                 hiddenCount = resolved.size - visible.size,
@@ -145,6 +155,55 @@ class FavoritesViewModel(
                 selectionActive = false,
                 message = "Removed ${selected.size} from favourites",
             )
+        }
+    }
+
+    /**
+     * Keep the favourites in [paths]' order: a row dragged to a new place.
+     * Shown at once, so the list does not jump back while it is stored.
+     */
+    fun reorder(paths: List<String>) {
+        _state.update { current ->
+            val byPath = current.entries.associateBy { it.path }
+            current.copy(entries = paths.mapNotNull(byPath::get))
+        }
+        this.paths.reorderFavorites(paths)
+    }
+
+    /** The selected files, to the trash. Their marks go once they are gone. */
+    fun deleteSelection() {
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repository.moveToTrash(selected) }
+                .onSuccess {
+                    paths.forget(selected)
+                    _state.update {
+                        it.copy(selected = emptySet(), selectionActive = false, message = "${selected.size} moved to trash")
+                    }
+                }
+                .onFailure { e -> _state.update { it.copy(message = e.userMessage("Could not delete")) } }
+        }
+    }
+
+    fun rename(path: String, newName: String) {
+        viewModelScope.launch {
+            val newPath = File(File(path).parentFile, newName).absolutePath
+            val ok = runCatching { repository.rename(path, newName) }.getOrDefault(false)
+            if (!ok) {
+                // Only claim a clash when there is one: a rename can also be
+                // refused for want of permission.
+                val message = if (File(newPath).exists()) {
+                    "A file named \"$newName\" already exists"
+                } else {
+                    "Could not rename \"${File(path).name}\""
+                }
+                _state.update { it.copy(message = message) }
+                return@launch
+            }
+            // Its mark goes with it, in the same place; the list follows the
+            // marks, so it is shown under its new name there.
+            paths.move(path, newPath)
         }
     }
 
