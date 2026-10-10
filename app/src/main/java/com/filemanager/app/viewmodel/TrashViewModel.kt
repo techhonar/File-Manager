@@ -86,8 +86,14 @@ class TrashViewModel(private val repository: FileRepository) : ViewModel() {
 
     // --- Selection ------------------------------------------------------------
 
+    // Choosing one starts selecting, and selecting goes on with nothing
+    // ticked - "Select items" - until Cancel or Back, as One UI has it.
+    // Unticking the last one used to end it.
     fun toggleSelection(id: String) = _state.update { current ->
-        current.copy(selected = if (id in current.selected) current.selected - id else current.selected + id)
+        current.copy(
+            selected = if (id in current.selected) current.selected - id else current.selected + id,
+            selectionActive = true,
+        )
     }
 
     fun toggleSelectAll() = _state.update { current ->
