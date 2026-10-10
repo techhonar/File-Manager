@@ -55,6 +55,14 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+      That job waits for a network, and from Android 14 an app may not ask for
+      a job to wait for one without this: booking it throws a SecurityException.
+      The job is booked as the app starts, so without this the app closed the
+      moment it opened (0.6.2).
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
       READ_MEDIA_IMAGES / VIDEO / AUDIO are still deliberately absent. They were
       here as a fallback for when all-files access is declined, but no such
       fallback was ever built - the app gates every screen on
