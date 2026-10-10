@@ -57,6 +57,8 @@ fun FileRow(
     isHighlighted: Boolean = false,
     /** False to draw the kind's icon rather than a picture of the file. */
     preview: Boolean = true,
+    /** At the far end of the row: Favourites' handle for dragging it. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     // Fades out rather than vanishing, so the eye is led to the row instead of
     // being startled by it.
@@ -111,6 +113,10 @@ fun FileRow(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(16.dp),
             )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
         }
     }
 }

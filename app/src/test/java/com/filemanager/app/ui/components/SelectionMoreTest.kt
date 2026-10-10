@@ -87,6 +87,24 @@ class SelectionMoreTest {
     }
 
     @Test
+    fun `where favouriting is on the bar, More leaves it out`() {
+        val actions = selectionMoreActions(
+            selected = listOf(file("report.pdf")),
+            allFavorite = true,
+            onCopyToClipboard = {},
+            onDetails = {},
+            onRename = {},
+            onFavorite = null,
+            onOpenWith = {},
+            onShowInFolder = {},
+        )
+        assertEquals(
+            listOf("Copy to clipboard", "Details", "Rename", "|", "Open with", "Show in folder"),
+            shape(actions),
+        )
+    }
+
+    @Test
     fun `nothing chosen, nothing offered`() {
         assertTrue(menu().isEmpty())
     }

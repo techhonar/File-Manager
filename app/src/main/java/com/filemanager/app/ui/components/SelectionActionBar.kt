@@ -73,33 +73,37 @@ fun SelectionActionBar(
             onCopy?.let { BarAction(Icons.Outlined.ContentCopy, "Copy", it) }
             onShare?.let { BarAction(Icons.Outlined.Share, "Share", it) }
             BarAction(Icons.Outlined.Delete, "Delete", onDelete)
-            if (more.isNotEmpty()) {
-                var open by remember { mutableStateOf(false) }
-                Box(Modifier.weight(1f)) {
-                    BarActionContent(Icons.Default.MoreVert, "More", { open = true }, Modifier.fillMaxWidth())
-                    DropdownMenu(
-                        expanded = open,
-                        onDismissRequest = { open = false },
-                        // Clear of the bar, as One UI's sits, rather than over
-                        // its top edge.
-                        offset = DpOffset(0.dp, (-14).dp),
-                        shape = OneUi.CardShape,
-                        containerColor = barColor,
-                    ) {
-                        more.forEachIndexed { index, action ->
-                            if (index > 0 && action.group != more[index - 1].group) {
-                                HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                            }
-                            DropdownMenuItem(
-                                text = { Text(action.label) },
-                                onClick = {
-                                    open = false
-                                    action.onClick()
-                                },
-                            )
-                        }
-                    }
+            if (more.isNotEmpty()) MoreButton(more, barColor, Modifier.weight(1f))
+        }
+    }
+}
+
+/** More, and the menu it opens over the bar. */
+@Composable
+private fun MoreButton(more: List<MoreAction>, menuColor: Color, modifier: Modifier) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        BarActionContent(Icons.Default.MoreVert, "More", { open = true }, Modifier.fillMaxWidth())
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            // Clear of the bar, as One UI's sits, rather than over its top
+            // edge. Upwards is negative here, for a menu opening above.
+            offset = DpOffset(0.dp, (-14).dp),
+            shape = OneUi.CardShape,
+            containerColor = menuColor,
+        ) {
+            more.forEachIndexed { index, action ->
+                if (index > 0 && action.group != more[index - 1].group) {
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                 }
+                DropdownMenuItem(
+                    text = { Text(action.label) },
+                    onClick = {
+                        open = false
+                        action.onClick()
+                    },
+                )
             }
         }
     }
@@ -114,7 +118,7 @@ class BarItem(val icon: ImageVector, val label: String, val onClick: () -> Unit)
  * things to do, as the trash has.
  */
 @Composable
-fun CompactActionBar(items: List<BarItem>, modifier: Modifier = Modifier) {
+fun CompactActionBar(items: List<BarItem>, modifier: Modifier = Modifier, more: List<MoreAction> = emptyList()) {
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -125,6 +129,7 @@ fun CompactActionBar(items: List<BarItem>, modifier: Modifier = Modifier) {
         FloatingBar {
             Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                 items.forEach { BarActionContent(it.icon, it.label, it.onClick, Modifier.width(76.dp)) }
+                if (more.isNotEmpty()) MoreButton(more, floatingBarColor(), Modifier.width(76.dp))
             }
         }
     }

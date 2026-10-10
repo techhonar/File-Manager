@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 
 /**
  * Paths the user has marked, remembered across restarts.
@@ -18,13 +19,29 @@ class PathPrefs(context: Context) {
 
     private val prefs = context.getSharedPreferences("paths", Context.MODE_PRIVATE)
 
-    private val _favorites = MutableStateFlow(read(KEY_FAVORITES))
+    private val _favoriteOrder = MutableStateFlow(readFavorites())
+    private val _favorites = MutableStateFlow<Set<String>>(LinkedHashSet(_favoriteOrder.value))
+
+    /** The favourites, to ask whether a path is one. */
     val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
+
+    /**
+     * The favourites in the user's order: as they were added, unless dragged
+     * into another on the favourites screen. A list, because a set that only
+     * changed its order is equal to the old one, and a state flow does not
+     * pass on a value equal to the last - a drag was never seen.
+     */
+    val favoriteOrder: StateFlow<List<String>> = _favoriteOrder.asStateFlow()
 
     private val _pinned = MutableStateFlow(read(KEY_PINNED))
     val pinned: StateFlow<Set<String>> = _pinned.asStateFlow()
 
-    fun toggleFavorite(paths: Collection<String>) = toggle(KEY_FAVORITES, _favorites, paths)
+    /** All of them, or none of them: see [toggle]. New ones go at the end. */
+    fun toggleFavorite(paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        val current = favoriteSet()
+        writeFavorites(if (paths.all { it in current }) current - paths.toSet() else current + paths)
+    }
 
     fun togglePinned(paths: Collection<String>) = toggle(KEY_PINNED, _pinned, paths)
 
@@ -32,10 +49,18 @@ class PathPrefs(context: Context) {
 
     fun isPinned(path: String): Boolean = path in _pinned.value
 
+    /**
+     * Put the favourites shown in [shownOrder] - as dragged on the favourites
+     * screen. Any not shown there, hidden ones, keep their places.
+     */
+    fun reorderFavorites(shownOrder: List<String>) {
+        writeFavorites(reordered(_favoriteOrder.value, shownOrder))
+    }
+
     /** Forget a path entirely, for when the file behind it is deleted. */
     fun forget(paths: Collection<String>) {
         if (paths.isEmpty()) return
-        write(KEY_FAVORITES, _favorites, _favorites.value - paths.toSet())
+        writeFavorites(favoriteSet() - paths.toSet())
         write(KEY_PINNED, _pinned, _pinned.value - paths.toSet())
     }
 
@@ -52,7 +77,7 @@ class PathPrefs(context: Context) {
      * that happened to be at [to] already instead of keeping it.
      */
     fun move(from: String, to: String) {
-        rekeyed(_favorites.value, from, to)?.let { write(KEY_FAVORITES, _favorites, it) }
+        rekeyed(favoriteSet(), from, to)?.let(::writeFavorites)
         rekeyed(_pinned.value, from, to)?.let { write(KEY_PINNED, _pinned, it) }
     }
 
@@ -81,13 +106,62 @@ class PathPrefs(context: Context) {
         flow.value = value
     }
 
+    /** In order, from the list: the set flow may hold an older order, as said above. */
+    private fun favoriteSet(): Set<String> = LinkedHashSet(_favoriteOrder.value)
+
+    private fun writeFavorites(value: Collection<String>) {
+        val order = value.toList()
+        // A string set keeps no order, so the order is kept beside it. The
+        // set is kept as it was, for a version that knows only that.
+        prefs.edit()
+            .putStringSet(KEY_FAVORITES, order.toSet())
+            .putString(KEY_FAVORITES_ORDER, JSONArray(order).toString())
+            .apply()
+        _favoriteOrder.value = order
+        _favorites.value = LinkedHashSet(order)
+    }
+
     private fun read(key: String): Set<String> =
         prefs.getStringSet(key, emptySet())?.toSet() ?: emptySet()
 
+    private fun readFavorites(): List<String> {
+        val order = runCatching {
+            val stored = JSONArray(prefs.getString(KEY_FAVORITES_ORDER, null) ?: "[]")
+            (0 until stored.length()).map(stored::getString)
+        }.getOrDefault(emptyList())
+        return ordered(read(KEY_FAVORITES), order).toList()
+    }
+
     private companion object {
         const val KEY_FAVORITES = "favorites"
+        const val KEY_FAVORITES_ORDER = "favorites_order"
         const val KEY_PINNED = "pinned"
     }
+}
+
+/**
+ * [members] in [order], then any it does not have - marked before there was
+ * an order to keep - by name, which is how the favourites screen listed them.
+ */
+internal fun ordered(members: Set<String>, order: List<String>): Set<String> {
+    val result = LinkedHashSet<String>()
+    order.filterTo(result) { it in members }
+    members.filterNot { it in result }
+        .sortedBy { it.substringAfterLast('/').lowercase() }
+        .toCollection(result)
+    return result
+}
+
+/**
+ * [all] with the paths in [shown] put in that order, each taking one of the
+ * places the shown ones held. The rest - hidden, so not shown - stay put.
+ */
+internal fun reordered(all: List<String>, shown: List<String>): List<String> {
+    val members = all.toSet()
+    val wanted = shown.filter { it in members }.distinct()
+    val moving = wanted.toSet()
+    val next = wanted.iterator()
+    return all.map { if (it in moving) next.next() else it }
 }
 
 /**
@@ -101,7 +175,8 @@ class PathPrefs(context: Context) {
 internal fun rekeyed(marks: Set<String>, from: String, to: String): Set<String>? {
     if (from == to) return null
     val prefix = "$from/"
-    val affected = marks.filter { it == from || it.startsWith(prefix) }
-    if (affected.isEmpty()) return null
-    return (marks - affected.toSet()) + affected.map { to + it.removePrefix(from) }
+    val moves = { mark: String -> mark == from || mark.startsWith(prefix) }
+    if (marks.none(moves)) return null
+    // Each in its place: a renamed favourite keeps its place in the order.
+    return marks.mapTo(LinkedHashSet()) { if (moves(it)) to + it.removePrefix(from) else it }
 }

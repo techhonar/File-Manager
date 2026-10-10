@@ -597,6 +597,9 @@ fun FileManagerRoot(
                 onOpenFile = openFile,
                 onShowInFolder = showInFolder,
                 onNavigateBack = { navController.popBackStack() },
+                onShare = shareFiles,
+                onOpenWith = openWith,
+                onCopyToClipboard = copyToClipboard,
             )
         }
 
