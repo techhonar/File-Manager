@@ -48,6 +48,13 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
+      The check for a new version every five minutes is a job kept across a
+      restart of the phone (UpdateCheckService), which Android allows only to
+      an app that can hear the phone finish starting.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
       READ_MEDIA_IMAGES / VIDEO / AUDIO are still deliberately absent. They were
       here as a fallback for when all-files access is declined, but no such
       fallback was ever built - the app gates every screen on
@@ -453,6 +460,15 @@
             android:name=".data.transfer.TransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!--
+          Looks for a new version every five minutes and says so in a
+          notification. Only the system's job scheduler may start it.
+        -->
+        <service
+            android:name=".data.update.UpdateCheckService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!--
           Where the installer reports back on a split-APK bundle this app

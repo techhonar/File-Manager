@@ -18,6 +18,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.filemanager.app.data.StoragePermission
 import com.filemanager.app.data.external.Incoming
+import com.filemanager.app.data.update.UpdateNotification
 import com.filemanager.app.data.external.mimeTypeOf
 import com.filemanager.app.ui.FileManagerRoot
 import com.filemanager.app.ui.openWithExternalApp
@@ -38,6 +39,11 @@ class MainActivity : ComponentActivity() {
         // is already showing it.
         incoming = Incoming.of(intent, this)
             ?.takeUnless { savedInstanceState != null && it is Incoming.Folder }
+        // Not again on a rotation: the update was started the first time.
+        if (savedInstanceState == null) {
+            takeUpdateRequest(intent)
+            (application as FileManagerApp).checkForUpdateNow()
+        }
 
         setContent {
             // Re-checked on every resume rather than held as a one-time value:
@@ -94,6 +100,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         Incoming.of(intent, this)?.let { incoming = it }
+        takeUpdateRequest(intent)
+    }
+
+    /**
+     * The update notification was tapped: start the update, as Update App
+     * does. Its progress and the installer follow from the screen.
+     */
+    private fun takeUpdateRequest(intent: Intent) {
+        if (intent.action == UpdateNotification.ACTION_UPDATE) {
+            (application as FileManagerApp).updater.update()
+        }
     }
 
     /**

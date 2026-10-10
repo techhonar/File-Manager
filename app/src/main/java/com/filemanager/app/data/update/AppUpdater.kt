@@ -59,9 +59,35 @@ class AppUpdater(private val context: Context) {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val memory = PrefsUpdateMemory(context)
+    private val releases = ReleaseCheck(client, memory)
+
+    /**
+     * Whether a newer version is out, asked cheaply - see ReleaseCheck - and
+     * said in a notification the first time each one is seen. For the check
+     * every five minutes (UpdateCheckService) and the one on launch; blocks,
+     * so off the main thread. Returns the version it announced, if any.
+     * One at a time: the launch check and the job can meet.
+     */
+    @Synchronized
+    fun checkAndAnnounce(): String? {
+        val latest = releases.latestVersion() ?: return null
+        if (!isNewerVersion(latest, BuildConfig.VERSION_NAME)) {
+            // Installed since it was announced: the notice is out of date.
+            UpdateNotification.cancel(context)
+            return null
+        }
+        val version = versionToAnnounce(latest, BuildConfig.VERSION_NAME, memory.announced) ?: return null
+        UpdateNotification.show(context, version)
+        memory.announced = version
+        return version
+    }
+
     /** Check, and download if there is something newer. A second tap while busy is ignored. */
     fun update() {
         if (job?.isActive == true) return
+        // Under way now, from the menu or the notification itself.
+        UpdateNotification.cancel(context)
         job = scope.launch {
             _state.value = State.Checking
             try {

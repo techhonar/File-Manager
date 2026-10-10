@@ -20,6 +20,7 @@ smbj = "0.14.0"
 ftpserver = "1.2.1"
 okhttp = "4.12.0"
 junit = "4.13.2"
+orgJson = "20250517"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
 
@@ -65,6 +66,9 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 # is not on Android's compile classpath, so a unit test using it compiles on a
 # desktop and fails in the build.
 mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+# The real org.json, for unit tests: what android.jar gives them is stubs, which
+# with unitTests.isReturnDefaultValues parse every reply as nothing at all.
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
