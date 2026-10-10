@@ -168,14 +168,14 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             runCatching { VideoThumbFetcher.trimCache(this@FileManagerApp) }
         }
 
-        // The check for a new version every five minutes. Here, as the
+        // The check for a new version every ten minutes. Here, as the
         // process starts for any reason, since a force stop clears it.
         UpdateCheckService.ensureScheduled(this)
     }
 
     /**
      * Look for a new version now, off the main thread. When the app is
-     * opened - not as the process starts, which the five-minute check
+     * opened - not as the process starts, which the ten-minute check
      * itself is often the reason for.
      */
     fun checkForUpdateNow() {

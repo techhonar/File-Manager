@@ -48,7 +48,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
-      The check for a new version every five minutes is a job kept across a
+      The check for a new version every ten minutes is a job kept across a
       restart of the phone (UpdateCheckService), which Android allows only to
       an app that can hear the phone finish starting.
     -->
@@ -462,7 +462,7 @@
             android:foregroundServiceType="dataSync" />
 
         <!--
-          Looks for a new version every five minutes and says so in a
+          Looks for a new version every ten minutes and says so in a
           notification. Only the system's job scheduler may start it.
         -->
         <service

@@ -65,7 +65,7 @@ class AppUpdater(private val context: Context) {
     /**
      * Whether a newer version is out, asked cheaply - see ReleaseCheck - and
      * said in a notification the first time each one is seen. For the check
-     * every five minutes (UpdateCheckService) and the one on launch; blocks,
+     * every ten minutes (UpdateCheckService) and the one on launch; blocks,
      * so off the main thread. Returns the version it announced, if any.
      * One at a time: the launch check and the job can meet.
      */
