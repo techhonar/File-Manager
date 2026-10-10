@@ -24,7 +24,7 @@ fun selectionMoreActions(
     selected: List<FileEntry>,
     allFavorite: Boolean,
     onCopyToClipboard: () -> Unit,
-    onDetails: (FileEntry) -> Unit,
+    onDetails: (List<FileEntry>) -> Unit,
     onRename: (FileEntry) -> Unit,
     /** Null where favouriting is on the bar itself, as in Favourites. */
     onFavorite: (() -> Unit)?,
@@ -36,10 +36,9 @@ fun selectionMoreActions(
     return buildList {
         // Files only: there is no pasting a folder into another app.
         if (selected.none { it.isDir }) add(MoreAction("Copy to clipboard", onClick = onCopyToClipboard))
-        if (single != null) {
-            add(MoreAction("Details") { onDetails(single) })
-            add(MoreAction("Rename") { onRename(single) })
-        }
+        // For several as for one, summed up: see DetailsController.
+        add(MoreAction("Details") { onDetails(selected) })
+        if (single != null) add(MoreAction("Rename") { onRename(single) })
         // The label says which way it goes, as the action toggles.
         if (onFavorite != null) {
             add(MoreAction(if (allFavorite) "Remove from favourites" else "Add to favourites", onClick = onFavorite))

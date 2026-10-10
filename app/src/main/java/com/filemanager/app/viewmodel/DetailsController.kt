@@ -23,8 +23,14 @@ data class FileDetails(
     val ownerApp: String? = null,
 )
 
-/** One file or folder's details sheet: [details] is null until they come back. */
-data class DetailsSheet(val entry: FileEntry, val details: FileDetails? = null)
+/**
+ * The details sheet, for one file or folder or for several together:
+ * [details] is null until they come back.
+ */
+data class DetailsSheet(val entries: List<FileEntry>, val details: FileDetails? = null) {
+    /** The one item, when the sheet is about one. */
+    val entry: FileEntry? get() = entries.singleOrNull()
+}
 
 /**
  * The details sheet, for every screen that can open one - a folder, search,
@@ -45,28 +51,41 @@ class DetailsController(
     /** Null while no sheet is open. */
     val sheet: StateFlow<DetailsSheet?> = _sheet.asStateFlow()
 
-    fun show(entry: FileEntry) {
-        _sheet.value = DetailsSheet(entry)
+    fun show(entry: FileEntry) = show(listOf(entry))
+
+    /**
+     * Several together, as One UI sums a selection up: how many, their size
+     * with everything in their folders, and what they hold.
+     */
+    fun show(entries: List<FileEntry>) {
+        if (entries.isEmpty()) return
+        _sheet.value = DetailsSheet(entries)
+        val single = entries.singleOrNull()
         scope.launch {
             // One walk covers size and contents; tree_stats returns both, so
-            // asking for them separately would traverse twice.
-            val stats = if (entry.isDir) {
-                runCatching { repository.stats(listOf(entry.path)) }.getOrNull()
+            // asking for them separately would traverse twice. Only for
+            // folders: a file's size is on its entry already.
+            val stats = if (entries.any { it.isDir }) {
+                runCatching { repository.stats(entries.map { it.path }) }.getOrNull()
             } else {
                 null
             }
-            val owner = runCatching { ownerAppOf(entry.path) }.getOrNull()
+            // Which app a file came from means something for one file only.
+            val owner = single?.let { runCatching { ownerAppOf(it.path) }.getOrNull() }
 
             _sheet.update { current ->
                 // Discard a result that arrives after the sheet moved on.
-                if (current?.entry?.path != entry.path) return@update current
+                if (current?.entries != entries) return@update current
                 current.copy(
                     details = FileDetails(
                         folderBytes = stats?.totalBytes,
                         fileCount = stats?.fileCount,
-                        // The walk counts the folder it starts from; what the
-                        // sheet asks is how many folders are inside it.
-                        folderCount = stats?.dirCount?.let { if (it > 0uL) it - 1uL else 0uL },
+                        // The walk counts each folder it starts from. One
+                        // folder's sheet asks what is inside it; a
+                        // selection's counts the folders chosen too.
+                        folderCount = stats?.dirCount?.let {
+                            if (single != null && it > 0uL) it - 1uL else it
+                        },
                         ownerApp = owner,
                     ),
                 )
