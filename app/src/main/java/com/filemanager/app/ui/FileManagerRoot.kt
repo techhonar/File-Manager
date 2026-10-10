@@ -468,8 +468,6 @@ fun FileManagerRoot(
                             Icon(Icons.Default.Search, "Search")
                         }
                         HomeOverflowMenu(
-                            onManageStorage = { navController.navigate(Routes.STORAGE) },
-                            onTrash = { navController.navigate(Routes.TRASH) },
                             onTheme = { navController.navigate(Routes.THEME) },
                             onDefaults = { navController.navigate(Routes.DEFAULTS) },
                             onUpdate = app.updater::update,
@@ -748,8 +746,6 @@ private val ScreenFadeOut = tween<Float>(durationMillis = 180, easing = FastOutL
 /** The home screen's overflow menu: what has no tile of its own. */
 @Composable
 private fun HomeOverflowMenu(
-    onManageStorage: () -> Unit,
-    onTrash: () -> Unit,
     onTheme: () -> Unit,
     onDefaults: () -> Unit,
     onUpdate: () -> Unit,
@@ -761,14 +757,6 @@ private fun HomeOverflowMenu(
         Icon(Icons.Default.MoreVert, "More options")
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        DropdownMenuItem(
-            text = { Text("Manage storage") },
-            onClick = { onManageStorage(); expanded = false },
-        )
-        DropdownMenuItem(
-            text = { Text("Trash") },
-            onClick = { onTrash(); expanded = false },
-        )
         DropdownMenuItem(
             text = { Text("Theme") },
             onClick = { onTheme(); expanded = false },
