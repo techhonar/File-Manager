@@ -447,10 +447,14 @@ class SearchViewModel(
 
     // --- Selection and file operations --------------------------------------
 
+    // Choosing one starts selecting, and selecting goes on with nothing
+    // ticked - "Select items" - until Cancel or Back, as One UI has it.
+    // Unticking the last one used to end it, taking Favourites' handles
+    // with it.
     fun toggleSelection(path: String) = _state.update { current ->
         val next = current.selected.toMutableSet()
         if (!next.add(path)) next.remove(path)
-        current.copy(selected = next)
+        current.copy(selected = next, selectionActive = true)
     }
 
     /** Enter selection mode with nothing ticked, from the overflow menu. */
@@ -551,9 +555,9 @@ class SearchViewModel(
     /** Select everything, or clear it if everything is already selected. */
     fun toggleSelectAll() = _state.update { current ->
         if (current.allSelected) {
-            current.copy(selected = emptySet())
+            current.copy(selected = emptySet(), selectionActive = true)
         } else {
-            current.copy(selected = current.results.map { it.path }.toSet())
+            current.copy(selected = current.results.map { it.path }.toSet(), selectionActive = true)
         }
     }
 

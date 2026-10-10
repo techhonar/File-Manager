@@ -54,6 +54,10 @@ import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.BarItem
 import com.filemanager.app.ui.components.CancelSelection
 import com.filemanager.app.ui.components.CompactActionBar
+import com.filemanager.app.ui.components.containsText
+import com.filemanager.app.ui.components.countOf
+import com.filemanager.app.ui.components.modifiedRange
+import com.filemanager.app.ui.components.shownTime
 import com.filemanager.app.ui.components.FileRow
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.Pane

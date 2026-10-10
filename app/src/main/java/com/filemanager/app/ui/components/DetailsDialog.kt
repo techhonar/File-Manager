@@ -63,9 +63,8 @@ fun DetailsDialog(
                 if (entry.isDir) {
                     DetailRow(
                         label = "Contains",
-                        value = details?.let {
-                            if (it.fileCount == null) "Calculating…"
-                            else "${it.fileCount} files, ${it.folderCount} folders"
+                        value = details?.fileCount?.let { files ->
+                            containsText(files.toLong(), (details.folderCount ?: 0uL).toLong())
                         } ?: "Calculating…",
                     )
                 }
@@ -123,19 +122,72 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+/**
+ * Several items' details together, as One UI gives a selection's: how many,
+ * their size with everything inside their folders, the span of their dates,
+ * and what they are.
+ */
+@Composable
+fun SelectionDetailsDialog(entries: List<FileEntry>, details: FileDetails?, onDismiss: () -> Unit) {
+    val hasFolders = entries.any { it.isDir }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = OneUi.CardShape,
+        title = { Text("Details") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = countOf(entries.size.toLong(), "item"),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                DetailRow(
+                    label = "Total size (all folders and files)",
+                    value = when {
+                        // Files alone add up from what their entries say.
+                        !hasFolders -> formatSize(entries.fold(0uL) { total, it -> total + it.size })
+                        details?.folderBytes != null -> formatSize(details.folderBytes)
+                        else -> "Calculating…"
+                    },
+                )
+                DetailRow(
+                    label = "Last modified",
+                    value = modifiedRange(entries.map { it.modifiedMs.toLong() }),
+                )
+                DetailRow(
+                    label = "Contains",
+                    value = when {
+                        !hasFolders -> containsText(files = entries.size.toLong(), folders = 0)
+                        details?.fileCount != null ->
+                            containsText(details.fileCount.toLong(), (details.folderCount ?: 0uL).toLong())
+                        else -> "Calculating…"
+                    },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
 /** The details sheet [controller] has open, if any. [onShare] is handed its path. */
 @Composable
 fun DetailsDialogHost(controller: DetailsController, onShare: (String) -> Unit) {
     val sheet by controller.sheet.collectAsState()
     sheet?.let { open ->
-        DetailsDialog(
-            entry = open.entry,
-            details = open.details,
-            onDismiss = controller::dismiss,
-            onShare = {
-                onShare(open.entry.path)
-                controller.dismiss()
-            },
-        )
+        val single = open.entry
+        if (single != null) {
+            DetailsDialog(
+                entry = single,
+                details = open.details,
+                onDismiss = controller::dismiss,
+                onShare = {
+                    onShare(single.path)
+                    controller.dismiss()
+                },
+            )
+        } else {
+            SelectionDetailsDialog(entries = open.entries, details = open.details, onDismiss = controller::dismiss)
+        }
     }
 }

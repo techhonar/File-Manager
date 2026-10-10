@@ -24,7 +24,7 @@ class SelectionMoreTest {
         selected = selected.toList(),
         allFavorite = allFavorite,
         onCopyToClipboard = { calls += "clipboard" },
-        onDetails = { calls += "details ${it.name}" },
+        onDetails = { calls += "details ${it.joinToString { e -> e.name }}" },
         onRename = { calls += "rename ${it.name}" },
         onFavorite = { calls += "favourite" },
         onOpenWith = { calls += "open with ${it.name}" },
@@ -53,11 +53,13 @@ class SelectionMoreTest {
     }
 
     @Test
-    fun `several files get only what works on several`() {
+    fun `several files get what works on several, details summed up`() {
         assertEquals(
-            listOf("Copy to clipboard", "Add to favourites"),
+            listOf("Copy to clipboard", "Details", "Add to favourites"),
             shape(menu(file("a.pdf"), file("b.pdf"))),
         )
+        menu(file("a.pdf"), file("b.pdf")).first { it.label == "Details" }.onClick()
+        assertEquals("details of both", listOf("details a.pdf, b.pdf"), calls)
     }
 
     @Test
@@ -66,7 +68,7 @@ class SelectionMoreTest {
             listOf("Details", "Rename", "Add to favourites", "|", "Show in folder"),
             shape(menu(folder("Photos"))),
         )
-        assertEquals(listOf("Add to favourites"), shape(menu(file("a.pdf"), folder("Photos"))))
+        assertEquals(listOf("Details", "Add to favourites"), shape(menu(file("a.pdf"), folder("Photos"))))
     }
 
     @Test

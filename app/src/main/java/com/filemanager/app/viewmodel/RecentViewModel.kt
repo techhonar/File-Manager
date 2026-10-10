@@ -96,15 +96,19 @@ class RecentViewModel(
 
     fun enterSelectionMode() = _state.update { it.copy(selectionActive = true) }
 
+    // Choosing one starts selecting, and selecting goes on with nothing
+    // ticked - "Select items" - until Cancel or Back, as One UI has it.
+    // Unticking the last one used to end it, taking Favourites' handles
+    // with it.
     fun toggleSelection(path: String) = _state.update { current ->
         val next = current.selected.toMutableSet()
         if (!next.add(path)) next.remove(path)
-        current.copy(selected = next)
+        current.copy(selected = next, selectionActive = true)
     }
 
     fun toggleSelectAll() = _state.update { current ->
-        if (current.allSelected) current.copy(selected = emptySet())
-        else current.copy(selected = current.entries.map { it.path }.toSet())
+        if (current.allSelected) current.copy(selected = emptySet(), selectionActive = true)
+        else current.copy(selected = current.entries.map { it.path }.toSet(), selectionActive = true)
     }
 
     fun clearSelection() =
