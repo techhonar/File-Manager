@@ -46,7 +46,7 @@ class PrefsUpdateMemory(context: Context) : UpdateMemory {
  * changed - nearly every time - GitHub says so in a 304 with no release in
  * it. That saves the data, not the count: GitHub allows sixty requests an
  * hour from one address without signing in, 304s included (seen on
- * 2026-10-10, whatever its docs say), and every five minutes is twelve of
+ * 2026-10-10, whatever its docs say), and every ten minutes is six of
  * them. A check refused for being over is simply missed.
  */
 class ReleaseCheck(
@@ -97,8 +97,8 @@ class ReleaseCheck(
 
 /**
  * The version to tell the user about now, if any: newer than [installed],
- * and not one they have been told of already - a check every five minutes
- * must not mean a notification every five minutes.
+ * and not one they have been told of already - a check every ten minutes
+ * must not mean a notification every ten minutes.
  */
 fun versionToAnnounce(latest: String?, installed: String, announced: String?): String? =
     latest?.takeIf { isNewerVersion(it, installed) && it != announced }

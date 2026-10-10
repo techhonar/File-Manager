@@ -15,7 +15,7 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 
 /**
- * Looks for a newer release every five minutes - or as soon after as Android
+ * Looks for a newer release every ten minutes - or as soon after as Android
  * lets an app run in the background - and says so in a notification, once
  * for each new version. See AppUpdater.checkAndAnnounce.
  *
@@ -56,9 +56,9 @@ class UpdateCheckService : JobService() {
 
     companion object {
         private const val JOB_ID = 4201
-        private const val INTERVAL_MS = 5 * 60 * 1000L
+        private const val INTERVAL_MS = 10 * 60 * 1000L
 
-        /** Book the next check, five minutes on, for when there is a network. */
+        /** Book the next check, ten minutes on, for when there is a network. */
         fun schedule(context: Context) {
             val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
             scheduler.schedule(
