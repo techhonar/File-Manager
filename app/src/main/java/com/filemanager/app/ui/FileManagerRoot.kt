@@ -1,15 +1,19 @@
 package com.filemanager.app.ui
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.net.Uri
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.content.Intent
 import android.webkit.MimeTypeMap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -241,6 +245,21 @@ fun FileManagerRoot(
             startFtpService = { FtpService.start(context) },
             stopFtpService = { FtpService.stop(context) },
         )
+    }
+
+    // Update notifications need it from Android 13. Asked once, the first
+    // time the app is open with its storage, and then left to Settings.
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Either way: without it the update is still in the menu. */ }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !app.settings.askedForNotifications &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            app.settings.askedForNotifications = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     // Extracting an archive opened from a screen with no extract of its own:

@@ -195,6 +195,14 @@ class AppSettings(context: Context) {
         _showHidden.value = show
     }
 
+    /**
+     * Whether the app has asked to show notifications. Asked once, for the
+     * update notice; after that the choice is the user's, in Settings.
+     */
+    var askedForNotifications: Boolean
+        get() = prefs.getBoolean(KEY_ASKED_NOTIFICATIONS, false)
+        set(value) = prefs.edit().putBoolean(KEY_ASKED_NOTIFICATIONS, value).apply()
+
     private inline fun <reified T : Enum<T>> readEnum(key: String, fallback: T): T {
         val stored = prefs.getString(key, null) ?: return fallback
         return runCatching { enumValueOf<T>(stored) }.getOrDefault(fallback)
@@ -255,6 +263,7 @@ class AppSettings(context: Context) {
         const val KEY_SORT = "sort_key"
         const val KEY_SORT_DESC = "sort_descending"
         const val KEY_SHOW_HIDDEN = "show_hidden"
+        const val KEY_ASKED_NOTIFICATIONS = "asked_notifications"
         const val KEY_EDITOR_WRAP = "editor_word_wrap"
         const val KEY_EDITOR_LINE_NUMBERS = "editor_line_numbers"
         const val KEY_EDITOR_HIGHLIGHT = "editor_highlight"

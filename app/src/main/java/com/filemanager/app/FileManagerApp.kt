@@ -16,6 +16,7 @@ import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.install.BundleInstaller
 import com.filemanager.app.data.update.AppUpdater
+import com.filemanager.app.data.update.UpdateCheckService
 import com.filemanager.app.data.remote.RemoteConnections
 import com.filemanager.app.data.remote.RemoteRepository
 import com.filemanager.app.data.transfer.Transfer
@@ -166,5 +167,18 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             // directory listing for every row.
             runCatching { VideoThumbFetcher.trimCache(this@FileManagerApp) }
         }
+
+        // The check for a new version every five minutes. Here, as the
+        // process starts for any reason, since a force stop clears it.
+        UpdateCheckService.ensureScheduled(this)
+    }
+
+    /**
+     * Look for a new version now, off the main thread. When the app is
+     * opened - not as the process starts, which the five-minute check
+     * itself is often the reason for.
+     */
+    fun checkForUpdateNow() {
+        appScope.launch { runCatching { updater.checkAndAnnounce() } }
     }
 }
