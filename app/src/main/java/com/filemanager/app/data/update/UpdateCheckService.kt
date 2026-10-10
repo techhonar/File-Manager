@@ -32,7 +32,9 @@ class UpdateCheckService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         scope.launch {
             try {
-                (application as FileManagerApp).updater.checkAndAnnounce()
+                // Whatever goes wrong in a check stays in it: an exception
+                // let out of this scope would take the whole app down.
+                runCatching { (application as FileManagerApp).updater.checkAndAnnounce() }
             } finally {
                 jobFinished(params, false)
                 // After finishing: booking this job's own id while it runs
@@ -58,27 +60,39 @@ class UpdateCheckService : JobService() {
         private const val JOB_ID = 4201
         private const val INTERVAL_MS = 10 * 60 * 1000L
 
-        /** Book the next check, ten minutes on, for when there is a network. */
+        /**
+         * Book the next check, ten minutes on, for when there is a network.
+         *
+         * Never throws. Android refuses a booking it has a rule against - a
+         * network wait without ACCESS_NETWORK_STATE threw on Android 14 and
+         * up, and this runs as the app starts, so the app closed the moment
+         * it opened. Refused, there are simply no checks; the app is not to
+         * pay for them.
+         */
         fun schedule(context: Context) {
-            val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-            scheduler.schedule(
-                JobInfo.Builder(JOB_ID, ComponentName(context, UpdateCheckService::class.java))
-                    .setMinimumLatency(INTERVAL_MS)
-                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                    // Kept across a restart of the phone.
-                    .setPersisted(true)
-                    .build(),
-            )
+            runCatching {
+                val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
+                scheduler.schedule(
+                    JobInfo.Builder(JOB_ID, ComponentName(context, UpdateCheckService::class.java))
+                        .setMinimumLatency(INTERVAL_MS)
+                        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                        // Kept across a restart of the phone.
+                        .setPersisted(true)
+                        .build(),
+                )
+            }
         }
 
         /**
          * Book a check unless one is waiting already. On every launch, as a
          * force stop clears an app's jobs and only opening it again restarts
-         * them.
+         * them. Never throws, as [schedule] does not.
          */
         fun ensureScheduled(context: Context) {
-            val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-            if (scheduler.getPendingJob(JOB_ID) == null) schedule(context)
+            runCatching {
+                val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
+                if (scheduler.getPendingJob(JOB_ID) == null) schedule(context)
+            }
         }
     }
 }
