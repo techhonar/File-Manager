@@ -8,12 +8,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
+import org.json.JSONArray
+import org.json.JSONObject
 
 class ReleaseCheckTest {
 
     private class Memory : UpdateMemory {
         override var etag: String? = null
         override var latest: String? = null
+        override var latestChanges: List<String> = emptyList()
         override var announced: String? = null
     }
 
@@ -31,9 +34,45 @@ class ReleaseCheckTest {
     fun stop() = server.shutdown()
 
     /** As much of GitHub's answer as the check reads. */
-    private fun release(tag: String, vararg assets: String, etag: String) = MockResponse()
-        .setBody("""{"tag_name":"$tag","assets":[${assets.joinToString(",") { "{\"name\":\"$it\"}" }}]}""")
+    private fun release(tag: String, vararg assets: String, etag: String, notes: String? = null) = MockResponse()
+        .setBody(
+            JSONObject()
+                .put("tag_name", tag)
+                .put("assets", JSONArray(assets.map { JSONObject().put("name", it) }))
+                .put("body", notes ?: JSONObject.NULL)
+                .toString(),
+        )
         .setHeader("ETag", etag)
+
+    /** Notes as tools/release_notes.py writes them. */
+    private val notes = """
+        ## What changed
+
+        4 changes - 1 new feature, 2 fixes, 1 internal change.
+
+        ### New features
+
+        **Lay out Favourites as One UI does, in an order the user keeps**
+
+        Favourites are listed in the order they were added, which the user can
+        change: holding one chooses it, as elsewhere.
+
+        ### Fixes
+
+        **Offer Details for several files at once**
+
+        More offered Details for one file only.
+
+        **Keep selecting until Cancel, with nothing ticked**
+
+        ### Behind the scenes
+
+        **Run the unit tests against the release build**
+
+        **Full changelog:** https://github.com/techhonar/File-Manager/compare/v0.6.3...v0.6.4
+
+        ---
+    """.trimIndent()
 
     @Test
     fun `the latest release's version, its ETag kept for next time`() {
@@ -54,6 +93,48 @@ class ReleaseCheckTest {
         assertEquals("0.6.0", check.latestVersion())
         server.takeRequest()
         assertEquals("the second asks whether it changed", "\"abc\"", server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `the changes its notes list are kept, for the 304s that follow`() {
+        server.enqueue(release("v0.6.4", "app.apk", etag = "\"abc\"", notes = notes))
+        server.enqueue(MockResponse().setResponseCode(304))
+
+        assertEquals("0.6.4", check.latestVersion())
+        assertEquals("0.6.4", check.latestVersion())
+        assertEquals(
+            listOf(
+                "Lay out Favourites as One UI does, in an order the user keeps",
+                "Offer Details for several files at once",
+                "Keep selecting until Cancel, with nothing ticked",
+            ),
+            memory.latestChanges,
+        )
+    }
+
+    @Test
+    fun `a release without notes, or still without its APK, has no changes to tell`() {
+        server.enqueue(release("v0.6.4", "app.apk", etag = "\"a\""))
+        server.enqueue(release("v0.7.0", "notes.txt", etag = "\"b\"", notes = notes))
+
+        check.latestVersion()
+        assertEquals(emptyList<String>(), memory.latestChanges)
+        check.latestVersion()
+        assertEquals(emptyList<String>(), memory.latestChanges)
+    }
+
+    @Test
+    fun `changes are the lines in bold, but not those behind the scenes or the changelog link`() {
+        assertEquals(
+            listOf(
+                "Lay out Favourites as One UI does, in an order the user keeps",
+                "Offer Details for several files at once",
+                "Keep selecting until Cancel, with nothing ticked",
+            ),
+            releaseChanges(notes),
+        )
+        assertEquals("notes written some other way", emptyList<String>(), releaseChanges("Bug fixes and improvements."))
+        assertEquals(emptyList<String>(), releaseChanges(""))
     }
 
     @Test

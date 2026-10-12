@@ -78,7 +78,7 @@ class AppUpdater(private val context: Context) {
             return null
         }
         val version = versionToAnnounce(latest, BuildConfig.VERSION_NAME, memory.announced) ?: return null
-        UpdateNotification.show(context, version)
+        UpdateNotification.show(context, version, memory.latestChanges)
         memory.announced = version
         return version
     }
