@@ -6,12 +6,14 @@ import okhttp3.Request
 import org.json.JSONObject
 
 /**
- * What one check leaves for the next: the ETag of GitHub's last answer and
- * the version it named, and the newest version the user has been told of.
+ * What one check leaves for the next: the ETag of GitHub's last answer, the
+ * version it named and the changes its notes listed, and the newest version
+ * the user has been told of.
  */
 interface UpdateMemory {
     var etag: String?
     var latest: String?
+    var latestChanges: List<String>
     var announced: String?
 }
 
@@ -27,6 +29,11 @@ class PrefsUpdateMemory(context: Context) : UpdateMemory {
         get() = prefs.getString(KEY_LATEST, null)
         set(value) = prefs.edit().putString(KEY_LATEST, value).apply()
 
+    // One per line: a title is a line of the notes, so never holds one.
+    override var latestChanges: List<String>
+        get() = prefs.getString(KEY_LATEST_CHANGES, null)?.lines()?.filter { it.isNotBlank() }.orEmpty()
+        set(value) = prefs.edit().putString(KEY_LATEST_CHANGES, value.joinToString("\n")).apply()
+
     override var announced: String?
         get() = prefs.getString(KEY_ANNOUNCED, null)
         set(value) = prefs.edit().putString(KEY_ANNOUNCED, value).apply()
@@ -34,6 +41,7 @@ class PrefsUpdateMemory(context: Context) : UpdateMemory {
     private companion object {
         const val KEY_ETAG = "etag"
         const val KEY_LATEST = "latest"
+        const val KEY_LATEST_CHANGES = "latest_changes"
         const val KEY_ANNOUNCED = "announced"
     }
 }
@@ -80,8 +88,10 @@ class ReleaseCheck(
                         val version = release.getString("tag_name").removePrefix("v").takeIf { hasApk }
                         // Kept with its ETag either way: a release still
                         // waiting for its APK changes when the APK arrives,
-                        // and so does its ETag.
+                        // and so does its ETag. The changes are kept too, as
+                        // the next answer is a 304 that does not repeat them.
                         memory.latest = version
+                        memory.latestChanges = if (version == null) emptyList() else releaseChanges(release.optString("body"))
                         memory.etag = response.header("ETag")
                         version
                     }
@@ -102,3 +112,24 @@ class ReleaseCheck(
  */
 fun versionToAnnounce(latest: String?, installed: String, announced: String?): String? =
     latest?.takeIf { isNewerVersion(it, installed) && it != announced }
+
+/**
+ * The changes a release's [notes] list, by title: each is a line of its own,
+ * in bold, as tools/release_notes.py writes them. Those behind the scenes are
+ * left out, being of no use to anyone deciding whether to update.
+ */
+fun releaseChanges(notes: String): List<String> {
+    var behindTheScenes = false
+    val titles = mutableListOf<String>()
+    for (line in notes.lineSequence().map { it.trim() }) {
+        if (line.startsWith("### ")) {
+            behindTheScenes = line.removePrefix("### ").trim().equals("Behind the scenes", ignoreCase = true)
+        } else if (!behindTheScenes) {
+            // A whole line in bold, so not "**Full changelog:** ..." after them.
+            BOLD_LINE.matchEntire(line)?.let { titles += it.groupValues[1].trim() }
+        }
+    }
+    return titles
+}
+
+private val BOLD_LINE = Regex("""\*\*([^*]+)\*\*""")
