@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.filemanager.app.data.update.AppUpdater
 import com.filemanager.app.ui.theme.OneUi
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 /**
  * What Update App is doing. Nothing is shown while idle, or once the download

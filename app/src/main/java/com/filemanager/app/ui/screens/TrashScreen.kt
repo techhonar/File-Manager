@@ -68,7 +68,7 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.TrashDetails
 import com.filemanager.app.viewmodel.TrashViewModel
 import uniffi.filemanager_core.FileCategory
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 /**
  * The trash, as One UI lays its out: what is in it under how long each item

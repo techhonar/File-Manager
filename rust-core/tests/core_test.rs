@@ -10,7 +10,6 @@ use filemanager_core::search::{search, search_streaming, SearchFilter, SearchSin
 use filemanager_core::storage::{analyze_storage, largest_files, storage_summary};
 use filemanager_core::trash::{trash_list, trash_move, trash_restore, trash_purge_expired};
 use filemanager_core::types::{FileCategory, FileEntry, SortKey, SortOptions};
-use filemanager_core::format_size;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -310,16 +309,6 @@ fn rejects_zip_slip_paths() {
 
     assert!(!tree.path().join("escaped.txt").exists(), "must not escape the destination");
     assert!(!out.join("escaped.txt").exists(), "malicious entry should be skipped");
-}
-
-#[test]
-fn formats_sizes_for_display() {
-    assert_eq!(format_size(0), "0 B");
-    assert_eq!(format_size(512), "512 B");
-    assert_eq!(format_size(1024), "1.0 KB");
-    assert_eq!(format_size(1536), "1.5 KB");
-    assert_eq!(format_size(15 * 1024 * 1024), "15 MB");
-    assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GB");
 }
 
 #[test]
