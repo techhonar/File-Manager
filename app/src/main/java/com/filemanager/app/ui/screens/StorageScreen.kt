@@ -35,6 +35,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import com.filemanager.app.ui.components.AnimatedBottomBar
+import com.filemanager.app.ui.components.RowDate
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import androidx.compose.material3.MaterialTheme
@@ -66,10 +67,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 import com.filemanager.app.ui.components.selectionTitle
 import com.filemanager.app.ui.components.CancelSelection
 
@@ -468,5 +466,4 @@ private fun shownFolder(path: String, root: String): String {
     return if (rest.isEmpty()) "Internal storage" else "Internal storage/$rest"
 }
 
-private fun shownDate(modifiedMs: ULong): String =
-    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(modifiedMs.toLong()))
+private fun shownDate(modifiedMs: ULong): String = RowDate.format(modifiedMs.toLong())

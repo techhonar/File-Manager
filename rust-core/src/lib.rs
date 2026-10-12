@@ -30,28 +30,3 @@ uniffi::setup_scaffolding!();
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
-
-/// Format bytes the way the UI wants them ("1.4 GB").
-///
-/// In Rust rather than Kotlin only so the sizes in search results, storage
-/// analysis and file details cannot drift apart.
-#[uniffi::export]
-pub fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-
-    let mut size = bytes as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    // One decimal below 10 ("9.4 MB"), none above ("512 MB").
-    if size < 10.0 {
-        format!("{size:.1} {}", UNITS[unit])
-    } else {
-        format!("{size:.0} {}", UNITS[unit])
-    }
-}

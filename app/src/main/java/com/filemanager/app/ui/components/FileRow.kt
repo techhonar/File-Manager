@@ -32,10 +32,7 @@ import coil.compose.AsyncImage
 import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
-import uniffi.filemanager_core.formatSize
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.filemanager.app.data.formatSize
 
 /**
  * One row in a file list.
@@ -172,8 +169,7 @@ private fun FileThumbnail(entry: FileEntry, size: Int = 46, preview: Boolean = t
 
 /** "12 Sep 2026 · 4.2 MB", or just the date for a folder. */
 private fun FileEntry.subtitle(): String {
-    val date = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
-        .format(Date(modifiedMs.toLong()))
+    val date = RowDate.format(modifiedMs.toLong())
     return if (isDir) date else "$date  ·  ${formatSize(size)}"
 }
 
@@ -284,6 +280,4 @@ fun FileDetailRow(
     }
 }
 
-private fun detailedTimestamp(entry: FileEntry): String =
-    SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault())
-        .format(Date(entry.modifiedMs.toLong()))
+private fun detailedTimestamp(entry: FileEntry): String = RowTime.format(entry.modifiedMs.toLong())

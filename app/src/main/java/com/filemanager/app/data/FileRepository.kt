@@ -33,7 +33,6 @@ import uniffi.filemanager_core.dirSize
 import uniffi.filemanager_core.filesInCategory
 import uniffi.filemanager_core.filesystemStats
 import uniffi.filemanager_core.findDuplicates
-import uniffi.filemanager_core.formatSize
 import uniffi.filemanager_core.largestFiles
 import uniffi.filemanager_core.listDir
 import uniffi.filemanager_core.recentFiles

@@ -15,7 +15,7 @@ import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.StorageSummary
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 data class StorageState(
     val summary: StorageSummary? = null,

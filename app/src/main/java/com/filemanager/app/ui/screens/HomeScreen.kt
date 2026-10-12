@@ -52,7 +52,7 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.HomeState
 import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileCategory
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 /**
  * The landing page: a row into Recent files, a category grid, per-volume

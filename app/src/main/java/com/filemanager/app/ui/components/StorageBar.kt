@@ -24,7 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import uniffi.filemanager_core.CategoryUsage
 import uniffi.filemanager_core.FileCategory
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 /**
  * The stacked usage bar: one segment per category, widest first, with the

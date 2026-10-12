@@ -6,7 +6,7 @@ use crate::types::{sort_entries, FileEntry, SortOptions};
 use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use walkdir::WalkDir;
 
 /// One level of a directory, sorted. This is the browser's main call.
@@ -20,28 +20,67 @@ pub fn list_dir(
     sort: SortOptions,
 ) -> Result<Vec<FileEntry>> {
     let dir = Path::new(&path);
-    if !dir.exists() {
+    // One stat answers both questions, where exists() and is_dir() made one
+    // each. As with them, a stat that fails counts as nothing there.
+    let Ok(meta) = std::fs::metadata(dir) else {
         return Err(FileError::NotFound { path });
-    }
-    if !dir.is_dir() {
+    };
+    if !meta.is_dir() {
         return Err(FileError::NotADirectory { path });
     }
 
     let read = std::fs::read_dir(dir).map_err(|e| FileError::from_io(e, dir))?;
-    let mut entries = Vec::new();
+    // Hidden names go before their stat rather than after it. The stats are
+    // what a listing spends its time on, and those were thrown away.
+    let items: Vec<_> = read
+        .flatten()
+        .filter(|item| show_hidden || !item.file_name().as_encoded_bytes().starts_with(b"."))
+        .collect();
 
-    for item in read.flatten() {
-        let Ok(meta) = item.metadata() else { continue };
-        let entry = FileEntry::from_metadata(&item.path(), &meta);
-        if entry.is_hidden && !show_hidden {
-            continue;
+    // On a phone, shared storage is served through FUSE, so every stat is a
+    // round trip to the media provider, and a big folder spent most of its
+    // listing waiting on them one at a time. They do not depend on each
+    // other, so a big folder's go out several at once.
+    let mut entries: Vec<FileEntry> = match listing_pool() {
+        Some(pool) if items.len() >= PARALLEL_FROM => {
+            pool.install(|| items.par_iter().filter_map(entry_of).collect())
         }
-        entries.push(entry);
-    }
+        _ => items.iter().filter_map(entry_of).collect(),
+    };
 
     sort_entries(&mut entries, &sort);
     Ok(entries)
 }
+
+/// A folder this size or more has its entries read several at once. Below
+/// it, sharing out the work costs about what it saves.
+const PARALLEL_FROM: usize = 256;
+
+/// One entry of a listing, or none for a child that cannot be stat'ed.
+fn entry_of(item: &std::fs::DirEntry) -> Option<FileEntry> {
+    let meta = item.metadata().ok()?;
+    Some(FileEntry::from_metadata(&item.path(), &meta))
+}
+
+/// Threads for listing alone, apart from rayon's global pool. A search, a
+/// category or the storage analysis can keep that one busy for seconds, and
+/// a folder's listing queued behind them would stay blank as long. None if
+/// the threads could not be started, and then a listing reads one at a time.
+fn listing_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(LISTING_THREADS)
+            .thread_name(|i| format!("list-{i}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
+/// How many stats a listing has waiting at once. They are spent waiting on
+/// the media provider, not working, so this need not match the cores.
+const LISTING_THREADS: usize = 8;
 
 /// Total bytes under a directory, following no symlinks.
 ///

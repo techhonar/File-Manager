@@ -56,7 +56,7 @@ import com.filemanager.app.data.visibleRows
 import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.ExtractController
 import com.filemanager.app.viewmodel.ExtractState
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 import java.io.File
 
 /**

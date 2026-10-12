@@ -22,7 +22,7 @@ import com.filemanager.app.viewmodel.DetailsController
 import com.filemanager.app.viewmodel.FileDetails
 import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.FileEntry
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

@@ -27,7 +27,7 @@ import coil.compose.AsyncImage
 import com.filemanager.app.ui.theme.OneUi
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 
 /**
  * One tile in grid view: a large square preview with the name beneath.

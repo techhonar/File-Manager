@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import uniffi.filemanager_core.formatSize
+import com.filemanager.app.data.formatSize
 import java.io.File
 
 data class RemoteBrowserState(
