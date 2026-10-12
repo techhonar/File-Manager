@@ -4,6 +4,7 @@ import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.memory.MemoryCache
+import com.filemanager.app.data.ThumbnailCache
 import com.filemanager.app.data.VideoThumbFetcher
 import coil.decode.VideoFrameDecoder
 import com.filemanager.app.data.ApkIconFetcher
@@ -132,7 +133,8 @@ class FileManagerApp : Application(), ImageLoaderFactory {
      * Order matters: VideoThumbFetcher comes first and serves the formats it
      * knows from a disk cache, and VideoFrameDecoder stays behind it as a
      * fallback for anything it does not. ApkIconFetcher reads an installer's
-     * icon out of the archive, AudioArtFetcher a track's embedded cover.
+     * icon out of the archive, AudioArtFetcher a track's embedded cover, and
+     * both keep what they find on disk as well.
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
@@ -165,7 +167,7 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             runCatching { repository.purgeExpiredTrash() }
             // Once per launch is enough; doing it per thumbnail would cost a
             // directory listing for every row.
-            runCatching { VideoThumbFetcher.trimCache(this@FileManagerApp) }
+            ThumbnailCache.trimAll(this@FileManagerApp)
         }
 
         // The check for a new version every ten minutes. Here, as the
