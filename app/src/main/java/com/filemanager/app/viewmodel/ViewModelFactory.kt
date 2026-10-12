@@ -35,18 +35,25 @@ class ViewModelFactory(
     /** See BrowserViewModel: passed in so no ViewModel holds a Context. */
     private val ownerAppOf: suspend (String) -> String? = { null },
     private val hasRemovableSlot: Boolean = false,
+    // The process-wide services below are handed over as functions, called
+    // only when a screen that uses one is made. Fetched as the factory was
+    // built, they were all made with the app's first frame, which waited on
+    // them: the search session is the first thing that calls into the Rust
+    // library, loading it, and the saved servers and FTP settings are each
+    // read from disk.
+
     /** The process-wide search session; see FileManagerApp. */
-    private val searchSession: SearchSession? = null,
+    private val searchSession: (() -> SearchSession)? = null,
     /** Null on screens that have nothing to do with network storage, which is
      *  most of them - constructing the clients costs a socket. */
-    private val remoteServers: RemoteServers? = null,
-    private val remoteRepository: RemoteRepository? = null,
+    private val remoteServers: (() -> RemoteServers)? = null,
+    private val remoteRepository: (() -> RemoteRepository)? = null,
     /** Which server the remote browser should open. */
     private val remoteServer: RemoteServer? = null,
     /** Where the remote browser's downloads and uploads run. */
-    private val transfers: TransferCenter? = null,
-    private val ftpSettings: FtpServerSettings? = null,
-    private val ftpController: FtpServerController? = null,
+    private val transfers: (() -> TransferCenter)? = null,
+    private val ftpSettings: (() -> FtpServerSettings)? = null,
+    private val ftpController: (() -> FtpServerController)? = null,
     /** See FtpServerViewModel: the service is started with an Intent, and a
      *  ViewModel holding the Context to build one would outlive its screen. */
     private val startFtpService: () -> Unit = {},
@@ -78,7 +85,7 @@ class ViewModelFactory(
                 roots = volumes.map { it.path },
                 downloadsPath = StorageVolumes.downloadsPath(),
                 paths = paths,
-                session = requireNotNull(searchSession) { "searchSession not supplied" },
+                session = requireNotNull(searchSession) { "searchSession not supplied" }(),
                 ownerAppOf = ownerAppOf,
             ) as T
 
@@ -99,22 +106,22 @@ class ViewModelFactory(
 
         modelClass.isAssignableFrom(RemoteServersViewModel::class.java) ->
             RemoteServersViewModel(
-                servers = requireNotNull(remoteServers) { "remoteServers not supplied" },
-                repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
+                servers = requireNotNull(remoteServers) { "remoteServers not supplied" }(),
+                repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" }(),
             ) as T
 
         modelClass.isAssignableFrom(RemoteBrowserViewModel::class.java) ->
             RemoteBrowserViewModel(
                 server = requireNotNull(remoteServer) { "remoteServer not supplied" },
-                repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
+                repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" }(),
                 clipboard = clipboard,
-                transfers = requireNotNull(transfers) { "transfers not supplied" },
+                transfers = requireNotNull(transfers) { "transfers not supplied" }(),
             ) as T
 
         modelClass.isAssignableFrom(FtpServerViewModel::class.java) ->
             FtpServerViewModel(
-                settings = requireNotNull(ftpSettings) { "ftpSettings not supplied" },
-                controller = requireNotNull(ftpController) { "ftpController not supplied" },
+                settings = requireNotNull(ftpSettings) { "ftpSettings not supplied" }(),
+                controller = requireNotNull(ftpController) { "ftpController not supplied" }(),
                 repository = repository,
                 volumes = volumes,
                 startService = startFtpService,

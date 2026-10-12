@@ -223,11 +223,7 @@ fun FileManagerRoot(
             .apply { mkdirs() }
     }
 
-    // The app's own: one per process, not per screen, since transfers outlive
-    // screens and share its connections.
-    val remoteRepository = app.remoteRepository
-
-    val factory = remember(volumes, ownerAppOf, hasRemovableSlot, remoteRepository) {
+    val factory = remember(volumes, ownerAppOf, hasRemovableSlot) {
         ViewModelFactory(
             repository = app.repository,
             clipboard = app.clipboard,
@@ -237,11 +233,13 @@ fun FileManagerRoot(
             primaryPath = primaryPath,
             ownerAppOf = ownerAppOf,
             hasRemovableSlot = hasRemovableSlot,
-            searchSession = app.searchSession,
-            remoteServers = app.remoteServers,
-            remoteRepository = remoteRepository,
-            ftpSettings = app.ftpSettings,
-            ftpController = app.ftpServer,
+            searchSession = { app.searchSession },
+            remoteServers = { app.remoteServers },
+            // The app's own: one per process, not per screen, since transfers
+            // outlive screens and share its connections.
+            remoteRepository = { app.remoteRepository },
+            ftpSettings = { app.ftpSettings },
+            ftpController = { app.ftpServer },
             startFtpService = { FtpService.start(context) },
             stopFtpService = { FtpService.stop(context) },
         )
@@ -638,9 +636,9 @@ fun FileManagerRoot(
                             settings = app.settings,
                             volumes = volumes,
                             primaryPath = primaryPath,
-                            remoteRepository = remoteRepository,
+                            remoteRepository = { app.remoteRepository },
                             remoteServer = server,
-                            transfers = app.transfers,
+                            transfers = { app.transfers },
                         ),
                     )
                     RemoteBrowserScreen(
