@@ -4,6 +4,7 @@
 //! `uniffi::Enum` becomes a Kotlin `enum class`. You never write that Kotlin
 //! by hand -- it is generated from these definitions at build time.
 
+use std::cmp::Reverse;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -107,21 +108,27 @@ pub(crate) fn now_millis() -> u64 {
 
 /// Apply a `SortOptions` to a listing in place.
 pub(crate) fn sort_entries(entries: &mut [FileEntry], opts: &SortOptions) {
-    entries.sort_by(|a, b| {
-        if opts.dirs_first && a.is_dir != b.is_dir {
-            // Directories first, and this beats the descending flag.
-            return b.is_dir.cmp(&a.is_dir);
-        }
-        let ord = match opts.key {
-            SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortKey::Size => a.size.cmp(&b.size),
-            SortKey::Modified => a.modified_ms.cmp(&b.modified_ms),
-            SortKey::Type => extension_of(&a.name)
-                .cmp(&extension_of(&b.name))
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-        };
-        if opts.descending { ord.reverse() } else { ord }
-    });
+    // Each entry's key is worked out once, up front. Name and type order on
+    // lowercased names, and lowercasing allocates: done inside the
+    // comparison, as it was, a sort lowercased every name about 2 * log2(n)
+    // times - most of the time a large folder took to list.
+    match opts.key {
+        SortKey::Name => sort_keyed(entries, opts, |e| e.name.to_lowercase()),
+        SortKey::Size => sort_keyed(entries, opts, |e| e.size),
+        SortKey::Modified => sort_keyed(entries, opts, |e| e.modified_ms),
+        SortKey::Type => sort_keyed(entries, opts, |e| (extension_of(&e.name), e.name.to_lowercase())),
+    }
+}
+
+/// Stable, like the comparison sort it replaced: equal keys keep their order.
+fn sort_keyed<K: Ord>(entries: &mut [FileEntry], opts: &SortOptions, key: impl Fn(&FileEntry) -> K) {
+    // Directories first, and this beats the descending flag.
+    let files_after = |e: &FileEntry| opts.dirs_first && !e.is_dir;
+    if opts.descending {
+        entries.sort_by_cached_key(|e| (files_after(e), Reverse(key(e))));
+    } else {
+        entries.sort_by_cached_key(|e| (files_after(e), key(e)));
+    }
 }
 
 fn extension_of(name: &str) -> String {
@@ -141,4 +148,74 @@ pub(crate) fn is_hidden_dir(entry: &walkdir::DirEntry) -> bool {
     entry.depth() > 0
         && entry.file_type().is_dir()
         && entry.file_name().to_string_lossy().starts_with('.')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The order, put as plainly as it can be: one comparison per pair, keys
+    /// worked out as it goes. sort_entries must agree with it exactly.
+    fn plainly_sorted(entries: &[FileEntry], opts: &SortOptions) -> Vec<FileEntry> {
+        let mut out = entries.to_vec();
+        out.sort_by(|a, b| {
+            if opts.dirs_first && a.is_dir != b.is_dir {
+                return b.is_dir.cmp(&a.is_dir);
+            }
+            let ord = match opts.key {
+                SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortKey::Size => a.size.cmp(&b.size),
+                SortKey::Modified => a.modified_ms.cmp(&b.modified_ms),
+                SortKey::Type => extension_of(&a.name)
+                    .cmp(&extension_of(&b.name))
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            };
+            if opts.descending { ord.reverse() } else { ord }
+        });
+        out
+    }
+
+    /// Few distinct names, sizes and dates, so that most keys tie: a sort
+    /// that drops stability, or orders one tie differently, shows up.
+    fn entries() -> Vec<FileEntry> {
+        let names = ["photo.JPG", "Photo.jpg", "notes", "Notes", "ärger.pdf", "Zebra.pdf", "a.b.zip", ".hidden", "Ä.txt"];
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        (0..400)
+            .map(|i| {
+                let name = names[next() as usize % names.len()];
+                FileEntry {
+                    name: name.to_string(),
+                    // Distinct, so that the order of ties can be told apart.
+                    path: format!("/x/{i}/{name}"),
+                    size: (next() % 4) as u64 * 100,
+                    is_dir: next() % 3 == 0,
+                    is_hidden: name.starts_with('.'),
+                    modified_ms: (next() % 5) as u64 * 1000,
+                    category: FileCategory::Other,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sort_agrees_with_the_plain_comparison_for_every_option() {
+        let entries = entries();
+        for key in [SortKey::Name, SortKey::Size, SortKey::Modified, SortKey::Type] {
+            for descending in [false, true] {
+                for dirs_first in [false, true] {
+                    let opts = SortOptions { key, descending, dirs_first };
+                    let mut sorted = entries.clone();
+                    sort_entries(&mut sorted, &opts);
+                    let paths = |list: &[FileEntry]| list.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
+                    assert_eq!(paths(&sorted), paths(&plainly_sorted(&entries, &opts)), "{opts:?}");
+                }
+            }
+        }
+    }
 }

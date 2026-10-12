@@ -329,6 +329,41 @@ fn missing_directory_is_a_typed_error() {
 }
 
 #[test]
+fn listing_a_file_is_a_typed_error() {
+    let tree = TempTree::new("list-file");
+    let file = tree.file("notes.txt", b"n");
+    let err = list_dir(file.to_string_lossy().into_owned(), false, sort_by_name()).unwrap_err();
+    assert!(matches!(err, filemanager_core::errors::FileError::NotADirectory { .. }));
+}
+
+#[test]
+fn a_big_folder_lists_whole_and_in_order() {
+    // Big enough that its entries are read several at once.
+    let tree = TempTree::new("list-big");
+    for i in 0..600 {
+        tree.file(&format!("file-{i:04}.txt"), &vec![0u8; i % 7]);
+    }
+    for i in 0..40 {
+        tree.file(&format!(".hidden-{i:02}"), b"h");
+        tree.dir(&format!("Folder-{i:02}"));
+    }
+
+    let visible = list_dir(tree.str(), false, sort_by_name()).unwrap();
+    let names: Vec<_> = visible.iter().map(|e| e.name.clone()).collect();
+    let expected: Vec<_> = (0..40)
+        .map(|i| format!("Folder-{i:02}"))
+        .chain((0..600).map(|i| format!("file-{i:04}.txt")))
+        .collect();
+    assert_eq!(names, expected);
+    assert!(visible.iter().take(40).all(|e| e.is_dir && e.size == 0));
+    assert!(visible.iter().skip(40).enumerate().all(|(i, e)| !e.is_dir && e.size == (i % 7) as u64));
+
+    let all = list_dir(tree.str(), true, sort_by_name()).unwrap();
+    assert_eq!(all.len(), 680, "hidden files should appear when asked for");
+    assert_eq!(all.iter().filter(|e| e.is_hidden).count(), 40);
+}
+
+#[test]
 fn single_pass_analysis_agrees_with_the_two_separate_walks() {
     // analyze_storage exists to replace storage_summary + largest_files with
     // one parallel walk. It is only worth having if it returns the same
