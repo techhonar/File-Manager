@@ -53,3 +53,17 @@ pub trait ProgressListener: Send + Sync {
     /// archives). `total` is 0 when it isn't known up front.
     fn on_progress(&self, done: u64, total: u64, current_path: String);
 }
+
+/// What a copy or a move says as it goes.
+///
+/// Files and bytes both, as One UI shows them: how many of the files are
+/// done, and how far through all of it the bytes are - a single 17 GB file is
+/// "0/1" for minutes, and only the bytes move.
+#[uniffi::export(with_foreign)]
+pub trait PlaceListener: Send + Sync {
+    fn on_progress(&self, files_done: u64, files_total: u64, bytes_done: u64, bytes_total: u64);
+
+    /// `source` is now at `target`, whole: under its own name or, where that
+    /// was taken, a numbered one.
+    fn on_placed(&self, source: String, target: String);
+}
