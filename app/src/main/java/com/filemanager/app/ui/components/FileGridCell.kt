@@ -82,22 +82,24 @@ fun FileGridCell(
                 // In the grid's own style - a coloured mark on the plain tile -
                 // a document shows its kind as a word: "PDF" in red, "DOCX"
                 // in blue. Sized to the tile, so it fits however large that is.
+                // The glyph keeps its size on a large tile and shrinks with
+                // a smaller one - five across leaves little room for 40dp.
                 val document = if (entry.category == FileCategory.DOCUMENT) documentType(entry.name) else null
-                if (document != null) {
-                    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (document != null) {
                         DocumentLabel(
                             type = document,
                             color = document.kind.color(),
                             letterHeight = maxWidth * documentLabelScale(document.label) * 0.75f,
                         )
+                    } else {
+                        Icon(
+                            imageVector = entry.category.icon(),
+                            contentDescription = null,
+                            tint = entry.category.color(),
+                            modifier = Modifier.size(minOf(40.dp, maxWidth * 0.36f)),
+                        )
                     }
-                } else {
-                    Icon(
-                        imageVector = entry.category.icon(),
-                        contentDescription = null,
-                        tint = entry.category.color(),
-                        modifier = Modifier.size(40.dp),
-                    )
                 }
             }
 

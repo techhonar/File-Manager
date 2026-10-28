@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -21,6 +22,7 @@ import com.filemanager.app.data.external.Incoming
 import com.filemanager.app.data.update.UpdateNotification
 import com.filemanager.app.data.external.mimeTypeOf
 import com.filemanager.app.ui.FileManagerRoot
+import com.filemanager.app.ui.components.LocalGridColumns
 import com.filemanager.app.ui.openWithExternalApp
 import com.filemanager.app.ui.screens.ExternalViewerScreen
 import com.filemanager.app.ui.theme.FileManagerTheme
@@ -62,6 +64,9 @@ class MainActivity : ComponentActivity() {
             // restart and applies before the first frame is drawn.
             val theme by (application as FileManagerApp).settings.theme
                 .collectAsState()
+            // Every grid's tiles across, as chosen in Settings.
+            val gridColumns by (application as FileManagerApp).settings.gridColumns
+                .collectAsState()
 
             FileManagerTheme(theme = theme) {
                 when (val request = incoming) {
@@ -77,20 +82,22 @@ class MainActivity : ComponentActivity() {
                         },
                         onClose = ::finish,
                     )
-                    else -> FileManagerRoot(
-                        hasStorageAccess = hasStorageAccess,
-                        onRequestAccess = {
-                            startActivity(StoragePermission.settingsIntent(this@MainActivity))
-                        },
-                        openFolder = (request as? Incoming.Folder)?.path,
-                        onFolderOpened = { incoming = null },
-                        picking = request as? Incoming.Pick,
-                        onPick = ::sendBack,
-                        onCancelPick = {
-                            setResult(RESULT_CANCELED)
-                            finish()
-                        },
-                    )
+                    else -> CompositionLocalProvider(LocalGridColumns provides gridColumns) {
+                        FileManagerRoot(
+                            hasStorageAccess = hasStorageAccess,
+                            onRequestAccess = {
+                                startActivity(StoragePermission.settingsIntent(this@MainActivity))
+                            },
+                            openFolder = (request as? Incoming.Folder)?.path,
+                            onFolderOpened = { incoming = null },
+                            picking = request as? Incoming.Pick,
+                            onPick = ::sendBack,
+                            onCancelPick = {
+                                setResult(RESULT_CANCELED)
+                                finish()
+                            },
+                        )
+                    }
                 }
             }
         }
