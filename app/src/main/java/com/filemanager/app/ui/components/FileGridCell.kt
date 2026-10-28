@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -78,12 +79,26 @@ fun FileGridCell(
                     modifier = Modifier.fillMaxSize().clip(OneUi.ThumbShape),
                 )
             } else {
-                Icon(
-                    imageVector = entry.category.icon(),
-                    contentDescription = null,
-                    tint = entry.category.color(),
-                    modifier = Modifier.size(40.dp),
-                )
+                // In the grid's own style - a coloured mark on the plain tile -
+                // a document shows its kind as a word: "PDF" in red, "DOCX"
+                // in blue. Sized to the tile, so it fits however large that is.
+                val document = if (entry.category == FileCategory.DOCUMENT) documentType(entry.name) else null
+                if (document != null) {
+                    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        DocumentLabel(
+                            type = document,
+                            color = document.kind.color(),
+                            letterHeight = maxWidth * documentLabelScale(document.label) * 0.75f,
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = entry.category.icon(),
+                        contentDescription = null,
+                        tint = entry.category.color(),
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
             }
 
             if (selectionMode) {
