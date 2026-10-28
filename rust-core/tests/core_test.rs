@@ -5,7 +5,8 @@
 use filemanager_core::archive::{archive_create, archive_extract, archive_is_encrypted, archive_list};
 use filemanager_core::categories::{categorize, files_in_category, recent_files};
 use filemanager_core::dedup::find_duplicates;
-use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, tree_stats};
+use filemanager_core::cancel::PlaceListener;
+use filemanager_core::scanner::{copy_paths, delete_paths, dir_size, list_dir, place_paths, tree_stats};
 use filemanager_core::search::{search, search_streaming, SearchFilter, SearchSink};
 use filemanager_core::storage::{analyze_storage, largest_files, storage_summary};
 use filemanager_core::trash::{trash_list, trash_move, trash_restore, trash_purge_expired};
@@ -2457,4 +2458,160 @@ fn a_wrong_password_leaves_the_folder_as_it_was() {
 
     unpack(&tree, &archive, Some("secret")).unwrap();
     assert_7z_unpacked(&tree);
+}
+
+/// What place_paths said: each placing, and the last report.
+#[derive(Default)]
+struct Placings {
+    placed: std::sync::Mutex<Vec<(String, String)>>,
+    last: std::sync::Mutex<(u64, u64, u64, u64)>,
+}
+
+impl PlaceListener for Placings {
+    fn on_progress(&self, files_done: u64, files_total: u64, bytes_done: u64, bytes_total: u64) {
+        *self.last.lock().unwrap() = (files_done, files_total, bytes_done, bytes_total);
+    }
+    fn on_placed(&self, source: String, target: String) {
+        self.placed.lock().unwrap().push((source, target));
+    }
+}
+
+fn name_of(path: &str) -> String {
+    Path::new(path).file_name().unwrap().to_string_lossy().into_owned()
+}
+
+#[test]
+fn copying_places_each_item_and_counts_it_all() {
+    let tree = TempTree::new("place-copy");
+    let photo = tree.file("from/photo.jpg", &[1u8; 3000]);
+    tree.file("from/album/a.jpg", &[2u8; 1000]);
+    tree.file("from/album/sub/b.jpg", &[3u8; 500]);
+    let album = tree.path().join("from/album");
+    let into = tree.dir("to");
+
+    let said = std::sync::Arc::new(Placings::default());
+    place_paths(
+        vec![photo.to_string_lossy().into_owned(), album.to_string_lossy().into_owned()],
+        into.to_string_lossy().into_owned(),
+        false,
+        Some(said.clone()),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(fs::read(into.join("photo.jpg")).unwrap(), vec![1u8; 3000]);
+    assert_eq!(fs::read(into.join("album/sub/b.jpg")).unwrap(), vec![3u8; 500]);
+    assert!(photo.is_file() && album.is_dir(), "a copy keeps the originals");
+    assert_eq!(*said.last.lock().unwrap(), (3, 3, 4500, 4500), "files and bytes, all done");
+    let placed: Vec<_> = said.placed.lock().unwrap().iter().map(|(_, to)| name_of(to)).collect();
+    assert_eq!(placed, vec!["photo.jpg", "album"]);
+}
+
+#[test]
+fn placing_never_writes_over_what_is_there() {
+    let tree = TempTree::new("place-free");
+    let notes = tree.file("from/notes.txt", b"new");
+    tree.file("from/Photos/x.jpg", b"x");
+    let photos = tree.path().join("from/Photos");
+    let into = tree.dir("to");
+    tree.file("to/notes.txt", b"old");
+    tree.file("to/Photos/y.jpg", b"y");
+
+    let said = std::sync::Arc::new(Placings::default());
+    place_paths(
+        vec![notes.to_string_lossy().into_owned(), photos.to_string_lossy().into_owned()],
+        into.to_string_lossy().into_owned(),
+        false,
+        Some(said.clone()),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(fs::read(into.join("notes.txt")).unwrap(), b"old", "the file there is untouched");
+    assert_eq!(fs::read(into.join("notes (1).txt")).unwrap(), b"new");
+    assert!(into.join("Photos (1)/x.jpg").is_file(), "a folder gets a numbered name too, not a merge");
+    assert!(!into.join("Photos/x.jpg").exists());
+
+    // Copied into its own folder: a duplicate beside it, as One UI makes.
+    place_paths(
+        vec![notes.to_string_lossy().into_owned()],
+        tree.path().join("from").to_string_lossy().into_owned(),
+        false,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read(tree.path().join("from/notes (1).txt")).unwrap(), b"new");
+}
+
+#[test]
+fn moving_renames_and_leaves_what_is_already_there() {
+    let tree = TempTree::new("place-move");
+    let clip = tree.file("from/clip.mp4", &[5u8; 2048]);
+    let into = tree.dir("to");
+    let stays = tree.file("to/stays.txt", b"s");
+
+    let said = std::sync::Arc::new(Placings::default());
+    place_paths(
+        vec![clip.to_string_lossy().into_owned(), stays.to_string_lossy().into_owned()],
+        into.to_string_lossy().into_owned(),
+        true,
+        Some(said.clone()),
+        None,
+    )
+    .unwrap();
+
+    assert!(!clip.exists(), "moved, not copied");
+    assert_eq!(fs::read(into.join("clip.mp4")).unwrap(), vec![5u8; 2048]);
+    assert_eq!(fs::read(&stays).unwrap(), b"s", "already where it was going");
+    let placed = said.placed.lock().unwrap().clone();
+    assert_eq!(placed[1], (stays.to_string_lossy().into_owned(), stays.to_string_lossy().into_owned()));
+    assert_eq!(*said.last.lock().unwrap(), (2, 2, 2049, 2049));
+}
+
+#[test]
+fn moving_to_another_filesystem_copies_then_removes_the_original() {
+    // /tmp is often a tmpfs and the build folder on disk, so the rename
+    // fails across them and the copy is what moves it. Where they share a
+    // filesystem the rename does it, and the outcome is the same.
+    let tree = TempTree::new("place-across");
+    let folder = tree.path().join("album");
+    tree.file("album/one.jpg", &[9u8; 4096]);
+    tree.file("album/deep/two.jpg", &[8u8; 100]);
+    let elsewhere = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fm-across-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&elsewhere);
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    place_paths(
+        vec![folder.to_string_lossy().into_owned()],
+        elsewhere.to_string_lossy().into_owned(),
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert!(!folder.exists(), "the original went once its copy was whole");
+    assert_eq!(fs::read(elsewhere.join("album/one.jpg")).unwrap(), vec![9u8; 4096]);
+    assert_eq!(fs::read(elsewhere.join("album/deep/two.jpg")).unwrap(), vec![8u8; 100]);
+    let _ = fs::remove_dir_all(&elsewhere);
+}
+
+#[test]
+fn a_folder_cannot_be_placed_inside_itself() {
+    let tree = TempTree::new("place-itself");
+    let folder = tree.dir("album");
+    let inside = tree.dir("album/inner");
+    for move_them in [false, true] {
+        let err = place_paths(
+            vec![folder.to_string_lossy().into_owned()],
+            inside.to_string_lossy().into_owned(),
+            move_them,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, filemanager_core::errors::FileError::IntoItself { .. }), "{err:?}");
+    }
+    assert!(inside.is_dir() && fs::read_dir(&inside).unwrap().count() == 0, "nothing was made");
 }

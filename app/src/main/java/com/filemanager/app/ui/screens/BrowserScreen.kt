@@ -25,7 +25,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.NoteAdd
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SelectAll
@@ -63,6 +62,7 @@ import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
 import com.filemanager.app.ui.components.CompressDialog
+import com.filemanager.app.viewmodel.PlaceRequest
 import com.filemanager.app.viewmodel.ViewMode
 import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.freeName
@@ -119,9 +119,10 @@ fun BrowserScreen(
     onEditNewFile: (String) -> Unit = {},
     /** The phone's storage, for choosing where an archive is extracted. */
     volumes: List<StorageVolume> = emptyList(),
+    /** Move or Copy on a selection: opens the Select folder sheet. See PlaceController. */
+    onPlace: (PlaceRequest) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
-    val clipboard by viewModel.clipboardContents.collectAsState()
     val message by viewModel.messages.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
 
@@ -210,11 +211,6 @@ fun BrowserScreen(
             if (state.inSelectionMode) {
                 CancelSelection(onCancel = viewModel::clearSelection)
             } else {
-                if (clipboard != null) {
-                    IconButton(onClick = viewModel::paste) {
-                        Icon(Icons.Default.ContentPaste, "Paste")
-                    }
-                }
                 CreateMenu(
                     onNewFolder = { showNewFolderDialog = true },
                     onNewFile = { showNewFileDialog = true },
@@ -238,8 +234,16 @@ fun BrowserScreen(
             AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 val selected = state.entries.filter { it.path in state.selected }
                 SelectionActionBar(
-                    onMove = viewModel::cut,
-                    onCopy = viewModel::copy,
+                    onMove = {
+                        onPlace(
+                            PlaceRequest(state.selected.toList(), move = true, viewModel::clearSelection) { viewModel.refresh() },
+                        )
+                    },
+                    onCopy = {
+                        onPlace(
+                            PlaceRequest(state.selected.toList(), move = false, viewModel::clearSelection) { viewModel.refresh() },
+                        )
+                    },
                     onShare = { onShare(state.selected.toList()) },
                     onDelete = viewModel::deleteSelected,
                     more = selectionMoreActions(

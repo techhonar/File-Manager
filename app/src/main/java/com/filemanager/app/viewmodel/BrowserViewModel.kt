@@ -10,7 +10,6 @@ import com.filemanager.app.data.FolderWatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.freeName
 import com.filemanager.app.data.PathPrefs
@@ -91,7 +90,6 @@ data class BrowserState(
 
 class BrowserViewModel(
     private val repository: FileRepository,
-    private val clipboard: FileClipboard,
     private val paths: PathPrefs,
     private val settings: AppSettings,
     startPath: String,
@@ -109,10 +107,6 @@ class BrowserViewModel(
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
     val state: StateFlow<BrowserState> = _state.asStateFlow()
-
-    /** Exposed straight from the app-scoped clipboard, so a copy made in
-     *  another folder - or in the search results - is still there. */
-    val clipboardContents = clipboard.contents
 
     /** One-off messages for the snackbar (errors, "3 items moved to trash"). */
     private val _messages = MutableStateFlow<String?>(null)
@@ -400,46 +394,6 @@ class BrowserViewModel(
         _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
     // --- Operations ---------------------------------------------------------
-
-    fun cut() {
-        clipboard.cut(_state.value.selected.toList())
-        clearSelection()
-    }
-
-    fun copy() {
-        clipboard.copy(_state.value.selected.toList())
-        clearSelection()
-    }
-
-    fun paste() {
-        val pending = clipboard.contents.value ?: return
-        val destination = _state.value.path
-
-        viewModelScope.launch {
-            _state.update { it.copy(isLoading = true) }
-            runCatching {
-                if (pending.isMove) {
-                    repository.move(pending.paths, destination)
-                } else {
-                    repository.copy(pending.paths, destination)
-                }
-            }.onSuccess { count ->
-                // A move changes every path involved, so the marks follow.
-                if (pending.isMove) {
-                    pending.paths.forEach { source ->
-                        carryMarks(source, File(destination, File(source).name).absolutePath)
-                    }
-                }
-                clipboard.clear()
-                _messages.value =
-                    "$count ${if (pending.isMove) "moved" else "copied"}"
-                refresh()
-            }.onFailure { error ->
-                _state.update { it.copy(isLoading = false) }
-                _messages.value = error.userMessage("Operation failed")
-            }
-        }
-    }
 
     /** Delete goes through the trash, so it is always undoable. */
     fun deleteSelected() {

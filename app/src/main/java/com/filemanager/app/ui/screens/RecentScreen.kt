@@ -41,6 +41,7 @@ import com.filemanager.app.ui.components.SearchResultRow
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.ViewModeMenu
+import com.filemanager.app.viewmodel.PlaceRequest
 import com.filemanager.app.viewmodel.RecentViewModel
 import com.filemanager.app.viewmodel.ViewMode
 import uniffi.filemanager_core.FileEntry
@@ -66,6 +67,8 @@ fun RecentScreen(
     onShowInFolder: (String) -> Unit = {},
     /** Puts files on the clipboard, for pasting into another app. */
     onCopyToClipboard: (List<String>) -> Unit = {},
+    /** Move or Copy on a selection: opens the Select folder sheet. See PlaceController. */
+    onPlace: (PlaceRequest) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
@@ -115,8 +118,12 @@ fun RecentScreen(
         bottomBar = {
             AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 SelectionActionBar(
-                    onMove = viewModel::cutSelection,
-                    onCopy = viewModel::copySelection,
+                    onMove = {
+                        onPlace(PlaceRequest(state.selected.toList(), move = true, viewModel::clearSelection, viewModel::applyMoved))
+                    },
+                    onCopy = {
+                        onPlace(PlaceRequest(state.selected.toList(), move = false, viewModel::clearSelection, viewModel::applyMoved))
+                    },
                     onShare = { onShare(state.selected.toList()) },
                     onDelete = viewModel::deleteSelection,
                     more = selectionMoreActions(

@@ -68,6 +68,10 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.filemanager.app.viewmodel.PlaceViewModel
+import com.filemanager.app.viewmodel.PlaceRequest
+import com.filemanager.app.ui.components.PlaceHost
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.MainActivity
@@ -207,6 +211,8 @@ fun FileManagerRoot(
     val volumes = remember { StorageVolumes.list(context) }
     val primaryPath = remember { StorageVolumes.primaryPath() }
     val navController = rememberNavController()
+    val onScreen by navController.currentBackStackEntryAsState()
+    val currentFolder = onScreen?.takeIf { it.destination.route == Routes.BROWSE_PATTERN }?.arguments?.getString("path")
 
     val ownerAppOf: suspend (String) -> String? = remember(context) {
         { path -> withContext(Dispatchers.IO) { MediaOwner.ownerAppLabel(context, path) } }
@@ -228,7 +234,6 @@ fun FileManagerRoot(
     val factory = remember(volumes, ownerAppOf, hasRemovableSlot) {
         ViewModelFactory(
             repository = app.repository,
-            clipboard = app.clipboard,
             paths = app.paths,
             settings = app.settings,
             volumes = volumes,
@@ -240,6 +245,8 @@ fun FileManagerRoot(
             // The app's own: one per process, not per screen, since transfers
             // outlive screens and share its connections.
             remoteRepository = { app.remoteRepository },
+            // Where Copy here and Move here run, as downloads do.
+            transfers = { app.transfers },
             ftpSettings = { app.ftpSettings },
             ftpController = { app.ftpServer },
             startFtpService = { FtpService.start(context) },
@@ -266,6 +273,11 @@ fun FileManagerRoot(
     // see ExtractViewModel. How it went is said on a snackbar of its own, over
     // whichever screen it was opened from.
     val archives: ExtractViewModel = viewModel(factory = factory)
+
+    // Move and Copy on any screen's selection: the Select folder sheet, and
+    // the copy it starts. One for the app, over every screen - see PlaceHost.
+    val placing: PlaceViewModel = viewModel(factory = factory)
+    val place: (PlaceRequest) -> Unit = placing.placer::open
     val archiveSnackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -503,6 +515,7 @@ fun FileManagerRoot(
                 onShowInFolder = showInFolder,
                 onCopyToClipboard = copyToClipboard,
                 onNavigateBack = { navController.popBackStack() },
+                onPlace = place,
             )
         }
 
@@ -526,7 +539,6 @@ fun FileManagerRoot(
                     key = path,
                     factory = ViewModelFactory(
                         repository = app.repository,
-                        clipboard = app.clipboard,
                         paths = app.paths,
                         settings = app.settings,
                         volumes = volumes,
@@ -547,6 +559,7 @@ fun FileManagerRoot(
                     picking = picking != null,
                     onEditNewFile = { path -> navController.navigate(Routes.viewer(path, edit = true)) },
                     volumes = volumes,
+                    onPlace = place,
                 )
             }
 
@@ -581,6 +594,7 @@ fun FileManagerRoot(
                     // that category, not to type - so no keyboard.
                     autoFocus = categoryName == null,
                     volumes = volumes,
+                    onPlace = place,
                 )
             }
 
@@ -634,7 +648,6 @@ fun FileManagerRoot(
                         key = serverId,
                         factory = ViewModelFactory(
                             repository = app.repository,
-                            clipboard = app.clipboard,
                             paths = app.paths,
                             settings = app.settings,
                             volumes = volumes,
@@ -703,6 +716,14 @@ fun FileManagerRoot(
                 TrashScreen(viewModel = vm, onNavigateBack = { navController.popBackStack() }, volumes = volumes)
             }
         }
+
+        PlaceHost(
+            placer = placing.placer,
+            volumes = volumes,
+            snackbarState = archiveSnackbar,
+            onShowInFolder = { folder, highlight -> navController.navigate(Routes.browse(folder, highlight)) },
+            currentFolder = currentFolder,
+        )
 
         if (picking != null) {
             PickBar(

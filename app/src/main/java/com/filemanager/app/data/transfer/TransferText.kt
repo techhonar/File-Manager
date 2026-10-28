@@ -14,6 +14,38 @@ fun transfersTitle(active: List<Transfer>): String {
     return when (single.direction) {
         Direction.DOWNLOAD -> "Downloading $what from ${single.serverLabel}"
         Direction.UPLOAD -> "Uploading $what to ${single.serverLabel}"
+        Direction.COPY, Direction.MOVE -> placingTitle(single)
+    }
+}
+
+/**
+ * "Copying file…", "Moving 12 files…": a copy or move on the phone, or one
+ * to a server, as One UI words it - by what was asked for, not how it is
+ * done. A move within a volume is a rename and never shows long enough to
+ * read; one to a card copies first, and still reads as moving.
+ */
+fun placingTitle(transfer: Transfer): String {
+    val verb = if (transfer.isMove) "Moving" else "Copying"
+    val what = if (transfer.fileCount == 1) "file" else "${transfer.fileCount} files"
+    return when (transfer.direction) {
+        Direction.UPLOAD -> "$verb $what to ${transfer.serverLabel}…"
+        else -> "$verb $what…"
+    }
+}
+
+/**
+ * What to say once a copy or a move on the phone is over. [items] were asked
+ * for, [placed] of them arrived; [failure] says why the rest did not.
+ */
+fun placeSummary(move: Boolean, items: Int, placed: Int, stopped: Boolean, failure: String?): String {
+    val done = if (move) "moved" else "copied"
+    return when {
+        stopped && placed == 0 -> "File transfer cancelled. ${if (items == 1) "File" else "Files"} not $done."
+        stopped -> "File transfer cancelled. $placed of $items $done."
+        failure != null && placed == 0 -> "Could not ${if (move) "move" else "copy"}: $failure"
+        failure != null -> "$placed of $items $done. Could not ${if (move) "move" else "copy"} the rest: $failure"
+        move -> "Move completed."
+        else -> "Copy completed."
     }
 }
 

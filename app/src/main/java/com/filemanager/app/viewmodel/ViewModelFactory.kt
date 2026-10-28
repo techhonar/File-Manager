@@ -3,7 +3,6 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import java.io.File
 import androidx.lifecycle.ViewModelProvider
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
@@ -25,7 +24,6 @@ import uniffi.filemanager_core.SearchSession
  */
 class ViewModelFactory(
     private val repository: FileRepository,
-    private val clipboard: FileClipboard,
     private val paths: PathPrefs,
     private val settings: AppSettings,
     private val volumes: List<StorageVolume>,
@@ -68,7 +66,6 @@ class ViewModelFactory(
         modelClass.isAssignableFrom(BrowserViewModel::class.java) ->
             BrowserViewModel(
                 repository = repository,
-                clipboard = clipboard,
                 paths = paths,
                 settings = settings,
                 startPath = startPath,
@@ -80,7 +77,6 @@ class ViewModelFactory(
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
             SearchViewModel(
                 repository = repository,
-                clipboard = clipboard,
                 settings = settings,
                 roots = volumes.map { it.path },
                 downloadsPath = StorageVolumes.downloadsPath(),
@@ -96,10 +92,19 @@ class ViewModelFactory(
             FavoritesViewModel(repository, paths, settings, StorageVolumes::isMounted, ownerAppOf) as T
 
         modelClass.isAssignableFrom(RecentViewModel::class.java) ->
-            RecentViewModel(repository, clipboard, primaryPath, settings, paths, ownerAppOf) as T
+            RecentViewModel(repository, primaryPath, settings, paths, ownerAppOf) as T
 
         modelClass.isAssignableFrom(ExtractViewModel::class.java) ->
             ExtractViewModel(repository, volumes.map { File(it.path).absolutePath }) as T
+
+        modelClass.isAssignableFrom(PlaceViewModel::class.java) ->
+            PlaceViewModel(
+                repository = repository,
+                volumes = volumes,
+                transfers = requireNotNull(transfers) { "transfers not supplied" },
+                remote = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
+                servers = { requireNotNull(remoteServers) { "remoteServers not supplied" }().servers.value },
+            ) as T
 
         modelClass.isAssignableFrom(TrashViewModel::class.java) ->
             TrashViewModel(repository) as T
@@ -114,7 +119,6 @@ class ViewModelFactory(
             RemoteBrowserViewModel(
                 server = requireNotNull(remoteServer) { "remoteServer not supplied" },
                 repository = requireNotNull(remoteRepository) { "remoteRepository not supplied" }(),
-                clipboard = clipboard,
                 transfers = requireNotNull(transfers) { "transfers not supplied" }(),
             ) as T
 

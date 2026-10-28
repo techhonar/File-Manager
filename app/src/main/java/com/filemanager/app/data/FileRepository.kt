@@ -2,6 +2,7 @@ package com.filemanager.app.data
 
 import android.content.Context
 import android.os.Environment
+import com.filemanager.app.data.transfer.LocalFiles
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,6 +12,7 @@ import uniffi.filemanager_core.DuplicateGroup
 import uniffi.filemanager_core.FileCategory
 import uniffi.filemanager_core.FileEntry
 import uniffi.filemanager_core.FilesystemStats
+import uniffi.filemanager_core.PlaceListener
 import uniffi.filemanager_core.ProgressListener
 import uniffi.filemanager_core.SearchFilter
 import uniffi.filemanager_core.SearchObserver
@@ -27,7 +29,7 @@ import uniffi.filemanager_core.archiveCreate
 import uniffi.filemanager_core.archiveExtract
 import uniffi.filemanager_core.archiveIsEncrypted
 import uniffi.filemanager_core.archiveList
-import uniffi.filemanager_core.copyPaths
+import uniffi.filemanager_core.placePaths
 import uniffi.filemanager_core.deletePaths
 import uniffi.filemanager_core.dirSize
 import uniffi.filemanager_core.filesInCategory
@@ -112,44 +114,22 @@ class FileRepository(
 
     // --- File operations ----------------------------------------------------
 
-    suspend fun copy(
-        sources: List<String>,
-        destination: String,
-        overwrite: Boolean = false,
-        progress: ProgressListener? = null,
-        cancel: CancelToken? = null,
-    ): ULong = withContext(io) { copyPaths(sources, destination, overwrite, progress, cancel) }
-
     /**
-     * Move = copy then delete the originals.
-     *
-     * A plain rename is attempted first: within one volume it is instant, and
-     * only a cross-volume move (internal -> SD card) needs the full copy.
+     * Copy or move [sources] into [into] for the Select folder sheet, through
+     * TransferCenter: see LocalFiles, and place_paths in the core.
      */
-    suspend fun move(
-        sources: List<String>,
-        destination: String,
-        overwrite: Boolean = false,
-        progress: ProgressListener? = null,
-        cancel: CancelToken? = null,
-    ): ULong = withContext(io) {
-        val remaining = sources.filterNot { source ->
-            val from = File(source)
-            val to = File(destination, from.name)
-            when {
-                // Already where it is going, so there is nothing to do. Passed
-                // on to the copy, an empty folder was copied onto itself
-                // without complaint - and then deleted as the original.
-                from.canonicalPath == to.canonicalPath -> true
-                to.exists() && !overwrite -> false
-                else -> from.renameTo(to)
-            }
-        }
-        if (remaining.isEmpty()) return@withContext sources.size.toULong()
+    val localFiles = LocalFiles { sources, into, move, progress, placed, stop ->
+        withContext(io) {
+            val token = CancelToken()
+            stop.onStop { token.cancel() }
+            val listener = object : PlaceListener {
+                override fun onProgress(filesDone: ULong, filesTotal: ULong, bytesDone: ULong, bytesTotal: ULong) =
+                    progress(filesDone.toLong(), filesTotal.toLong(), bytesDone.toLong(), bytesTotal.toLong())
 
-        val copied = copyPaths(remaining, destination, overwrite, progress, cancel)
-        deletePaths(remaining, null, cancel)
-        copied
+                override fun onPlaced(source: String, target: String) = placed(source, target)
+            }
+            placePaths(sources, into, move, listener, token)
+        }
     }
 
     /** Permanent delete. For the reversible one use [moveToTrash]. */

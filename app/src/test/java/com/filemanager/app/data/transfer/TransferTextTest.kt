@@ -58,4 +58,41 @@ class TransferTextTest {
         assertEquals(0.25f, transfer().fraction)
         assertNull(transfer(total = 0).fraction)
     }
+
+    @Test
+    fun `a copy or move says what was asked for, as One UI words it`() {
+        assertEquals("Copying file…", placingTitle(transfer(direction = Direction.COPY)))
+        assertEquals("Copying 12 files…", placingTitle(transfer(direction = Direction.COPY, files = 12)))
+        assertEquals("Moving file…", placingTitle(transfer(direction = Direction.MOVE)))
+        assertEquals("Copying 3 files…", transfersTitle(listOf(transfer(direction = Direction.COPY, files = 3))))
+        val upload = transfer(direction = Direction.UPLOAD, files = 3).copy(isMove = true)
+        assertEquals("a move to a server is still a move", "Moving 3 files to NAS…", placingTitle(upload))
+        assertEquals("Copying file to NAS…", placingTitle(transfer(direction = Direction.UPLOAD)))
+    }
+
+    @Test
+    fun `how a copy or move ended`() {
+        assertEquals("Copy completed.", placeSummary(move = false, items = 3, placed = 3, stopped = false, failure = null))
+        assertEquals("Move completed.", placeSummary(move = true, items = 1, placed = 1, stopped = false, failure = null))
+        assertEquals(
+            "File transfer cancelled. File not copied.",
+            placeSummary(move = false, items = 1, placed = 0, stopped = true, failure = null),
+        )
+        assertEquals(
+            "File transfer cancelled. Files not moved.",
+            placeSummary(move = true, items = 4, placed = 0, stopped = true, failure = null),
+        )
+        assertEquals(
+            "File transfer cancelled. 2 of 5 copied.",
+            placeSummary(move = false, items = 5, placed = 2, stopped = true, failure = null),
+        )
+        assertEquals(
+            "Could not move: Permission denied",
+            placeSummary(move = true, items = 2, placed = 0, stopped = false, failure = "Permission denied"),
+        )
+        assertEquals(
+            "1 of 2 copied. Could not copy the rest: disk full",
+            placeSummary(move = false, items = 2, placed = 1, stopped = false, failure = "disk full"),
+        )
+    }
 }

@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -94,7 +93,6 @@ fun RemoteBrowserScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val state by viewModel.state.collectAsState()
-    val clipboard by viewModel.clipboardContents.collectAsState()
     val openRequest by viewModel.openRequest.collectAsState()
     val snackbarState = remember { SnackbarHostState() }
     var renameTarget by remember { mutableStateOf<RemoteEntry?>(null) }
@@ -165,11 +163,6 @@ fun RemoteBrowserScreen(
                     Icon(Icons.Default.DriveFileRenameOutline, "Rename")
                 }
             } else {
-                if (clipboard != null) {
-                    IconButton(onClick = { transferring(viewModel::pasteFromClipboard) }) {
-                        Icon(Icons.Default.Upload, "Upload copied files")
-                    }
-                }
                 IconButton(onClick = { showNewFolder = true }) {
                     Icon(Icons.Default.CreateNewFolder, "New folder")
                 }

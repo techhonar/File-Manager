@@ -10,7 +10,6 @@ import coil.decode.VideoFrameDecoder
 import com.filemanager.app.data.ApkIconFetcher
 import com.filemanager.app.data.AudioArtFetcher
 import com.filemanager.app.data.AppSettings
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.ftpd.FtpServerController
@@ -41,10 +40,6 @@ import kotlinx.coroutines.launch
 class FileManagerApp : Application(), ImageLoaderFactory {
 
     val repository: FileRepository by lazy { FileRepository(this) }
-
-    /** Shared by every screen: see FileClipboard for why it cannot live in a
-     *  per-folder ViewModel. */
-    val clipboard: FileClipboard by lazy { FileClipboard() }
 
     val settings: AppSettings by lazy { AppSettings(this) }
 
@@ -88,20 +83,22 @@ class FileManagerApp : Application(), ImageLoaderFactory {
     val remoteRepository: RemoteRepository by lazy { RemoteRepository(remoteConnections, cacheDir) }
 
     /**
-     * Downloads from and uploads to network storage. Process-wide, so a
-     * transfer outlives the screen it was started from, with a foreground
-     * service and a notification to keep it going and show how far it is.
+     * Downloads from and uploads to network storage, and copies and moves on
+     * the phone. Process-wide, so a transfer outlives the screen it was
+     * started from, with a foreground service and a notification to keep it
+     * going and show how far it is.
      */
     val transfers: TransferCenter by lazy {
         TransferCenter(
             repository = remoteRepository,
-            clipboard = clipboard,
             trash = { paths -> repository.moveToTrash(paths).size },
             host = object : TransferCenter.Host {
                 override fun started() = TransferService.start(this@FileManagerApp)
                 override fun finished(transfer: Transfer) =
                     TransferService.finished(this@FileManagerApp, transfer)
             },
+            local = repository.localFiles,
+            moved = { pairs -> pairs.forEach { (from, to) -> paths.move(from, to) } },
         )
     }
 

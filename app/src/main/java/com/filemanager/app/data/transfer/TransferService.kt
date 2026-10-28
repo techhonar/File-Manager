@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.text.format.Formatter
 import com.filemanager.app.FileManagerApp
+import com.filemanager.app.data.AppLogos
 import com.filemanager.app.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -124,6 +125,10 @@ class TransferService : Service() {
         /** Tell the user how [transfer] went, in a notification of its own. */
         fun finished(context: Context, transfer: Transfer) {
             val outcome = transfer.outcome ?: return
+            // On the phone, how it went is said in the app, with Show in
+            // folder, as One UI says it; a notification as well is one more
+            // thing to clear for what is often an instant rename.
+            if (transfer.direction == Direction.COPY || transfer.direction == Direction.MOVE) return
             createChannel(context)
             val download = transfer.direction == Direction.DOWNLOAD
             val notification = Notification.Builder(context, CHANNEL_ID)
@@ -157,10 +162,12 @@ class TransferService : Service() {
                 // The system's own moving arrows: the status bar shows a
                 // transfer under way without the shade being opened.
                 .setSmallIcon(
-                    if (active.any { it.direction == Direction.DOWNLOAD }) {
-                        android.R.drawable.stat_sys_download
-                    } else {
-                        android.R.drawable.stat_sys_upload
+                    when {
+                        active.any { it.direction == Direction.DOWNLOAD } -> android.R.drawable.stat_sys_download
+                        active.any { it.direction == Direction.UPLOAD } -> android.R.drawable.stat_sys_upload
+                        // Copying on the phone: the app's own mark, as on the
+                        // update notice - nothing is going up or down.
+                        else -> runCatching { AppLogos.current(context) }.getOrElse { AppLogos.all.first() }.statusIcon
                     },
                 )
                 .setContentTitle(transfersTitle(active))

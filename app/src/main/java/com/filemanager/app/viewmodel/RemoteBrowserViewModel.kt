@@ -2,7 +2,6 @@ package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
@@ -69,7 +68,6 @@ data class RemoteBrowserState(
 class RemoteBrowserViewModel(
     server: RemoteServer,
     private val repository: RemoteRepository,
-    private val clipboard: FileClipboard,
     /** Where downloads and uploads run: they outlive this screen. */
     private val transfers: TransferCenter,
 ) : ViewModel() {
@@ -94,9 +92,6 @@ class RemoteBrowserViewModel(
      */
     private val _openRequest = MutableStateFlow<File?>(null)
     val openRequest: StateFlow<File?> = _openRequest.asStateFlow()
-
-    /** What the local browser has on its clipboard, so Paste can offer it. */
-    val clipboardContents = clipboard.contents
 
     init {
         load(basePath)
@@ -223,41 +218,6 @@ class RemoteBrowserViewModel(
         }
         _state.update { it.copy(selected = emptySet(), selectionActive = false) }
         follow(transfers.download(_state.value.server, entries, into))
-    }
-
-    /**
-     * Upload whatever the local browser copied, or cut.
-     *
-     * A cut that only uploaded was the surprise here: the files appeared on the
-     * server and stayed on the phone, and nothing said so. The originals now go
-     * once their upload has been confirmed - see TransferCenter.upload.
-     *
-     * Folders are skipped either way. There is no recursive upload here, and
-     * quietly flattening one would be worse than saying it was left.
-     */
-    fun pasteFromClipboard() {
-        val pending = clipboard.contents.value
-        val paths = pending?.paths.orEmpty()
-        if (paths.isEmpty()) {
-            _state.update { it.copy(message = "Nothing copied") }
-            return
-        }
-        val files = paths.map(::File).filter { it.isFile }
-        if (files.isEmpty()) {
-            _state.update { it.copy(message = "Folders cannot be uploaded, only files") }
-            return
-        }
-        val current = _state.value
-        follow(
-            transfers.upload(
-                server = current.server,
-                files = files,
-                folder = current.path,
-                taken = current.entries.mapTo(HashSet()) { it.name },
-                move = pending?.isMove == true,
-                skipped = paths.size - files.size,
-            ),
-        )
     }
 
     /** Stop the transfer on the progress line. */
