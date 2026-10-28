@@ -240,6 +240,7 @@ private fun buildCategoryPalette(custom: Map<ColorPart, Int>): CategoryPalette {
         archive = pick(ColorPart.ARCHIVES, d.archive),
         directory = pick(ColorPart.FOLDERS, d.directory),
         other = d.other,
+        documentSetByHand = ColorPart.DOCUMENTS in custom,
     )
 }
 
@@ -299,6 +300,7 @@ private fun animateCategoryPalette(target: CategoryPalette) = CategoryPalette(
     archive = target.archive.faded("archive"),
     directory = target.directory.faded("directory"),
     other = target.other.faded("other"),
+    documentSetByHand = target.documentSetByHand,
 )
 
 /**

@@ -84,6 +84,11 @@ data class CategoryPalette(
     val archive: Color,
     val directory: Color,
     val other: Color,
+    /**
+     * Whether Documents was given a colour by hand. Each kind of document
+     * otherwise has a colour of its own; see DocumentKind.color.
+     */
+    val documentSetByHand: Boolean = false,
 )
 
 val DefaultCategoryPalette = CategoryPalette(

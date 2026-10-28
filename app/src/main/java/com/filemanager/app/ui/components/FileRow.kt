@@ -150,6 +150,13 @@ private fun FileThumbnail(entry: FileEntry, size: Int = 46, preview: Boolean = t
             )
         }
     } else {
+        // A document says what kind it is - "PDF", "DOCX" - in that kind's
+        // colour, where every document used to share one page glyph.
+        val document = if (entry.category == FileCategory.DOCUMENT) documentType(entry.name) else null
+        if (document != null) {
+            DocumentBadge(document, size.dp)
+            return
+        }
         Box(
             modifier = Modifier
                 .size(size.dp)
