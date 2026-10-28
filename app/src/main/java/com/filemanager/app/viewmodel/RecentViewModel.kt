@@ -3,7 +3,6 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.ViewScope
@@ -39,7 +38,6 @@ data class RecentState(
  */
 class RecentViewModel(
     private val repository: FileRepository,
-    private val clipboard: FileClipboard,
     private val rootPath: String,
     private val settings: AppSettings,
     /** Favourites and pins, which a rename has to carry to the new name. */
@@ -114,27 +112,26 @@ class RecentViewModel(
     fun clearSelection() =
         _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
-    fun copySelection() {
-        clipboard.copy(_state.value.selected.toList())
-        // Out of selection mode as well, or the screen stayed in it with
-        // nothing ticked when selection had been entered from the menu.
-        _state.update {
-            it.copy(
-                selected = emptySet(),
-                selectionActive = false,
-                message = "Copied. Paste in any folder.",
-            )
-        }
-    }
-
-    fun cutSelection() {
-        clipboard.cut(_state.value.selected.toList())
-        _state.update {
-            it.copy(
-                selected = emptySet(),
-                selectionActive = false,
-                message = "Cut. Paste in any folder.",
-            )
+    /**
+     * Files moved elsewhere from the Select folder sheet: each swapped for
+     * itself where it is now. A move leaves when a file was changed alone,
+     * so it keeps its place in the list; one moved off the phone, to a
+     * server, leaves it.
+     */
+    fun applyMoved(moved: List<Pair<String, String?>>) {
+        if (moved.isEmpty()) return
+        viewModelScope.launch {
+            val to = moved.toMap()
+            val now = runCatching { repository.entriesFor(to.values.filterNotNull()) }
+                .getOrDefault(emptyList())
+                .associateBy { it.path }
+            _state.update { current ->
+                current.copy(
+                    entries = current.entries.mapNotNull { entry ->
+                        if (entry.path in to) to[entry.path]?.let { now[it] } else entry
+                    },
+                )
+            }
         }
     }
 

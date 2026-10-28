@@ -3,7 +3,6 @@ package com.filemanager.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.AppSettings
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.ViewScope
@@ -94,7 +93,6 @@ data class SearchState(
 
 class SearchViewModel(
     private val repository: FileRepository,
-    private val clipboard: FileClipboard,
     private val settings: AppSettings,
     private val roots: List<String>,
     /** What the Downloads category lists, all of it and nothing else. */
@@ -564,29 +562,28 @@ class SearchViewModel(
     fun clearSelection() =
         _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
-    /** Copy into the shared clipboard, to be pasted from any folder. */
-    fun copySelection() {
-        clipboard.copy(_state.value.selected.toList())
-        // selectionActive as well as the ticks. Clearing only the ticks left
-        // the screen in selection mode with nothing selected, when selection
-        // had been entered from the menu.
-        _state.update {
-            it.copy(
-                selected = emptySet(),
-                selectionActive = false,
-                message = "Copied. Paste in any folder.",
-            )
-        }
-    }
-
-    fun cutSelection() {
-        clipboard.cut(_state.value.selected.toList())
-        _state.update {
-            it.copy(
-                selected = emptySet(),
-                selectionActive = false,
-                message = "Cut. Paste in any folder.",
-            )
+    /**
+     * Files moved elsewhere from the Select folder sheet: each swapped for
+     * itself where it is now, keeping its place - a photo moved to another
+     * album is still among the Images. One moved off the phone, to a server,
+     * leaves the list. Copies change nothing here.
+     */
+    fun applyMoved(moved: List<Pair<String, String?>>) {
+        if (moved.isEmpty()) return
+        viewModelScope.launch {
+            val to = moved.toMap()
+            session.forget(to.keys.toList())
+            val now = runCatching { repository.entriesFor(to.values.filterNotNull()) }
+                .getOrDefault(emptyList())
+                .associateBy { it.path }
+            _state.update { current ->
+                val results = current.results.mapNotNull { entry ->
+                    if (entry.path in to) to[entry.path]?.let { now[it] } else entry
+                }
+                current.withResults(results).copy(
+                    total = (current.total - (current.results.size - results.size)).coerceAtLeast(0),
+                )
+            }
         }
     }
 

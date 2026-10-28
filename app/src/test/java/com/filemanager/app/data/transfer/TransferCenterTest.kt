@@ -1,6 +1,5 @@
 package com.filemanager.app.data.transfer
 
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.ftpd.TestFtpServer
 import com.filemanager.app.data.remote.RemoteConnections
 import com.filemanager.app.data.remote.RemoteEntry
@@ -36,7 +35,6 @@ class TransferCenterTest {
 
     private lateinit var root: File
     private val servers = mutableListOf<TestFtpServer>()
-    private val clipboard = FileClipboard()
     private val trashed = CopyOnWriteArrayList<String>()
     private val finished = CopyOnWriteArrayList<Transfer>()
     private val starts = AtomicInteger()
@@ -56,7 +54,6 @@ class TransferCenterTest {
     private val center by lazy {
         TransferCenter(
             repository = repository,
-            clipboard = clipboard,
             trash = { paths -> trashed += paths; paths.size },
             host = host,
             progressIntervalMs = 0,
@@ -156,7 +153,6 @@ class TransferCenterTest {
         val local = temp.newFolder("Phone")
         val notes = File(local, "notes.txt").apply { writeText("from the phone") }
         val photo = File(local, "photo.jpg").apply { writeBytes(Random(3).nextBytes(100_000)) }
-        clipboard.cut(listOf(notes.path, photo.path))
 
         val done = outcomeOf(
             center.upload(
@@ -173,15 +169,13 @@ class TransferCenterTest {
         assertArrayEquals(photo.readBytes(), File(root, "photo.jpg").readBytes())
         assertEquals(setOf(notes.path, photo.path), trashed.toSet())
         assertEquals("Moved 2", done.outcome!!.summary)
-        assertEquals("a finished move is not pasted twice", null, clipboard.contents.value)
     }
 
     @Test
-    fun `an upload that fails keeps the originals and the clipboard`() {
+    fun `an upload that fails keeps the originals`() {
         val server = server(writable = false)
         val local = temp.newFolder("Phone")
         val notes = File(local, "notes.txt").apply { writeText("from the phone") }
-        clipboard.cut(listOf(notes.path))
 
         val done = outcomeOf(
             center.upload(server, listOf(notes), "/", emptySet(), move = true, skipped = 1),
@@ -192,7 +186,6 @@ class TransferCenterTest {
         assertEquals(1, outcome.failed)
         assertEquals("Moved 0, 1 failed, 1 folders skipped", outcome.summary)
         assertTrue("an original was trashed for an upload that failed", trashed.isEmpty())
-        assertNotNull("the paste can be tried again", clipboard.contents.value)
     }
 
     @Test
@@ -229,5 +222,95 @@ class TransferCenterTest {
 
         outcomeOf(transfer)
         assertTrue(center.active.value.isEmpty())
+    }
+
+    // --- Copying and moving on the phone, through a stand-in for the core ---
+
+    private val movedTold = CopyOnWriteArrayList<List<Pair<String, String>>>()
+
+    private fun centerWith(local: LocalFiles) = TransferCenter(
+        repository = repository,
+        trash = { paths -> trashed += paths; paths.size },
+        host = host,
+        local = local,
+        moved = { movedTold += it },
+        progressIntervalMs = 0,
+    )
+
+    @Test
+    fun `a copy on the phone counts files and bytes, and says where each went`() {
+        val center = centerWith { sources, into, _, progress, placed, _ ->
+            progress(0, 2, 0, 100)
+            placed(sources[0], "$into/a.jpg")
+            progress(1, 2, 60, 100)
+            placed(sources[1], "$into/b (1).jpg")
+            progress(2, 2, 100, 100)
+        }
+
+        val done = outcomeOf(center.place(listOf("/p/a.jpg", "/p/b.jpg"), "/q", move = false))
+
+        assertEquals(Direction.COPY, done.direction)
+        assertEquals("the files the core counted, not the items", 2, done.fileCount)
+        assertEquals(2, done.filesDone)
+        assertEquals(100L, done.bytesDone)
+        val outcome = done.outcome!!
+        assertEquals("Copy completed.", outcome.summary)
+        assertEquals(listOf("/p/a.jpg" to "/q/a.jpg", "/p/b.jpg" to "/q/b (1).jpg"), outcome.placed)
+        assertTrue("a copy moves nothing to follow", movedTold.isEmpty())
+        assertEquals(listOf(done.id), finished.map { it.id })
+        assertTrue("over, so no longer running", center.active.value.isEmpty())
+    }
+
+    @Test
+    fun `a move says where things went, so what is remembered of them follows`() {
+        val center = centerWith { sources, into, move, _, placed, _ ->
+            assertTrue(move)
+            placed(sources[0], "$into/clip.mp4")
+            // Already there: not a move at all.
+            placed(sources[1], sources[1])
+        }
+
+        val done = outcomeOf(center.place(listOf("/p/clip.mp4", "/q/stays.txt"), "/q", move = true))
+
+        assertEquals("Move completed.", done.outcome!!.summary)
+        assertEquals(listOf(listOf("/p/clip.mp4" to "/q/clip.mp4")), movedTold)
+    }
+
+    @Test
+    fun `cancelling stops the core between buffers, and says nothing was copied`() {
+        val stopAsked = java.util.concurrent.CountDownLatch(1)
+        val center = centerWith { _, _, _, progress, _, stop ->
+            stop.onStop { stopAsked.countDown() }
+            progress(0, 1, 10, 1000)
+            // The core checks its token between buffers; here, it waits for it.
+            assertTrue("never stopped", stopAsked.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            throw java.io.IOException("Cancelled")
+        }
+
+        val running = center.place(listOf("/p/movie.mkv"), "/q", move = false)
+        partway(running)
+        center.cancel(running.value.id)
+        val done = outcomeOf(running)
+
+        val outcome = done.outcome!!
+        assertTrue(outcome.cancelled)
+        assertEquals(0, outcome.failed)
+        assertEquals("File transfer cancelled. File not copied.", outcome.summary)
+    }
+
+    @Test
+    fun `a copy that fails partway says why, and keeps what arrived`() {
+        val center = centerWith { sources, into, _, _, placed, _ ->
+            placed(sources[0], "$into/one.txt")
+            throw java.io.IOException("No space left on device")
+        }
+
+        val done = outcomeOf(center.place(listOf("/p/one.txt", "/p/two.txt"), "/q", move = false))
+
+        val outcome = done.outcome!!
+        assertFalse(outcome.cancelled)
+        assertEquals(1, outcome.succeeded)
+        assertEquals(1, outcome.failed)
+        assertEquals("1 of 2 copied. Could not copy the rest: No space left on device", outcome.summary)
     }
 }

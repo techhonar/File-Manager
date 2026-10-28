@@ -1,7 +1,7 @@
 package com.filemanager.app.data.transfer
 
-import com.filemanager.app.data.FileClipboard
 import com.filemanager.app.data.freeName
+import com.filemanager.app.data.userMessage
 import com.filemanager.app.data.freeRemoteName
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
@@ -20,9 +20,16 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-enum class Direction { DOWNLOAD, UPLOAD }
+/**
+ * Which way files are going: from a server, to one, or - [COPY] and [MOVE] -
+ * from one folder on the phone to another.
+ */
+enum class Direction { DOWNLOAD, UPLOAD, COPY, MOVE }
 
-/** One batch of files on its way between this phone and a server, as it stands. */
+/**
+ * One batch of files on its way, as it stands: between this phone and a
+ * server, or between two of its folders.
+ */
 data class Transfer(
     val id: Int,
     val direction: Direction,
@@ -42,6 +49,8 @@ data class Transfer(
     val bytesTotal: Long,
     /** Set once it is over, one way or another. */
     val outcome: Outcome? = null,
+    /** Whether the originals go once they have arrived: Move rather than Copy. */
+    val isMove: Boolean = direction == Direction.MOVE,
 ) {
     /** How far through, or null when the sizes are not known. */
     val fraction: Float?
@@ -54,10 +63,16 @@ data class Outcome(
     val cancelled: Boolean,
     /** One line for the user. */
     val summary: String,
+    /**
+     * For a copy or a move on the phone: each item that arrived, in order,
+     * as where it was and where it is now.
+     */
+    val placed: List<Pair<String, String>> = emptyList(),
 )
 
 /**
- * Downloads from and uploads to network storage, for the whole app.
+ * Downloads from and uploads to network storage, and copies and moves
+ * between folders on the phone, for the whole app.
  *
  * Transfers used to run in the remote browser's view model, so they lasted as
  * long as that screen: leaving it stopped the transfer after the file it was
@@ -71,10 +86,17 @@ data class Outcome(
  */
 class TransferCenter(
     private val repository: RemoteRepository,
-    private val clipboard: FileClipboard,
     /** Moves local files to the trash and says how many went: finishes a move. */
     private val trash: suspend (List<String>) -> Int,
     private val host: Host,
+    /** Copying and moving on the phone itself. */
+    private val local: LocalFiles = LocalFiles { _, _, _, _, _, _ -> error("Nothing to copy files on the phone with") },
+    /**
+     * Told where files moved on the phone went - each original and its new
+     * path - so that what is remembered about them, favourites and pins,
+     * goes with them.
+     */
+    private val moved: (List<Pair<String, String>>) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     /** How often progress is passed on. Small in tests, which want every step. */
     private val progressIntervalMs: Long = 250,
@@ -95,6 +117,9 @@ class TransferCenter(
 
     private val jobs = ConcurrentHashMap<Int, MutableStateFlow<Transfer>>()
     private val cancelled = ConcurrentHashMap.newKeySet<Int>()
+
+    /** How to stop each copy or move on the phone that is running: see place. */
+    private val stops = ConcurrentHashMap<Int, StopSignal>()
     private val nextId = AtomicInteger()
 
     /** The running transfer [id], to follow, or null if it is over. */
@@ -102,11 +127,95 @@ class TransferCenter(
 
     /** Stop transfer [id] after the bytes in hand. What was half-sent is removed. */
     fun cancel(id: Int) {
-        if (jobs.containsKey(id)) cancelled += id
+        if (!jobs.containsKey(id)) return
+        cancelled += id
+        // A copy in the core is stopped from outside, between two buffers;
+        // a network transfer checks for itself.
+        stops[id]?.stop()
     }
 
     fun cancelAll() {
         jobs.keys.forEach(::cancel)
+    }
+
+    /**
+     * Copy or [move] [sources] - files and folders on the phone - into the
+     * folder [into], also on the phone: Copy here and Move here on the Select
+     * folder sheet.
+     *
+     * Run here like a download, so it outlives the screen it was started
+     * from, with the notification that keeps it going and can stop it. Each
+     * item arrives whole or not at all, and never over anything already there
+     * - see LocalFiles. The outcome lists where they went, for Show in folder.
+     */
+    fun place(sources: List<String>, into: String, move: Boolean): StateFlow<Transfer> {
+        val job = begin(
+            Transfer(
+                id = nextId.incrementAndGet(),
+                direction = if (move) Direction.MOVE else Direction.COPY,
+                serverId = "",
+                serverLabel = "",
+                destination = into,
+                // Items until the core has counted the files inside them.
+                fileCount = sources.size,
+                bytesTotal = 0,
+            ),
+        )
+        val id = job.value.id
+        val stop = StopSignal().also { stops[id] = it }
+
+        scope.launch {
+            val placed = mutableListOf<Pair<String, String>>()
+            val pacer = Pacer(progressIntervalMs)
+            val failure = try {
+                local.place(
+                    sources = sources,
+                    into = into,
+                    move = move,
+                    progress = { filesDone, filesTotal, bytesDone, bytesTotal ->
+                        // The last report always, so the bar ends full.
+                        if (pacer.due() || (filesDone == filesTotal && bytesDone == bytesTotal)) {
+                            job.publish {
+                                it.copy(
+                                    fileCount = filesTotal.toInt(),
+                                    filesDone = filesDone.toInt(),
+                                    bytesDone = bytesDone,
+                                    bytesTotal = bytesTotal,
+                                )
+                            }
+                        }
+                    },
+                    placed = { source, target -> synchronized(placed) { placed += source to target } },
+                    stop = stop,
+                )
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e
+            }
+
+            val landed = synchronized(placed) { placed.toList() }
+            if (move) moved(landed.filter { (from, to) -> from != to })
+            val stopped = id in cancelled
+            finish(
+                job,
+                Outcome(
+                    succeeded = landed.size,
+                    failed = if (failure != null && !stopped) sources.size - landed.size else 0,
+                    cancelled = stopped,
+                    summary = placeSummary(
+                        move = move,
+                        items = sources.size,
+                        placed = landed.size,
+                        stopped = stopped,
+                        failure = failure?.takeUnless { stopped }?.userMessage("Something went wrong"),
+                    ),
+                    placed = landed,
+                ),
+            )
+        }
+        return job.asStateFlow()
     }
 
     /**
@@ -208,6 +317,7 @@ class TransferCenter(
                 destination = folder,
                 fileCount = files.size,
                 bytesTotal = files.sumOf { it.length() },
+                isMove = move,
             ),
         )
         val id = job.value.id
@@ -252,9 +362,6 @@ class TransferCenter(
                 moved = runCatching { trash(uploaded) }.getOrDefault(0)
             }
             val stopped = id in cancelled
-            // Only once it has all been dealt with: leaving it would invite a
-            // second paste that moves nothing, having already moved it.
-            if (failed == 0 && !stopped) clipboard.clear()
 
             finish(
                 job,
@@ -314,6 +421,7 @@ class TransferCenter(
         val final = job.value.copy(outcome = outcome, current = null)
         jobs.remove(final.id)
         cancelled.remove(final.id)
+        stops.remove(final.id)
         _active.update { list -> list.filterNot { it.id == final.id } }
         host.finished(final)
         // Last: whoever sees the outcome then finds everything else about the
