@@ -57,7 +57,7 @@ No ads. No tracking. No account.
 
 ### Browse and organise
 
-- **Three layouts** - list, detailed list or grid - and each kind of list remembers its own.
+- **Three layouts** - list, detailed list or grid - and each kind of list remembers its own. In **Settings**, a grid shows three, four or five items in a row.
 - **Sort** by name, date, size or type, with folders kept on top.
 - **Copy, move, rename, delete and share**; create folders and text files; **pin** things to the top of a folder; **hide** what you don't want to see.
 - **Select like One UI**: hold a file to start, tap to add more, or tick *All*. The bar at the bottom moves, copies, shares or deletes, and *More* has Copy to clipboard, Details, Rename, Add to favourites, Open with, Show in folder, Compress, Pin to top and Hide.
@@ -68,7 +68,7 @@ No ads. No tracking. No account.
 
 - **Categories** - Images, Videos, Audio files, Documents, Downloads and Installation files - open straight to their files, and remember what they found for next time.
 - **Search** the whole phone by name, with results appearing as they are found.
-- **Real thumbnails**: photos, video frames, album covers, and the icon inside every APK.
+- **Real thumbnails**: photos, video frames, album covers, and the icon inside every APK. Documents say what they are - PDF, DOCX, XLSX, PPTX, TXT - each kind in a colour of its own.
 
 ### Free up space
 
@@ -98,14 +98,15 @@ No ads. No tracking. No account.
   <tr>
     <td align="center"><img src="docs/images/home-dark.webp" width="170" alt="Home in the dark theme"></td>
     <td align="center"><img src="docs/images/folder-dark.webp" width="170" alt="A folder in the dark theme"></td>
-    <td align="center"><img src="docs/images/editor-dark.webp" width="170" alt="The text editor in the dark theme"></td>
     <td align="center"><img src="docs/images/theme.webp" width="170" alt="The Theme settings"></td>
+    <td align="center"><img src="docs/images/settings.webp" width="170" alt="Settings: three, four or five items in a row in grid view"></td>
   </tr>
 </table>
 
 - **Light, dark or follow the system**, with a true-black dark style for OLED screens or a softer dim one.
 - **Accent colours**, your wallpaper's colours on Android 12 and newer, or any colour you pick by hand.
 - **20 app icons** to choose from.
+- **Grid size**: large, medium or small tiles - three, four or five in a row.
 
 ### Fits into Android
 
