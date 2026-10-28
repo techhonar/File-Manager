@@ -101,6 +101,7 @@ import com.filemanager.app.ui.screens.PermissionScreen
 import com.filemanager.app.ui.screens.RecentScreen
 import com.filemanager.app.ui.screens.SearchScreen
 import com.filemanager.app.ui.screens.StorageScreen
+import com.filemanager.app.ui.screens.SettingsScreen
 import com.filemanager.app.ui.screens.ThemeScreen
 import com.filemanager.app.ui.screens.TrashScreen
 import com.filemanager.app.ui.screens.ViewerScreen
@@ -135,6 +136,7 @@ private object Routes {
     const val RECENT = "recent"
     const val ABOUT = "about"
     const val THEME = "theme"
+    const val SETTINGS = "settings"
     const val DEFAULTS = "defaults"
     const val FAVORITES = "favorites"
     const val NETWORK = "network"
@@ -468,6 +470,7 @@ fun FileManagerRoot(
                         HomeOverflowMenu(
                             onTheme = { navController.navigate(Routes.THEME) },
                             onDefaults = { navController.navigate(Routes.DEFAULTS) },
+                            onSettings = { navController.navigate(Routes.SETTINGS) },
                             onUpdate = app.updater::update,
                             onAbout = { navController.navigate(Routes.ABOUT) },
                         )
@@ -659,6 +662,13 @@ fun FileManagerRoot(
                 )
             }
 
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    settings = app.settings,
+                    onNavigateBack = { navController.popBackStack() },
+                )
+            }
+
         composable(Routes.ABOUT) {
                 AboutScreen(onNavigateBack = { navController.popBackStack() })
             }
@@ -746,6 +756,7 @@ private val ScreenFadeOut = tween<Float>(durationMillis = 180, easing = FastOutL
 private fun HomeOverflowMenu(
     onTheme: () -> Unit,
     onDefaults: () -> Unit,
+    onSettings: () -> Unit,
     onUpdate: () -> Unit,
     onAbout: () -> Unit,
 ) {
@@ -762,6 +773,10 @@ private fun HomeOverflowMenu(
         DropdownMenuItem(
             text = { Text("Default apps") },
             onClick = { onDefaults(); expanded = false },
+        )
+        DropdownMenuItem(
+            text = { Text("Settings") },
+            onClick = { onSettings(); expanded = false },
         )
         DropdownMenuItem(
             text = { Text("Update App") },

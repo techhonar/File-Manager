@@ -191,7 +191,7 @@ fun ThemeScreen(
 }
 
 @Composable
-private fun ChoiceRow(
+internal fun ChoiceRow(
     title: String,
     selected: Boolean,
     subtitle: String? = null,

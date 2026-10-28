@@ -7,6 +7,8 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import com.filemanager.app.ui.components.LocalGridColumns
+import com.filemanager.app.ui.components.FileGridCells
 import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.data.StorageVolume
 import com.filemanager.app.data.isExtractable
@@ -46,7 +48,6 @@ import com.filemanager.app.ui.components.PaneFade
 import com.filemanager.app.ui.components.SelectAllToggle
 import com.filemanager.app.ui.components.SelectionActionBar
 import com.filemanager.app.ui.components.ViewModeMenu
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import com.filemanager.app.ui.components.FileGridCell
@@ -303,7 +304,7 @@ fun SearchScreen(
                     Pane.ITEMS -> when {
                         state.viewMode == ViewMode.GRID ->
                             LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = 108.dp),
+                                columns = FileGridCells(LocalGridColumns.current),
                                 state = gridState,
                                 contentPadding = contentPadding,
                             ) {

@@ -52,12 +52,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.filled.Check
 import com.filemanager.app.data.viewer.ViewerKind
 import com.filemanager.app.data.viewer.viewerKind
+import com.filemanager.app.ui.components.LocalGridColumns
+import com.filemanager.app.ui.components.FileGridCells
 import com.filemanager.app.ui.components.AnimatedBottomBar
 import com.filemanager.app.ui.components.FileDetailRow
 import com.filemanager.app.ui.components.FileGridCell
@@ -461,10 +462,9 @@ private fun FileList(
 
                 when (state.viewMode) {
                     ViewMode.GRID -> LazyVerticalGrid(
-                        // Adaptive rather than a fixed count, so a tablet or a
-                        // landscape phone gets more columns instead of enormous
-                        // tiles.
-                        columns = GridCells.Adaptive(minSize = 108.dp),
+                        // As many across as Settings says, and more on a
+                        // tablet or a phone on its side: see FileGridCells.
+                        columns = FileGridCells(LocalGridColumns.current),
                         state = gridState,
                         modifier = listModifier,
                         contentPadding = contentPadding,

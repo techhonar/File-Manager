@@ -58,6 +58,12 @@ data class ThemeChoice(
     val custom: Map<ColorPart, Int> = emptyMap(),
 )
 
+/** Tiles across a grid on a phone held upright, before Settings says otherwise. */
+const val DEFAULT_GRID_COLUMNS = 3
+
+/** The sizes Settings offers: large, medium and small tiles. */
+val GRID_COLUMN_CHOICES = 3..5
+
 /** How the text editor shows text. The same for every file, so a choice sticks. */
 data class EditorPrefs(
     val wordWrap: Boolean = true,
@@ -196,6 +202,20 @@ class AppSettings(context: Context) {
     }
 
     /**
+     * How many tiles every grid shows across a phone held upright - folders,
+     * categories, search and recent files alike. Chosen in Settings.
+     */
+    private val _gridColumns =
+        MutableStateFlow(prefs.getInt(KEY_GRID_COLUMNS, DEFAULT_GRID_COLUMNS).coerceIn(GRID_COLUMN_CHOICES))
+    val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
+
+    fun setGridColumns(columns: Int) {
+        val chosen = columns.coerceIn(GRID_COLUMN_CHOICES)
+        prefs.edit().putInt(KEY_GRID_COLUMNS, chosen).apply()
+        _gridColumns.value = chosen
+    }
+
+    /**
      * Whether the app has asked to show notifications. Asked once, for the
      * update notice; after that the choice is the user's, in Settings.
      */
@@ -263,6 +283,7 @@ class AppSettings(context: Context) {
         const val KEY_SORT = "sort_key"
         const val KEY_SORT_DESC = "sort_descending"
         const val KEY_SHOW_HIDDEN = "show_hidden"
+        const val KEY_GRID_COLUMNS = "grid_columns"
         const val KEY_ASKED_NOTIFICATIONS = "asked_notifications"
         const val KEY_EDITOR_WRAP = "editor_word_wrap"
         const val KEY_EDITOR_LINE_NUMBERS = "editor_line_numbers"
