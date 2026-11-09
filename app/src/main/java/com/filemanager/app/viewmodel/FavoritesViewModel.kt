@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.filemanager_core.FileEntry
 import java.io.File
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 data class FavoritesState(
     val entries: List<FileEntry> = emptyList(),
@@ -174,19 +176,23 @@ class FavoritesViewModel(
         this.paths.reorderFavorites(paths)
     }
 
-    /** The selected files, to the trash. Their marks go once they are gone. */
+    /**
+     * The selected files, to the trash - or gone for good from a USB drive,
+     * which has none; the screen asked about that first. Their marks go once
+     * they are gone.
+     */
     fun deleteSelection() {
         val selected = _state.value.selected.toList()
         if (selected.isEmpty()) return
+        // Out of selection at once, so a second tap can't delete them twice.
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(selected) }
-                .onSuccess {
-                    paths.forget(selected)
-                    _state.update {
-                        it.copy(selected = emptySet(), selectionActive = false, message = "${selected.size} moved to trash")
-                    }
-                }
-                .onFailure { e -> _state.update { it.copy(message = e.userMessage("Could not delete")) } }
+            val result = runCatching { repository.delete(selected) }
+            // Some may have gone before one failed: their marks go too.
+            val gone = withContext(Dispatchers.IO) { selected.filterNot { File(it).exists() } }
+            paths.forget(gone)
+            val message = result.fold({ it.message }, { it.userMessage("Could not delete") })
+            _state.update { it.copy(message = message) }
         }
     }
 

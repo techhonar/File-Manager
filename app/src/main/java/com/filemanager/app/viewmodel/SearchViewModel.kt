@@ -21,6 +21,8 @@ import uniffi.filemanager_core.SearchPage
 import uniffi.filemanager_core.SearchSession
 import uniffi.filemanager_core.SearchObserver
 import java.io.File
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -94,7 +96,8 @@ data class SearchState(
 class SearchViewModel(
     private val repository: FileRepository,
     private val settings: AppSettings,
-    private val roots: List<String>,
+    /** The volumes mounted now, to search across. */
+    private val roots: () -> List<String>,
     /** What the Downloads category lists, all of it and nothing else. */
     private val downloadsPath: String,
     /** Favourites and pins, which a rename has to carry to the new name. */
@@ -481,7 +484,7 @@ class SearchViewModel(
 
     /** Where [category]'s files are: Downloads in one folder, the rest anywhere. */
     private fun rootsFor(category: Category?): List<String> =
-        if (category == Category.Downloads) listOf(downloadsPath) else roots
+        if (category == Category.Downloads) listOf(downloadsPath) else roots()
 
     /**
      * Where a category's last results are filed, or empty for a free-text
@@ -587,16 +590,23 @@ class SearchViewModel(
         }
     }
 
-    /** Delete goes through the trash, so it is always undoable. */
+    /**
+     * Delete goes through the trash, so it can be undone - except from a USB
+     * drive, which has none; the screen asked about that first.
+     */
     fun deleteSelection() {
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
+        // Out of selection at once, so a second tap can't delete them twice.
+        clearSelection()
 
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(paths) }
-                .onSuccess { removeFromResults(paths, "${paths.size} moved to trash") }
+            runCatching { repository.delete(paths) }
+                .onSuccess { done -> removeFromResults(paths, done.message) }
                 .onFailure { e ->
-                    _state.update { it.copy(message = e.userMessage("Could not delete")) }
+                    // Some may have gone before one failed.
+                    val gone = withContext(Dispatchers.IO) { paths.filterNot { File(it).exists() } }
+                    removeFromResults(gone, e.userMessage("Could not delete"))
                 }
         }
     }

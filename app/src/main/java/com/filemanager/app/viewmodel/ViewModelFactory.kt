@@ -1,6 +1,7 @@
 package com.filemanager.app.viewmodel
 
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import androidx.lifecycle.ViewModelProvider
 import com.filemanager.app.data.AppSettings
@@ -26,7 +27,8 @@ class ViewModelFactory(
     private val repository: FileRepository,
     private val paths: PathPrefs,
     private val settings: AppSettings,
-    private val volumes: List<StorageVolume>,
+    /** As they come and go; each ViewModel reads it when it needs to, not once as it is made. */
+    private val volumes: StateFlow<List<StorageVolume>>,
     private val primaryPath: String,
     private val startPath: String = primaryPath,
     private val highlightPath: String? = null,
@@ -71,14 +73,14 @@ class ViewModelFactory(
                 startPath = startPath,
                 highlightPath = highlightPath,
                 ownerAppOf = ownerAppOf,
-                volumeRoots = volumes.map { File(it.path).absolutePath },
+                volumeRoots = { volumes.value.map { File(it.path).absolutePath } },
             ) as T
 
         modelClass.isAssignableFrom(SearchViewModel::class.java) ->
             SearchViewModel(
                 repository = repository,
                 settings = settings,
-                roots = volumes.map { it.path },
+                roots = { volumes.value.map { it.path } },
                 downloadsPath = StorageVolumes.downloadsPath(),
                 paths = paths,
                 session = requireNotNull(searchSession) { "searchSession not supplied" }(),
@@ -95,12 +97,12 @@ class ViewModelFactory(
             RecentViewModel(repository, primaryPath, settings, paths, ownerAppOf) as T
 
         modelClass.isAssignableFrom(ExtractViewModel::class.java) ->
-            ExtractViewModel(repository, volumes.map { File(it.path).absolutePath }) as T
+            ExtractViewModel(repository) { volumes.value.map { File(it.path).absolutePath } } as T
 
         modelClass.isAssignableFrom(PlaceViewModel::class.java) ->
             PlaceViewModel(
                 repository = repository,
-                volumes = volumes,
+                volumes = { volumes.value },
                 transfers = requireNotNull(transfers) { "transfers not supplied" },
                 remote = requireNotNull(remoteRepository) { "remoteRepository not supplied" },
                 servers = { requireNotNull(remoteServers) { "remoteServers not supplied" }().servers.value },
@@ -127,7 +129,7 @@ class ViewModelFactory(
                 settings = requireNotNull(ftpSettings) { "ftpSettings not supplied" }(),
                 controller = requireNotNull(ftpController) { "ftpController not supplied" }(),
                 repository = repository,
-                volumes = volumes,
+                volumes = { volumes.value },
                 startService = startFtpService,
                 stopService = stopFtpService,
             ) as T

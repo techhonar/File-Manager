@@ -208,7 +208,9 @@ fun FileManagerRoot(
 
     val context = LocalContext.current
     val app = context.applicationContext as FileManagerApp
-    val volumes = remember { StorageVolumes.list(context) }
+    // As they come and go: a USB drive plugged in shows on Home and in the
+    // Select folder sheet at once.
+    val volumes by app.volumes.volumes.collectAsState()
     val primaryPath = remember { StorageVolumes.primaryPath() }
     val navController = rememberNavController()
     val onScreen by navController.currentBackStackEntryAsState()
@@ -231,12 +233,12 @@ fun FileManagerRoot(
             .apply { mkdirs() }
     }
 
-    val factory = remember(volumes, ownerAppOf, hasRemovableSlot) {
+    val factory = remember(ownerAppOf, hasRemovableSlot) {
         ViewModelFactory(
             repository = app.repository,
             paths = app.paths,
             settings = app.settings,
-            volumes = volumes,
+            volumes = app.volumes.volumes,
             primaryPath = primaryPath,
             ownerAppOf = ownerAppOf,
             hasRemovableSlot = hasRemovableSlot,
@@ -541,7 +543,7 @@ fun FileManagerRoot(
                         repository = app.repository,
                         paths = app.paths,
                         settings = app.settings,
-                        volumes = volumes,
+                        volumes = app.volumes.volumes,
                         primaryPath = primaryPath,
                         startPath = path,
                         highlightPath = highlight,
@@ -650,7 +652,7 @@ fun FileManagerRoot(
                             repository = app.repository,
                             paths = app.paths,
                             settings = app.settings,
-                            volumes = volumes,
+                            volumes = app.volumes.volumes,
                             primaryPath = primaryPath,
                             remoteRepository = { app.remoteRepository },
                             remoteServer = server,

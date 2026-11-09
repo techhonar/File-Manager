@@ -23,6 +23,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import com.filemanager.app.ui.components.AnimatedBottomBar
+import com.filemanager.app.ui.components.rememberDeleteAction
 import com.filemanager.app.ui.components.SelectAllToggle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -129,12 +130,13 @@ fun FavoritesScreen(
             AnimatedBottomBar(visible = state.selected.isNotEmpty()) {
                 // "all" once everything is chosen, as One UI words it.
                 val all = state.allSelected
+                val delete = rememberDeleteAction(state.selected, viewModel::deleteSelection)
                 CompactActionBar(
                     items = listOf(
                         // Only the mark goes; the files are left alone.
                         BarItem(Icons.Outlined.StarOutline, "Unfavourite", viewModel::removeSelected),
                         BarItem(Icons.Outlined.Share, "Share") { onShare(state.selected.toList()) },
-                        BarItem(Icons.Outlined.Delete, if (all) "Delete all" else "Delete", viewModel::deleteSelection),
+                        BarItem(Icons.Outlined.Delete, if (all) "Delete all" else "Delete", delete),
                     ),
                     more = selectionMoreActions(
                         selected = state.entries.filter { it.path in state.selected },

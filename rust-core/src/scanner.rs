@@ -349,12 +349,26 @@ fn place_paths_paced(
                 Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {}
                 Err(e) => return Err(FileError::from_io(e, src)),
             }
+            // Before copying anything: an original that cannot be removed
+            // afterwards - from a read-only drive, say - would leave the file
+            // in both places and the move failed.
+            can_remove_from(src)?;
         }
 
         let target = copy_whole(src, dest, &name, is_dir, &mut tally, &mut buffer, &cancel)?;
         if move_them {
             let removed = if is_dir { std::fs::remove_dir_all(src) } else { std::fs::remove_file(src) };
-            removed.map_err(|e| FileError::from_io(e, src))?;
+            let removed = removed.map_err(|e| FileError::from_io(e, src)).and_then(|()| gone(src));
+            if let Err(error) = removed {
+                // A file's original is still whole, so the copy goes: moved
+                // or not, never both. A folder's original may have lost some
+                // of its files already, so its copy is the only whole one
+                // left and stays.
+                if !is_dir {
+                    let _ = std::fs::remove_file(&target);
+                }
+                return Err(error);
+            }
         }
         if let Some(l) = &listener {
             l.on_placed(source.clone(), target.to_string_lossy().into_owned());
@@ -636,11 +650,58 @@ pub fn delete_paths(
             std::fs::remove_file(p).map_err(|e| FileError::from_io(e, p))?;
             done += 1;
         }
+        gone(p)?;
         if let Some(ref l) = listener {
             l.on_progress(done, total, path.clone());
         }
     }
     Ok(done)
+}
+
+/// Fails unless `path` is really gone. Android serves shared storage through
+/// a layer of its own that can answer a delete with success and leave the
+/// file where it was; taken at its word, a file reported deleted was still
+/// there.
+pub(crate) fn gone(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(FileError::PermissionDenied { path: path.to_string_lossy().into_owned() }),
+    }
+}
+
+/// Fails when `path` could never be removed from its folder because the
+/// storage it is on is mounted read-only - a USB drive Android could only
+/// mount that way, say. Asked before a copy that only makes sense if the
+/// original goes afterwards. By the mount rather than by asking whether the
+/// folder can be written to, which Android's storage layer can answer wrongly
+/// for an app with all-files access; any other failure to remove is caught
+/// after the copy, which is then taken back out.
+pub(crate) fn can_remove_from(path: &Path) -> Result<()> {
+    match path.parent() {
+        Some(parent) if read_only(parent) => Err(FileError::ReadOnly { path: path.to_string_lossy().into_owned() }),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `path` is on storage mounted read-only.
+fn read_only(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: a valid NUL-terminated path and a buffer statvfs fills.
+    if unsafe { libc::statvfs(c_path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // SAFETY: filled in, as statvfs succeeded.
+    let stats = unsafe { stats.assume_init() };
+    stats.f_flag & libc::ST_RDONLY != 0
+}
+
+/// Whether nothing can be written to `path` because its storage is mounted
+/// read-only, for saying so before a copy or move is tried there.
+#[uniffi::export]
+pub fn is_read_only(path: String) -> bool {
+    read_only(Path::new(&path))
 }
 
 fn count_files(root: &Path) -> u64 {

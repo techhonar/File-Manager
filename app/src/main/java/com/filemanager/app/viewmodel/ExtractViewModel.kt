@@ -13,6 +13,6 @@ import com.filemanager.app.data.FileRepository
  * One for the activity rather than one per screen, so those screens need
  * nothing of their own for it, and it survives the phone being turned.
  */
-class ExtractViewModel(repository: FileRepository, volumeRoots: List<String>) : ViewModel() {
+class ExtractViewModel(repository: FileRepository, volumeRoots: () -> List<String>) : ViewModel() {
     val extractor = ExtractController(repository, volumeRoots, viewModelScope) {}
 }

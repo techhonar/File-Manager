@@ -55,12 +55,15 @@ import com.filemanager.app.ui.theme.OneUi
 fun SelectionActionBar(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    /** What is selected, so Delete can ask first about anything it can't undo; see rememberDeleteAction. */
+    selected: Collection<String> = emptyList(),
     onMove: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
     more: List<MoreAction> = emptyList(),
 ) {
     val barColor = floatingBarColor()
+    val delete = rememberDeleteAction(selected, onDelete)
 
     FloatingBar(
         modifier = modifier
@@ -72,7 +75,7 @@ fun SelectionActionBar(
             onMove?.let { BarAction(Icons.AutoMirrored.Outlined.DriveFileMove, "Move", it) }
             onCopy?.let { BarAction(Icons.Outlined.ContentCopy, "Copy", it) }
             onShare?.let { BarAction(Icons.Outlined.Share, "Share", it) }
-            BarAction(Icons.Outlined.Delete, "Delete", onDelete)
+            BarAction(Icons.Outlined.Delete, "Delete", delete)
             if (more.isNotEmpty()) MoreButton(more, barColor, Modifier.weight(1f))
         }
     }

@@ -237,6 +237,7 @@ fun SearchScreen(
                     },
                     onShare = { onShare(state.selected.toList()) },
                     onDelete = viewModel::deleteSelection,
+                    selected = state.selected,
                     more = selectionMoreActions(
                         selected = state.results.filter { it.path in state.selected },
                         allFavorite = state.selected.all { it in favorites },

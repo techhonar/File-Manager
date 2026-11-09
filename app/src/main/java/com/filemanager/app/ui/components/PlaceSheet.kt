@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,8 +109,9 @@ fun PlaceHost(
             message = ended.message,
             actionLabel = folder?.let { "Show in folder" },
             // Long rather than the default for one with an action, which
-            // stays until it is tapped and holds back everything said after.
-            duration = if (folder != null) SnackbarDuration.Long else SnackbarDuration.Short,
+            // stays until it is tapped and holds back everything said after;
+            // long too for a failure, which in four seconds went unread.
+            duration = if (folder != null || ended.failed) SnackbarDuration.Long else SnackbarDuration.Short,
         )
         placer.consumeOutcome()
         if (result == SnackbarResult.ActionPerformed && folder != null) showInFolder(folder, ended.highlight)
@@ -218,7 +220,11 @@ fun SelectFolderSheet(
                     volumes.forEach { volume ->
                         PlaceChip(
                             label = volume.name,
-                            icon = if (volume.isRemovable) Icons.Outlined.SdCard else Icons.Outlined.PhoneAndroid,
+                            icon = when {
+                                volume.isUsb -> Icons.Outlined.Usb
+                                volume.isRemovable -> Icons.Outlined.SdCard
+                                else -> Icons.Outlined.PhoneAndroid
+                            },
                             selected = spot is PlaceSpot.Phone && spot.volume == volume,
                             onClick = { onVolume(volume) },
                         )

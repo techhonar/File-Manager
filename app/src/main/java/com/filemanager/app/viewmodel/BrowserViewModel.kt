@@ -101,8 +101,8 @@ class BrowserViewModel(
      * ViewModel holding one is how activities get leaked.
      */
     private val ownerAppOf: suspend (String) -> String? = { null },
-    /** The storage volumes' top folders, which Up must not go above. */
-    private val volumeRoots: List<String> = emptyList(),
+    /** The storage volumes' top folders, which Up must not go above: those mounted now. */
+    private val volumeRoots: () -> List<String> = { emptyList() },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BrowserState(path = startPath))
@@ -278,7 +278,7 @@ class BrowserViewModel(
         // internal storage, whose parent is locked, but not for an SD card,
         // whose parent is /storage: readable, full of mount points, and a dead
         // end nobody meant to reach.
-        if (here in volumeRoots) return false
+        if (here in volumeRoots()) return false
         val parent = File(here).parentFile ?: return false
         if (!parent.canRead()) return false
         load(parent.absolutePath)
@@ -395,21 +395,28 @@ class BrowserViewModel(
 
     // --- Operations ---------------------------------------------------------
 
-    /** Delete goes through the trash, so it is always undoable. */
+    /**
+     * Delete goes through the trash, so it can be undone - except from a USB
+     * drive, which has none; the screen asked about that first.
+     */
     fun deleteSelected() {
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
+        // Out of selection at once: the bar stayed up while a slow delete
+        // ran, and a second tap deleted the same files again.
+        clearSelection()
 
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(paths) }
-                .onSuccess {
+            runCatching { repository.delete(paths) }
+                .onSuccess { done ->
                     // Otherwise favourites and pins pile up pointing at files
                     // that are no longer there.
                     this@BrowserViewModel.paths.forget(paths)
-                    _messages.value = "${paths.size} moved to trash"
-                    refresh()
+                    _messages.value = done.message
                 }
                 .onFailure { _messages.value = it.userMessage("Could not delete") }
+            // Either way: some may have gone before one failed.
+            refresh()
         }
     }
 

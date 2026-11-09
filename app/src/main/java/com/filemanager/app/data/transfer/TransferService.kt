@@ -125,23 +125,30 @@ class TransferService : Service() {
         /** Tell the user how [transfer] went, in a notification of its own. */
         fun finished(context: Context, transfer: Transfer) {
             val outcome = transfer.outcome ?: return
+            val onPhone = transfer.direction == Direction.COPY || transfer.direction == Direction.MOVE
             // On the phone, how it went is said in the app, with Show in
             // folder, as One UI says it; a notification as well is one more
-            // thing to clear for what is often an instant rename.
-            if (transfer.direction == Direction.COPY || transfer.direction == Direction.MOVE) return
+            // thing to clear for what is often an instant rename. A failure
+            // is the exception: its snackbar is gone in seconds, and a long
+            // copy is often left to run with the app out of sight.
+            if (onPhone && outcome.failed == 0) return
             createChannel(context)
             val download = transfer.direction == Direction.DOWNLOAD
             val notification = Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(
-                    if (download) {
-                        android.R.drawable.stat_sys_download_done
-                    } else {
-                        android.R.drawable.stat_sys_upload_done
+                    when {
+                        onPhone -> android.R.drawable.stat_notify_error
+                        download -> android.R.drawable.stat_sys_download_done
+                        else -> android.R.drawable.stat_sys_upload_done
                     },
                 )
                 .setContentTitle(outcome.summary)
                 .setContentText(
-                    if (download) "From ${transfer.serverLabel}" else "To ${transfer.serverLabel}",
+                    when {
+                        onPhone -> "Into ${transfer.destination.substringAfterLast('/')}"
+                        download -> "From ${transfer.serverLabel}"
+                        else -> "To ${transfer.serverLabel}"
+                    },
                 )
                 .setContentIntent(openApp(context))
                 .setAutoCancel(true)

@@ -35,12 +35,13 @@ data class HomeState(
 
 class HomeViewModel(
     private val repository: FileRepository,
-    private val volumes: List<StorageVolume>,
+    /** As they come and go: a USB drive plugged in gets its row on Home at once. */
+    private val volumes: StateFlow<List<StorageVolume>>,
     hasRemovableSlot: Boolean = false,
 ) : ViewModel() {
 
     private val _state =
-        MutableStateFlow(HomeState(volumes = volumes, hasRemovableSlot = hasRemovableSlot))
+        MutableStateFlow(HomeState(volumes = volumes.value, hasRemovableSlot = hasRemovableSlot))
     val state: StateFlow<HomeState> = _state.asStateFlow()
 
     init {
@@ -49,6 +50,13 @@ class HomeViewModel(
         // stopped asking, Home would come up without its figures, and both
         // are cheap.
         refresh()
+        viewModelScope.launch {
+            volumes.collect { now ->
+                if (now == _state.value.volumes) return@collect
+                _state.update { it.copy(volumes = now) }
+                refreshUsage()
+            }
+        }
     }
 
     /**
@@ -60,19 +68,7 @@ class HomeViewModel(
      * it now has a row that opens Recent, which finds them itself.
      */
     fun refresh() {
-        // statvfs per volume is near-instant, so the gauges fill in at once.
-        viewModelScope.launch {
-            val usage = volumes.mapNotNull { volume ->
-                runCatching { repository.volumeStats(volume.path) }.getOrNull()
-                    ?.let { stats ->
-                        volume.path to VolumeUsage(
-                            usedBytes = stats.totalBytes - stats.freeBytes,
-                            totalBytes = stats.totalBytes,
-                        )
-                    }
-            }.toMap()
-            _state.update { it.copy(volumeUsage = usage) }
-        }
+        refreshUsage()
 
         // Deliberately no category summary here either. It walked the entire
         // device on every launch to fill `tiles`, and the home screen shows
@@ -82,6 +78,22 @@ class HomeViewModel(
         viewModelScope.launch {
             runCatching { repository.trashBytes() }
                 .onSuccess { trash -> _state.update { it.copy(trashBytes = trash) } }
+        }
+    }
+
+    private fun refreshUsage() {
+        // statvfs per volume is near-instant, so the gauges fill in at once.
+        viewModelScope.launch {
+            val usage = volumes.value.mapNotNull { volume ->
+                runCatching { repository.volumeStats(volume.path) }.getOrNull()
+                    ?.let { stats ->
+                        volume.path to VolumeUsage(
+                            usedBytes = stats.totalBytes - stats.freeBytes,
+                            totalBytes = stats.totalBytes,
+                        )
+                    }
+            }.toMap()
+            _state.update { it.copy(volumeUsage = usage) }
         }
     }
 

@@ -246,6 +246,7 @@ fun BrowserScreen(
                     },
                     onShare = { onShare(state.selected.toList()) },
                     onDelete = viewModel::deleteSelected,
+                    selected = state.selected,
                     more = selectionMoreActions(
                         selected = selected,
                         allFavorite = state.selected.all { it in state.favorites },

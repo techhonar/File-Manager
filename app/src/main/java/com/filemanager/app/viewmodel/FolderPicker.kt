@@ -39,7 +39,8 @@ data class FolderPickerState(
  */
 class FolderPicker(
     private val repository: FileRepository,
-    private val volumeRoots: List<String>,
+    /** Those mounted now: a drive plugged in while the picker is open counts. */
+    private val volumeRoots: () -> List<String>,
     private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow<FolderPickerState?>(null)
@@ -99,8 +100,9 @@ class FolderPicker(
     /** False at a volume root, and anywhere outside one. */
     private fun canGoUp(path: String): Boolean {
         val normalised = File(path).absolutePath
-        if (volumeRoots.any { it == normalised }) return false
-        return volumeRoots.any { normalised.startsWith("$it/") }
+        val roots = volumeRoots()
+        if (roots.any { it == normalised }) return false
+        return roots.any { normalised.startsWith("$it/") }
     }
 
     private companion object {

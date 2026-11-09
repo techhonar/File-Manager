@@ -76,7 +76,7 @@ data class ExtractOutcome(
  */
 class ExtractController(
     private val repository: FileRepository,
-    volumeRoots: List<String>,
+    volumeRoots: () -> List<String>,
     private val scope: CoroutineScope,
     private val onDone: () -> Unit,
 ) {

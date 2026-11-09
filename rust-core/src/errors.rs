@@ -44,6 +44,20 @@ pub enum FileError {
     #[error("cannot copy a folder into itself: {path}")]
     IntoItself { path: String },
 
+    /// Storage mounted read-only: a USB drive Android could only mount that
+    /// way, a write-protected card, a file system it can read but not write.
+    #[error("read-only file system: {path}")]
+    ReadOnly { path: String },
+
+    /// No room left on the storage being written to.
+    #[error("no space left: {path}")]
+    NoSpace { path: String },
+
+    /// A file too big for the storage it is going to, as anything of 4 GB or
+    /// more is for a FAT32 drive.
+    #[error("file too large: {path}")]
+    TooLarge { path: String },
+
     #[error("io error: {detail}")]
     Io { detail: String },
 }
@@ -56,6 +70,14 @@ impl FileError {
     /// in a file manager.
     pub fn from_io(err: io::Error, path: &Path) -> Self {
         let p = path.to_string_lossy().into_owned();
+        // By number: these are what a USB drive or card says when it is full,
+        // read-only or FAT32, and each needs its own words, not "io error".
+        match err.raw_os_error() {
+            Some(libc::EROFS) => return FileError::ReadOnly { path: p },
+            Some(libc::ENOSPC) | Some(libc::EDQUOT) => return FileError::NoSpace { path: p },
+            Some(libc::EFBIG) => return FileError::TooLarge { path: p },
+            _ => {}
+        }
         match err.kind() {
             io::ErrorKind::NotFound => FileError::NotFound { path: p },
             io::ErrorKind::PermissionDenied => FileError::PermissionDenied { path: p },
