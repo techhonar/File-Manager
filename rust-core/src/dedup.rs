@@ -1,8 +1,14 @@
 //! Duplicate detection for the storage-cleanup screen.
 //!
+//! A duplicate is a copy of the same file: the same name, the same size and
+//! the same content. Grouping on content alone put files together that only
+//! happened to hold the same bytes under different names - two exports of a
+//! blank page, one photo saved by two apps - which read as different files
+//! offered for deleting.
+//!
 //! Three passes, cheapest first, because hashing every file on a phone would
 //! take minutes:
-//!   1. group by size          -- a unique size cannot have a duplicate
+//!   1. group by name and size -- a name and size no other file has cannot be a copy
 //!   2. hash the first 16 KB   -- kills most same-size-different-content pairs
 //!   3. hash the whole file    -- only for what survives
 
@@ -42,8 +48,10 @@ pub fn find_duplicates(
     listener: Option<Arc<dyn ProgressListener>>,
     cancel: Option<Arc<CancelToken>>,
 ) -> Result<Vec<DuplicateGroup>> {
-    // Pass 1: bucket by size.
-    let mut by_size: HashMap<u64, Vec<FileEntry>> = HashMap::new();
+    // Pass 1: bucket by name and size. The name ignoring case, as shared
+    // storage does: it will not hold "Photo.jpg" beside "photo.jpg", so the
+    // two in different folders are the same name.
+    let mut by_name_and_size: HashMap<(String, u64), Vec<FileEntry>> = HashMap::new();
 
     // Hidden folders pruned, the same as every other scan. Without it the
     // walk went into the app's own trash, so a copy already deleted was
@@ -63,26 +71,27 @@ pub fn find_duplicates(
         if !meta.is_file() || meta.len() < min_size {
             continue;
         }
-        by_size
-            .entry(meta.len())
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        by_name_and_size
+            .entry((name, meta.len()))
             .or_default()
             .push(FileEntry::from_metadata(entry.path(), &meta));
     }
-    by_size.retain(|_, files| files.len() > 1);
+    by_name_and_size.retain(|_, files| files.len() > 1);
 
-    // Pass 2 and 3, in parallel across size buckets.
-    let candidates: Vec<_> = by_size.into_iter().collect();
+    // Pass 2 and 3, in parallel across the buckets.
+    let candidates: Vec<_> = by_name_and_size.into_iter().collect();
     let total = candidates.len() as u64;
 
     let groups: Vec<DuplicateGroup> = candidates
         .par_iter()
         .enumerate()
-        .flat_map(|(i, (size, files))| {
+        .flat_map(|(i, ((_, size), files))| {
             if cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
                 return Vec::new();
             }
             if let Some(ref l) = listener {
-                l.on_progress(i as u64, total, format!("{size} bytes"));
+                l.on_progress(i as u64, total, files[0].name.clone());
             }
             group_by_content(*size, files)
         })
@@ -110,7 +119,8 @@ pub fn find_duplicates(
     Ok(groups)
 }
 
-/// Within one size bucket, split by head hash then confirm by full hash.
+/// Within one bucket of a name and a size, split by head hash then confirm
+/// by full hash.
 fn group_by_content(size: u64, files: &[FileEntry]) -> Vec<DuplicateGroup> {
     let mut by_head: HashMap<String, Vec<FileEntry>> = HashMap::new();
     for file in files {

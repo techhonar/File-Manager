@@ -272,13 +272,44 @@ fn finds_duplicate_files() {
     let tree = TempTree::new("dedup");
     let payload = vec![7u8; 40_000];
     tree.file("photos/one.jpg", &payload);
-    tree.file("backup/one-copy.jpg", &payload);
+    tree.file("backup/one.jpg", &payload);
     tree.file("photos/different.jpg", &vec![9u8; 40_000]);
 
     let groups = find_duplicates(tree.str(), 1024, None, None).unwrap();
     assert_eq!(groups.len(), 1, "only the identical pair should group");
     assert_eq!(groups[0].files.len(), 2);
     assert_eq!(groups[0].wasted_bytes, 40_000);
+}
+
+#[test]
+fn a_duplicate_has_the_same_name_the_same_size_and_the_same_content() {
+    let tree = TempTree::new("dedup-rule");
+    let photo = vec![1u8; 300_000];
+    // Same name, size and content: copies.
+    tree.file("DCIM/Camera/IMG_1001.jpg", &photo);
+    tree.file("Download/IMG_1001.jpg", &photo);
+    tree.file("Backup/img_1001.JPG", &photo);
+    // Same content under another name: not a copy of it.
+    tree.file("Pictures/holiday.jpg", &photo);
+    // Same name and size, different content - past the first 16 KB, so the
+    // head hash agrees and only the full hash tells them apart.
+    let mut edited = photo.clone();
+    edited[200_000] = 2;
+    tree.file("Edited/IMG_1001.jpg", &edited);
+    // Same name, different size.
+    tree.file("Small/IMG_1001.jpg", &photo[..250_000]);
+
+    let groups = find_duplicates(tree.str(), 100_000, None, None).unwrap();
+
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let mut paths: Vec<_> = groups[0]
+        .files
+        .iter()
+        .map(|f| f.path.strip_prefix(&tree.str()).unwrap().to_string())
+        .collect();
+    paths.sort();
+    assert_eq!(paths, vec!["/Backup/img_1001.JPG", "/DCIM/Camera/IMG_1001.jpg", "/Download/IMG_1001.jpg"]);
+    assert_eq!(groups[0].wasted_bytes, 600_000);
 }
 
 #[test]
@@ -1632,8 +1663,8 @@ fn duplicates_ignore_hidden_folders_including_the_trash() {
     let tree = TempTree::new("dedup-hidden");
     let body = vec![7u8; 200_000];
     tree.file("Pictures/photo.jpg", &body);
-    tree.file(".FileManagerTrash/files/abc123", &body);
-    tree.file(".thumbnails/cache.bin", &body);
+    tree.file(".FileManagerTrash/files/photo.jpg", &body);
+    tree.file(".thumbnails/photo.jpg", &body);
 
     let groups = find_duplicates(tree.str(), 100_000, None, None).unwrap();
     assert!(groups.is_empty(), "nothing hidden should count, got {groups:?}");
@@ -1645,7 +1676,7 @@ fn the_copy_to_keep_is_chosen_the_same_way_every_time() {
     // The oldest is the one most likely to be the original.
     let tree = TempTree::new("dedup-order");
     let body = vec![9u8; 200_000];
-    let names = ["b/copy.jpg", "a/original.jpg", "c/another.jpg"];
+    let names = ["b/photo.jpg", "a/photo.jpg", "c/photo.jpg"];
     let ages = [1_700_000_300u64, 1_700_000_000, 1_700_000_600];
     for (name, age) in names.iter().zip(ages) {
         let path = tree.file(name, &body);
@@ -1662,7 +1693,7 @@ fn the_copy_to_keep_is_chosen_the_same_way_every_time() {
         let groups = find_duplicates(tree.str(), 100_000, None, None).unwrap();
         assert_eq!(groups.len(), 1);
         assert!(
-            groups[0].files[0].path.ends_with("a/original.jpg"),
+            groups[0].files[0].path.ends_with("a/photo.jpg"),
             "the oldest copy should come first, got {:?}",
             groups[0].files.iter().map(|f| &f.path).collect::<Vec<_>>(),
         );

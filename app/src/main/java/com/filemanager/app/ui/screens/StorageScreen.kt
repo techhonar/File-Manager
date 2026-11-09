@@ -252,8 +252,8 @@ private fun DuplicateSection(
 
                 Pane.EMPTY -> {
                     Text(
-                        text = "Find files stored more than once. This reads file " +
-                            "contents, so it takes a minute on a full device.",
+                        text = "Find copies of the same file: the same name, the same size " +
+                            "and the same contents. Reading the contents takes a minute on a full device.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
