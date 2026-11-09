@@ -92,7 +92,13 @@ class TextFilesTest {
         assertEquals(ViewerKind.DOCX, viewerKind("letter.docx"))
         assertEquals(ViewerKind.TEXT, viewerKind("notes.txt"))
         assertEquals(ViewerKind.TEXT, viewerKind(".gitignore"))
+        assertEquals(ViewerKind.XLSX, viewerKind("Budget.XLSX"))
+        assertEquals(ViewerKind.XLSX, viewerKind("macros.xlsm"))
+        assertEquals(ViewerKind.PPTX, viewerKind("talk.pptx"))
+        assertEquals(ViewerKind.PPTX, viewerKind("show.ppsx"))
         assertNull(viewerKind("old.doc"))
+        assertNull(viewerKind("old.xls"))
+        assertNull(viewerKind("old.ppt"))
         assertNull(viewerKind("page.html"))
         assertNull(viewerKind("README"))
     }

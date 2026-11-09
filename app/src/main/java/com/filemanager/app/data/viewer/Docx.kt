@@ -25,7 +25,8 @@ import javax.xml.parsers.SAXParserFactory
 /** How a paragraph is set, reduced to the styles that change how it reads. */
 enum class DocStyle { TITLE, SUBTITLE, HEADING1, HEADING2, HEADING3, HEADING4, BODY }
 
-enum class DocAlign { START, CENTER, END, JUSTIFY }
+/** START and END follow the paragraph's direction; LEFT and RIGHT are the page's sides whichever way it reads. */
+enum class DocAlign { START, CENTER, END, JUSTIFY, LEFT, RIGHT }
 
 /** A stretch of text with one formatting. */
 data class DocSpan(
@@ -46,6 +47,8 @@ data class DocParagraph(
     val marker: String? = null,
     /** How deep in its list, from 0. */
     val level: Int = 0,
+    /** Whether it reads right to left, as the file says; null to go by its first letter that has a direction. */
+    val rtl: Boolean? = null,
 ) : DocBlock {
     val text: String get() = spans.joinToString("") { it.text }
 }

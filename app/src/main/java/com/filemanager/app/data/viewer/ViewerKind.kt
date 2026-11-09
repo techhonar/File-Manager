@@ -1,7 +1,7 @@
 package com.filemanager.app.data.viewer
 
 /** What the app's own viewer can show. */
-enum class ViewerKind { TEXT, PDF, DOCX }
+enum class ViewerKind { TEXT, PDF, DOCX, XLSX, PPTX }
 
 /**
  * Plain text, by extension: notes, logs, data and source code. They are all
@@ -17,15 +17,21 @@ private val TEXT_EXTENSIONS = setOf(
     "srt", "vtt", "tex", "gitignore",
 )
 
+/** Excel workbooks and PowerPoint presentations, with macros or not, and their templates: one format each. */
+private val XLSX_EXTENSIONS = setOf("xlsx", "xlsm", "xltx", "xltm")
+private val PPTX_EXTENSIONS = setOf("pptx", "pptm", "ppsx", "ppsm", "potx", "potm")
+
 /**
  * Which viewer opens [fileName], or null for anything it cannot show - that
- * goes to another app, as every file did before. Only .docx for Word: the
- * older .doc is a binary format of its own.
+ * goes to another app, as every file did before. Only Office's XML formats:
+ * the older .doc, .xls and .ppt are binary formats of their own.
  */
 fun viewerKind(fileName: String): ViewerKind? =
     when (fileName.substringAfterLast('.', "").lowercase()) {
         "pdf" -> ViewerKind.PDF
         "docx" -> ViewerKind.DOCX
+        in XLSX_EXTENSIONS -> ViewerKind.XLSX
+        in PPTX_EXTENSIONS -> ViewerKind.PPTX
         in TEXT_EXTENSIONS -> ViewerKind.TEXT
         else -> null
     }
