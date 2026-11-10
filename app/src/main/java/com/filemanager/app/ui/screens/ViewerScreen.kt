@@ -68,6 +68,7 @@ import com.filemanager.app.data.viewer.DocImage
 import com.filemanager.app.data.viewer.DocParagraph
 import com.filemanager.app.data.viewer.DocStyle
 import com.filemanager.app.data.viewer.DocTable
+import com.filemanager.app.data.viewer.Doc
 import com.filemanager.app.data.viewer.Docx
 import com.filemanager.app.data.viewer.DocxDocument
 import com.filemanager.app.data.viewer.PdfDocument
@@ -164,6 +165,7 @@ fun ViewerScreen(
                     // Read again after each save, to show what was saved.
                     ViewerKind.TEXT -> Viewer(file, { TextFiles.read(it) }, openWith, edit?.saves ?: 0) { TextView(it) }
                     ViewerKind.DOCX -> Viewer(file, { Docx.read(it) }, openWith) { DocxView(it, file) }
+                    ViewerKind.DOC -> Viewer(file, { Doc.read(it) }, openWith) { DocxView(it, file) }
                     ViewerKind.XLSX -> Viewer(file, { Xlsx.read(it) }, openWith) { SpreadsheetView(it, openWith) }
                     ViewerKind.PPTX -> Viewer(file, { Pptx.read(it) }, openWith) { PptxView(it, file) }
                     ViewerKind.PDF -> PdfPane(file, openWith)
@@ -275,7 +277,7 @@ internal fun <T : Any> LoadedPane(load: Load<T>, onOpenWith: () -> Unit, content
 }
 
 internal fun describe(error: Throwable): String = when (error) {
-    is SecurityException -> "This PDF is protected with a password."
+    is SecurityException -> "This file is protected with a password."
     is OutOfMemoryError -> "This file is too large to show here."
     else -> "This file couldn't be read. It may be damaged, or not what its name says."
 }
