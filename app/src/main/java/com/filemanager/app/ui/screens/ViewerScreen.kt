@@ -417,11 +417,15 @@ private fun DocParagraphView(paragraph: DocParagraph) {
 @Composable
 private fun DocTableRow(row: List<DocCell>, columns: List<Float>, file: File) {
     val line = MaterialTheme.colorScheme.outlineVariant
+    // Weights as shares of the whole: measuring a row's height rounds the
+    // space per unit of weight to a whole pixel, and widths in twips or EMUs
+    // make that 0 - every cell measured at no width, a letter a line.
+    val total = columns.sum().takeIf { it > 0f } ?: 1f
     // Every cell as tall as the row's tallest, so the borders line up.
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
         var column = 0
         for (cell in row) {
-            val weight = columns.drop(column).take(cell.span).sum().takeIf { it > 0f } ?: 1f
+            val weight = (columns.drop(column).take(cell.span).sum() / total).takeIf { it > 0f } ?: (1f / maxOf(columns.size, 1))
             column += cell.span
             Column(
                 Modifier
