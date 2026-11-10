@@ -12,6 +12,8 @@ import com.filemanager.app.data.AudioArtFetcher
 import com.filemanager.app.data.AppSettings
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.FileRepository
+import com.filemanager.app.data.LiveVolumes
+import com.filemanager.app.data.StoragePermission
 import com.filemanager.app.data.ftpd.FtpServerController
 import com.filemanager.app.data.ftpd.FtpServerSettings
 import com.filemanager.app.data.install.BundleInstaller
@@ -39,7 +41,10 @@ import kotlinx.coroutines.launch
  */
 class FileManagerApp : Application(), ImageLoaderFactory {
 
-    val repository: FileRepository by lazy { FileRepository(this) }
+    val repository: FileRepository by lazy { FileRepository(this, volumes = { volumes.current }) }
+
+    /** Internal storage, cards and USB drives, as they come and go. */
+    val volumes: LiveVolumes by lazy { LiveVolumes(this).also { it.watch() } }
 
     val settings: AppSettings by lazy { AppSettings(this) }
 
@@ -91,7 +96,7 @@ class FileManagerApp : Application(), ImageLoaderFactory {
     val transfers: TransferCenter by lazy {
         TransferCenter(
             repository = remoteRepository,
-            trash = { paths -> repository.moveToTrash(paths).size },
+            trash = { paths -> repository.delete(paths).let { it.trashed + it.erased } },
             host = object : TransferCenter.Host {
                 override fun started() = TransferService.start(this@FileManagerApp)
                 override fun finished(transfer: Transfer) =
@@ -155,8 +160,18 @@ class FileManagerApp : Application(), ImageLoaderFactory {
             }
             .build()
 
+    /**
+     * Whether this process started with all-files access. Android lets an app
+     * into USB drives only through a group it is given as its process starts,
+     * so a process that was granted access while it ran can't read or write
+     * them; see MainActivity, which starts the app again when that happens.
+     */
+    var startedWithAccess = false
+        private set
+
     override fun onCreate() {
         super.onCreate()
+        startedWithAccess = StoragePermission.isGranted()
 
         // Clear out trash older than the retention window. Fire-and-forget:
         // nothing in the UI waits on it, and a failure is not worth surfacing.

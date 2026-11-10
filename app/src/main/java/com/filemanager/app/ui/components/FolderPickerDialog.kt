@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.SdCard
+import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
@@ -104,8 +105,11 @@ fun FolderPickerDialog(
                                 label = { Text(volume.name) },
                                 leadingIcon = {
                                     Icon(
-                                        if (volume.isRemovable) Icons.Default.SdCard
-                                        else Icons.Default.Smartphone,
+                                        when {
+                                            volume.isUsb -> Icons.Default.Usb
+                                            volume.isRemovable -> Icons.Default.SdCard
+                                            else -> Icons.Default.Smartphone
+                                        },
                                         null,
                                         Modifier.size(18.dp),
                                     )

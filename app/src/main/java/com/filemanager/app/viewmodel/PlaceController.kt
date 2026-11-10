@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.StorageVolume
+import com.filemanager.app.data.volumeOf
 import com.filemanager.app.data.remote.RemoteEntry
 import com.filemanager.app.data.remote.RemotePaths
 import com.filemanager.app.data.remote.RemoteRepository
@@ -63,24 +64,41 @@ data class PlaceSheet(
     val entries: List<FileEntry> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
+    /** Whether anything can be written to the folder on show: false on storage mounted read-only. */
+    val writable: Boolean = true,
+    /** For a move, whether the originals can be taken from where they are: false on storage mounted read-only. */
+    val sourcesRemovable: Boolean = true,
 ) {
+    /** A move into the folder all of it is already in, which would change nothing. */
+    private val alreadyHere: Boolean
+        get() = spot is PlaceSpot.Phone && move && sources.all { it.substringBeforeLast('/') == spot.path }
+
     /**
      * Whether Copy here or Move here can be pressed. Not while the folder is
      * loading or could not be read; not for a move into the folder all of it
-     * is already in, which would change nothing - One UI greys Move here out
-     * there too; not into anything being copied or moved itself; and not to
-     * a server when only folders are chosen, as only files are uploaded.
+     * is already in - One UI greys Move here out there too; not into anything
+     * being copied or moved itself; not onto storage that can't be written,
+     * or for a move whose originals can't be removed; and not to a server
+     * when only folders are chosen, as only files are uploaded.
      */
     val canPlace: Boolean
         get() = !isLoading && error == null && when (spot) {
-            is PlaceSpot.Phone -> !(move && sources.all { it.substringBeforeLast('/') == spot.path }) &&
+            is PlaceSpot.Phone -> !alreadyHere && writable && (!move || sourcesRemovable) &&
                 sources.none { spot.path == it || spot.path.startsWith("$it/") }
-            is PlaceSpot.Server -> sourceFolders != null && sources.any { it !in sourceFolders }
+            is PlaceSpot.Server -> sourceFolders != null && sources.any { it !in sourceFolders } && (!move || sourcesRemovable)
         }
 
-    /** A line under the list, where there is something to say about the choice. */
+    /**
+     * A line under the list, where there is something to say about the choice
+     * - above all why Copy here or Move here is greyed out, which otherwise
+     * looked like the button doing nothing.
+     */
     val note: String?
         get() = when {
+            isLoading || error != null -> null
+            move && !sourcesRemovable -> "These can only be copied: the storage they're on is read-only."
+            spot is PlaceSpot.Phone && !writable -> "This storage is read-only: nothing can be put here."
+            alreadyHere -> "They're in this folder already. Choose another one."
             spot !is PlaceSpot.Server || sourceFolders.isNullOrEmpty() -> null
             sources.all { it in sourceFolders } -> "Only files can go to a server, not folders."
             else -> "Folders are left out: only files go to a server."
@@ -94,6 +112,13 @@ data class PlaceOutcome(
     val folder: String?,
     /** The first item to arrive, marked when that folder opens. */
     val highlight: String?,
+    /** Whether anything failed, which is said for longer. */
+    val failed: Boolean = false,
+    /**
+     * The transfer it was. Two that ended alike - a retry failing as the first
+     * try did - are still two, where as equal values the second went unsaid.
+     */
+    val transferId: Int = 0,
 )
 
 /**
@@ -111,7 +136,8 @@ data class PlaceOutcome(
  */
 class PlaceController(
     private val repository: FileRepository,
-    private val volumes: List<StorageVolume>,
+    /** The volumes mounted now: a USB drive plugged in after the app opened is among them. */
+    private val volumes: () -> List<StorageVolume>,
     private val transfers: () -> TransferCenter,
     private val remote: () -> RemoteRepository,
     private val servers: () -> List<RemoteServer>,
@@ -149,10 +175,13 @@ class PlaceController(
         request = asked
         _serverChoices.value = runCatching(servers).getOrDefault(emptyList())
         val from = asked.paths.first().substringBeforeLast('/')
-        val volume = volumeOf(from)
+        val mounted = volumes()
+        // On storage the list doesn't have - a drive it missed - the sheet
+        // still opens where the files are, rather than on internal storage.
+        val volume = mounted.volumeOf(from) ?: volumeAt(from)
         val spot = when {
             volume != null -> PlaceSpot.Phone(volume, from)
-            else -> PlaceSpot.Phone(volumes.firstOrNull() ?: return, volumes.first().path)
+            else -> PlaceSpot.Phone(mounted.firstOrNull() ?: return, mounted.first().path)
         }
         _sheet.value = PlaceSheet(sources = asked.paths, move = asked.move, spot = spot)
         browse(spot)
@@ -160,7 +189,14 @@ class PlaceController(
         // be hundreds of files and every look a round trip through FUSE.
         scope.launch {
             val folders = withContext(Dispatchers.IO) { asked.paths.filterTo(HashSet()) { File(it).isDirectory } }
-            _sheet.update { current -> if (current?.sources == asked.paths) current.copy(sourceFolders = folders) else current }
+            // By the mount, not by asking whether the folder can be written
+            // to, which Android's storage layer can answer wrongly for an app
+            // with all-files access.
+            val removable = asked.paths.map { it.substringBeforeLast('/') }.distinct()
+                .none { runCatching { repository.isReadOnly(it) }.getOrDefault(false) }
+            _sheet.update { current ->
+                if (current?.sources == asked.paths) current.copy(sourceFolders = folders, sourcesRemovable = removable) else current
+            }
         }
     }
 
@@ -270,12 +306,14 @@ class PlaceController(
                 message = outcome.summary,
                 folder = (spot as? PlaceSpot.Phone)?.path?.takeIf { outcome.succeeded > 0 },
                 highlight = outcome.placed.firstOrNull()?.second,
+                failed = outcome.failed > 0,
+                transferId = last.id,
             )
         }
     }
 
     private fun browse(spot: PlaceSpot) {
-        _sheet.update { it?.copy(spot = spot, entries = emptyList(), isLoading = true, error = null) } ?: return
+        _sheet.update { it?.copy(spot = spot, entries = emptyList(), isLoading = true, error = null, writable = true) } ?: return
         scope.launch {
             val listed = runCatching {
                 when (spot) {
@@ -283,23 +321,35 @@ class PlaceController(
                     is PlaceSpot.Server -> remote().list(spot.server, spot.path).map { it.asEntry() }
                 }
             }
+            // A read-only drive lists like any other; only writing to it fails.
+            val writable = spot !is PlaceSpot.Phone || !runCatching { repository.isReadOnly(spot.path) }.getOrDefault(false)
             _sheet.update { now ->
                 // A listing that came back after the user moved on is not shown.
                 if (now == null || now.spot != spot) return@update now
                 listed.fold(
-                    onSuccess = { now.copy(entries = it, isLoading = false) },
+                    onSuccess = { now.copy(entries = it, isLoading = false, writable = writable) },
                     onFailure = { now.copy(isLoading = false, error = it.userMessage("Could not open this folder")) },
                 )
             }
         }
     }
 
-    /** The volume [path] is on: the deepest whose folder holds it. */
-    private fun volumeOf(path: String): StorageVolume? =
-        volumes.filter { path == it.path || path.startsWith(it.path + "/") }.maxByOrNull { it.path.length }
+    /**
+     * The storage [path] is on, worked out from the path when the list of
+     * volumes doesn't have it: /storage/<id> for a card, /mnt/media_rw/<id>
+     * for a USB drive. Null anywhere else.
+     */
+    private fun volumeAt(path: String): StorageVolume? {
+        val root = ROOTS.firstNotNullOfOrNull { prefix ->
+            path.takeIf { it.startsWith(prefix) }?.let { prefix + it.removePrefix(prefix).substringBefore('/') }
+        }?.takeIf { it.substringAfterLast('/').isNotEmpty() && it != "/storage/emulated" } ?: return null
+        val usb = root.startsWith("/mnt/media_rw/")
+        return StorageVolume(name = if (usb) "USB drive" else "SD card", path = root, isRemovable = true, isPrimary = false, isUsb = usb)
+    }
 
     private companion object {
         val FOLDERS_FIRST = SortOptions(SortKey.NAME, descending = false, dirsFirst = true)
+        val ROOTS = listOf("/mnt/media_rw/", "/storage/")
     }
 }
 
@@ -317,7 +367,7 @@ private fun RemoteEntry.asEntry() = FileEntry(
 /** Holds the PlaceController for the whole app, at its root, over every screen. */
 class PlaceViewModel(
     repository: FileRepository,
-    volumes: List<StorageVolume>,
+    volumes: () -> List<StorageVolume>,
     transfers: () -> TransferCenter,
     remote: () -> RemoteRepository,
     servers: () -> List<RemoteServer>,

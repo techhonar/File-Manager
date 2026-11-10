@@ -2629,6 +2629,60 @@ fn moving_to_another_filesystem_copies_then_removes_the_original() {
 }
 
 #[test]
+fn a_move_whose_original_cannot_be_removed_leaves_no_copy_behind() {
+    // Moving off a USB drive the originals couldn't be removed from copied
+    // the whole file to its new folder and then failed - leaving it in both
+    // places. The copy is now taken back out; from a drive mounted read-only
+    // nothing is copied at all.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(into) = other_filesystem("place-locked-into") else { return };
+    let tree = TempTree::new("place-locked-src");
+    let video = tree.file("locked/video.mp4", &[7u8; 4096]);
+    let locked = tree.path().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    // Root ignores the permission, so there is no failure to test there.
+    if fs::write(locked.join("probe"), b"").is_ok() {
+        let _ = fs::remove_file(locked.join("probe"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let result = place_paths(vec![video.to_string_lossy().into_owned()], into.str(), true, None, None);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = result.unwrap_err();
+    assert!(matches!(err, filemanager_core::errors::FileError::PermissionDenied { .. }), "{err:?}");
+    assert_eq!(fs::read(&video).unwrap(), vec![7u8; 4096], "the original is untouched");
+    assert_eq!(fs::read_dir(into.path()).unwrap().count(), 0, "and the copy was taken back out");
+
+    // Copying from there is still fine: nothing has to be removed.
+    place_paths(vec![video.to_string_lossy().into_owned()], into.str(), false, None, None).unwrap();
+    assert_eq!(fs::read(into.path().join("video.mp4")).unwrap(), vec![7u8; 4096]);
+}
+
+#[test]
+fn ordinary_storage_is_not_read_only() {
+    let tree = TempTree::new("read-only");
+    assert!(!filemanager_core::scanner::is_read_only(tree.str()));
+    assert!(!filemanager_core::scanner::is_read_only(tree.path().join("not-there").to_string_lossy().into_owned()));
+}
+
+#[test]
+fn full_read_only_and_fat32_storage_each_say_what_is_wrong() {
+    // These reached the screen as "detail=/mnt/media_rw/...: Read-only file
+    // system (os error 30)", the raw text of the error, naming the file.
+    use filemanager_core::errors::FileError;
+    let at = Path::new("/mnt/media_rw/1234-ABCD/clip.mp4");
+    let error = |code| FileError::from_io(std::io::Error::from_raw_os_error(code), at);
+    assert!(matches!(error(libc::EROFS), FileError::ReadOnly { .. }));
+    assert!(matches!(error(libc::ENOSPC), FileError::NoSpace { .. }));
+    assert!(matches!(error(libc::EDQUOT), FileError::NoSpace { .. }));
+    assert!(matches!(error(libc::EFBIG), FileError::TooLarge { .. }));
+    assert!(matches!(error(libc::EACCES), FileError::PermissionDenied { .. }));
+    assert!(matches!(error(libc::ENOENT), FileError::NotFound { .. }));
+}
+
+#[test]
 fn a_folder_cannot_be_placed_inside_itself() {
     let tree = TempTree::new("place-itself");
     let folder = tree.dir("album");

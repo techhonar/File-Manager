@@ -238,16 +238,25 @@ fn move_path(src: &Path, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| FileError::from_io(e, parent))?;
     }
-    if std::fs::rename(src, dest).is_ok() {
-        return Ok(());
+    match std::fs::rename(src, dest) {
+        Ok(()) => return Ok(()),
+        // Gone already, or on storage that can't be changed: copying would
+        // only end in the same failure, after the time a copy takes.
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT) | Some(libc::EROFS)) => {
+            return Err(FileError::from_io(e, src));
+        }
+        Err(_) => {}
     }
+    // The copy is only worth making if the original can go once it is made.
+    crate::scanner::can_remove_from(src)?;
     if let Err(error) = copy_exact(src, dest) {
         // Nothing half-copied is left behind. `dest` was free when this began
         // - both callers make sure of it - so all that is there is this copy.
         let _ = remove_exact(dest);
         return Err(error);
     }
-    remove_exact(src)
+    remove_exact(src)?;
+    crate::scanner::gone(src)
 }
 
 /// Copy `src` to exactly `dest`, recursing for directories.

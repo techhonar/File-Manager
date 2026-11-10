@@ -1,6 +1,7 @@
 package com.filemanager.app
 
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -23,6 +24,7 @@ import com.filemanager.app.data.update.UpdateNotification
 import com.filemanager.app.data.external.mimeTypeOf
 import com.filemanager.app.ui.FileManagerRoot
 import com.filemanager.app.ui.components.LocalGridColumns
+import com.filemanager.app.ui.components.LocalVolumes
 import com.filemanager.app.ui.openWithExternalApp
 import com.filemanager.app.ui.screens.ExternalViewerScreen
 import com.filemanager.app.ui.theme.FileManagerTheme
@@ -32,6 +34,8 @@ class MainActivity : ComponentActivity() {
 
     /** What the app that started this one asked for; see Incoming. */
     private var incoming by mutableStateOf<Incoming?>(null)
+
+    private val app: FileManagerApp get() = application as FileManagerApp
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,7 +60,19 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(Unit) {
                 lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                    hasStorageAccess = StoragePermission.isGranted()
+                    val granted = StoragePermission.isGranted()
+                    // Just granted: started again, or USB drives stay out of
+                    // reach until the app next happens to be restarted. Not
+                    // while showing or choosing a file for another app, which
+                    // a fresh start would drop on the floor.
+                    val forAnotherApp = incoming is Incoming.View || incoming is Incoming.Pick
+                    if (granted && !app.startedWithAccess && !forAnotherApp) {
+                        restartForUsbDrives()
+                        return@repeatOnLifecycle
+                    }
+                    hasStorageAccess = granted
+                    // In case a card or drive came or went while the app was away.
+                    app.volumes.refresh()
                 }
             }
 
@@ -67,6 +83,9 @@ class MainActivity : ComponentActivity() {
             // Every grid's tiles across, as chosen in Settings.
             val gridColumns by (application as FileManagerApp).settings.gridColumns
                 .collectAsState()
+            // The volumes mounted now, for knowing what a delete can't undo;
+            // see PermanentDelete.
+            val volumes by app.volumes.volumes.collectAsState()
 
             FileManagerTheme(theme = theme) {
                 when (val request = incoming) {
@@ -82,7 +101,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onClose = ::finish,
                     )
-                    else -> CompositionLocalProvider(LocalGridColumns provides gridColumns) {
+                    else -> CompositionLocalProvider(LocalGridColumns provides gridColumns, LocalVolumes provides volumes) {
                         FileManagerRoot(
                             hasStorageAccess = hasStorageAccess,
                             onRequestAccess = {
@@ -101,6 +120,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Starts the app again in a new process, as it is when opened afresh.
+     * Android gives an app the group that lets it into USB drives only as its
+     * process starts, and not when all-files access is granted to one that
+     * is already running.
+     */
+    private fun restartForUsbDrives() {
+        startActivity(Intent.makeRestartActivityTask(ComponentName(this, MainActivity::class.java)))
+        Runtime.getRuntime().exit(0)
     }
 
     override fun onNewIntent(intent: Intent) {

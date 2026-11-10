@@ -52,7 +52,7 @@ class FtpServerViewModel(
     /** Only for listing folders in the picker. */
     private val repository: FileRepository,
     /** The storage roots, which bound how far up the picker can go. */
-    private val volumes: List<StorageVolume>,
+    private val volumes: () -> List<StorageVolume>,
     private val startService: () -> Unit,
     private val stopService: () -> Unit,
 ) : ViewModel() {
@@ -66,7 +66,7 @@ class FtpServerViewModel(
     )
     val state: StateFlow<FtpServerUiState> = _state.asStateFlow()
 
-    private val folderPicker = FolderPicker(repository, volumes.map { it.path }, viewModelScope)
+    private val folderPicker = FolderPicker(repository, { volumes().map { it.path } }, viewModelScope)
 
     init {
         viewModelScope.launch {
@@ -132,7 +132,7 @@ class FtpServerViewModel(
         // Starts where the server is pointed now, so adjusting one level is
         // one tap rather than a walk down from the root.
         val start = _state.value.draft.rootPath.takeIf { File(it).isDirectory }
-            ?: volumes.firstOrNull()?.path
+            ?: volumes().firstOrNull()?.path
             ?: return
         folderPicker.open(start)
     }

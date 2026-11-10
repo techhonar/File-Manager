@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material3.HorizontalDivider
@@ -131,8 +132,11 @@ fun HomeScreen(
             state.volumes.forEachIndexed { index, volume ->
                 val usage = state.volumeUsage[volume.path]
                 HomeRow(
-                    icon = if (volume.isRemovable) Icons.Outlined.SdCard
-                    else Icons.Outlined.Smartphone,
+                    icon = when {
+                        volume.isUsb -> Icons.Outlined.Usb
+                        volume.isRemovable -> Icons.Outlined.SdCard
+                        else -> Icons.Outlined.Smartphone
+                    },
                     title = volume.name,
                     onClick = { onVolumeClick(volume) },
                     trailing = {
@@ -145,7 +149,7 @@ fun HomeScreen(
             }
             // Shown only when the device actually has a slot: an empty slot
             // is worth reporting, a slot that does not exist is not.
-            if (state.hasRemovableSlot && state.volumes.none { it.isRemovable }) {
+            if (state.hasRemovableSlot && state.volumes.none { it.isRemovable && !it.isUsb }) {
                 InsetDivider()
                 HomeRow(
                     icon = Icons.Outlined.SdCard,

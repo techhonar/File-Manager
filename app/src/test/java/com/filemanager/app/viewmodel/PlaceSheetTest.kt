@@ -32,6 +32,29 @@ class PlaceSheetTest {
     }
 
     @Test
+    fun `a greyed-out Move here or Copy here says why`() {
+        val inDownload = listOf("/storage/emulated/0/Download/a.pdf")
+        // Where the sheet opens for a move: Move here was greyed out with no word, and looked broken.
+        assertEquals(
+            "They're in this folder already. Choose another one.",
+            sheet(inDownload, move = true, at = "/storage/emulated/0/Download").note,
+        )
+        assertNull(sheet(inDownload, move = false, at = "/storage/emulated/0/Download").note)
+
+        val drive = StorageVolume("USB storage 1", "/mnt/media_rw/1234-ABCD", isRemovable = true, isPrimary = false, isUsb = true)
+        val readOnly = PlaceSheet(inDownload, false, emptySet(), PlaceSpot.Phone(drive, drive.path), isLoading = false, writable = false)
+        assertFalse(readOnly.canPlace)
+        assertEquals("This storage is read-only: nothing can be put here.", readOnly.note)
+
+        val fromDrive = listOf("/mnt/media_rw/1234-ABCD/video.mp4")
+        val stuck = sheet(fromDrive, move = true, at = "/storage/emulated/0/Movies").copy(sourcesRemovable = false)
+        assertFalse(stuck.canPlace)
+        assertEquals("These can only be copied: the storage they're on is read-only.", stuck.note)
+        assertTrue("a copy leaves them where they are", stuck.copy(move = false).canPlace)
+        assertNull(stuck.copy(move = false).note)
+    }
+
+    @Test
     fun `a folder cannot go into itself`() {
         val album = listOf("/storage/emulated/0/Pictures/Album")
         assertFalse(sheet(album, move = false, at = "/storage/emulated/0/Pictures/Album").canPlace)

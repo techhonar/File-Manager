@@ -86,7 +86,10 @@ data class Outcome(
  */
 class TransferCenter(
     private val repository: RemoteRepository,
-    /** Moves local files to the trash and says how many went: finishes a move. */
+    /**
+     * Deletes local files as Delete does - to the trash, or for good from a
+     * USB drive, which keeps none - and says how many went: finishes a move.
+     */
     private val trash: suspend (List<String>) -> Int,
     private val host: Host,
     /** Copying and moving on the phone itself. */
@@ -357,8 +360,8 @@ class TransferCenter(
 
             var moved = 0
             if (move && uploaded.isNotEmpty()) {
-                // To the trash rather than deleted outright, which is what a
-                // move does everywhere else in the app and leaves a way back.
+                // As Delete would: to the trash, which leaves a way back,
+                // except from a USB drive, which has no trash to go to.
                 moved = runCatching { trash(uploaded) }.getOrDefault(0)
             }
             val stopped = id in cancelled

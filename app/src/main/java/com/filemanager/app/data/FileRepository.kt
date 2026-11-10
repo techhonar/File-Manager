@@ -62,6 +62,8 @@ import java.nio.file.Files
 class FileRepository(
     context: Context,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** The volumes mounted now, for what a delete does with each path; see [delete]. */
+    private val volumes: () -> List<StorageVolume> = { StorageVolumes.list(context.applicationContext) },
 ) {
     private val appContext = context.applicationContext
 
@@ -380,8 +382,27 @@ class FileRepository(
 
     // --- Trash ---------------------------------------------------------------
 
+    /**
+     * Deletes [paths]: to the trash, except from a USB drive, which keeps
+     * none. What is deleted there is gone, as on Samsung's phones - where
+     * the trash used to be copied the whole of it onto internal storage
+     * first, which for a large file took minutes with nothing to show for
+     * them, or failed for want of space. The screen asks first; see
+     * PermanentDelete. Throws as soon as anything fails.
+     */
+    suspend fun delete(paths: List<String>): Deleted = withContext(io) {
+        val mounted = volumes()
+        val (erase, trash) = paths.partition { mounted.volumeOf(it)?.isUsb == true }
+        if (erase.isNotEmpty()) deletePaths(erase, null, null)
+        val trashed = if (trash.isEmpty()) 0 else trashMoveMany(trashDir, trash).size
+        Deleted(trashed = trashed, erased = erase.size)
+    }
+
     suspend fun moveToTrash(paths: List<String>): List<String> =
         withContext(io) { trashMoveMany(trashDir, paths) }
+
+    /** Whether [path] is on storage mounted read-only, where nothing can be put or taken away. */
+    suspend fun isReadOnly(path: String): Boolean = withContext(io) { uniffi.filemanager_core.isReadOnly(path) }
 
     suspend fun trashContents(): List<TrashItem> =
         withContext(io) { trashList(trashDir, TRASH_RETENTION_DAYS) }
