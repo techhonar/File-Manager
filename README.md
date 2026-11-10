@@ -73,8 +73,8 @@ No ads. No tracking. No account.
 ### Free up space
 
 - **Storage** shows how much each kind of file takes, and your largest files.
-- **Duplicate finder** compares what is inside files to find the copies.
-- **Trash** keeps deleted files for 30 days, so a mistake can be undone.
+- **Duplicate finder** finds the copies of a file: the same name, the same size and the same contents.
+- **Trash** keeps deleted files for 30 days, so a mistake can be undone. A USB drive keeps none, as on Samsung's phones: the app asks, then deletes for good.
 
 ### Archives and app installers
 
@@ -89,7 +89,7 @@ No ads. No tracking. No account.
 
 ### View and edit
 
-- **A viewer of its own** for PDF, Word (`.docx`) and more than 40 kinds of text and code files.
+- **A viewer of its own** for PDF, Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`), and more than 40 kinds of text and code files. Workbooks open as their sheets, with tabs, number formats, fills and merged cells; presentations as their slides, with pictures, tables and speaker notes.
 - **A text editor** with syntax colours, line numbers, word wrap, find and replace, go to line, undo and redo, text size, encoding and line endings, and Save as.
 
 ### Make it yours
@@ -148,7 +148,7 @@ files, favourites and settings stay as they are.
 - **No ads, no analytics, no account.** There are no tracking libraries in the app.
 - **The only connection it makes on its own** is to GitHub's public API, to check for a new version.
 - **Network storage logins** stay on your phone.
-- **Deleted files** go to a hidden `.FileManagerTrash` folder on the phone, and are gone for good after 30 days.
+- **Deleted files** go to a hidden `.FileManagerTrash` folder on the phone, and are gone for good after 30 days. Files on a USB drive are deleted at once, after the app asks.
 
 ## FAQ
 
@@ -163,11 +163,13 @@ No. Download it from the [Releases](https://github.com/techhonar/File-Manager/re
 **Can it replace my phone's file manager?**
 Yes. Open **⋮ → Default apps** to make it the app that opens folders and downloads.
 
-**Does it work with SD cards?**
-Yes. A card that is in the phone appears on the home screen next to internal storage.
+**Does it work with SD cards and USB drives?**
+Yes. A card in the phone, or a USB drive plugged into it, appears on the home
+screen next to internal storage, and in Move and Copy.
 
 **I deleted something by mistake.**
-Open **Trash** on the home screen, select it and tap **Restore**.
+Open **Trash** on the home screen, select it and tap **Restore**. Files deleted
+from a USB drive can't be restored: the app says so before deleting them.
 
 **Is this made by Samsung?**
 No. It follows the look of Samsung's One UI, but it is an independent project,
