@@ -89,7 +89,7 @@ No ads. No tracking. No account.
 
 ### View and edit
 
-- **A viewer of its own** for PDF, Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`), and more than 40 kinds of text and code files. Workbooks open as their sheets, with tabs, number formats, fills and merged cells; presentations as their slides, with pictures, tables and speaker notes.
+- **A viewer of its own** for PDF, Word (`.docx`, the older `.doc`, and RTF), Excel (`.xlsx`) and PowerPoint (`.pptx`), and more than 40 kinds of text and code files. Workbooks open as their sheets, with tabs, number formats, fills and merged cells; presentations as their slides, with pictures, tables and speaker notes.
 - **A text editor** with syntax colours, line numbers, word wrap, find and replace, go to line, undo and redo, text size, encoding and line endings, and Save as.
 
 ### Make it yours
