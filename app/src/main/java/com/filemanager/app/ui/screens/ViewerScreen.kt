@@ -26,12 +26,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -39,11 +41,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -66,9 +71,14 @@ import com.filemanager.app.data.viewer.DocTable
 import com.filemanager.app.data.viewer.Docx
 import com.filemanager.app.data.viewer.DocxDocument
 import com.filemanager.app.data.viewer.PdfDocument
+import com.filemanager.app.data.viewer.Pptx
+import com.filemanager.app.data.viewer.PptxDeck
+import com.filemanager.app.data.viewer.PptxSlide
 import com.filemanager.app.data.viewer.TextContent
 import com.filemanager.app.data.viewer.TextFiles
 import com.filemanager.app.data.viewer.ViewerKind
+import com.filemanager.app.data.viewer.Xlsx
+import com.filemanager.app.data.viewer.startsRightToLeft
 import com.filemanager.app.data.viewer.viewerKind
 import com.filemanager.app.ui.components.OneUiScreen
 import com.filemanager.app.ui.components.Pane
@@ -82,16 +92,16 @@ import java.io.File
 import java.util.zip.ZipFile
 
 /** A file being read for the viewer: still reading, failed with a message, or read. */
-private sealed interface Load<out T> {
+internal sealed interface Load<out T> {
     data object Reading : Load<Nothing>
     data class Failed(val message: String) : Load<Nothing>
     data class Read<T>(val value: T) : Load<T>
 }
 
 /**
- * The app's own viewer for text, PDFs and Word documents. "Open with" hands
- * the file to another app, for anything this one does not show - or for
- * editing it.
+ * The app's own viewer for text, PDFs, and Word, Excel and PowerPoint files.
+ * "Open with" hands the file to another app, for anything this one does not
+ * show - or for editing it.
  */
 @Composable
 fun ViewerScreen(
@@ -154,6 +164,8 @@ fun ViewerScreen(
                     // Read again after each save, to show what was saved.
                     ViewerKind.TEXT -> Viewer(file, { TextFiles.read(it) }, openWith, edit?.saves ?: 0) { TextView(it) }
                     ViewerKind.DOCX -> Viewer(file, { Docx.read(it) }, openWith) { DocxView(it, file) }
+                    ViewerKind.XLSX -> Viewer(file, { Xlsx.read(it) }, openWith) { SpreadsheetView(it, openWith) }
+                    ViewerKind.PPTX -> Viewer(file, { Pptx.read(it) }, openWith) { PptxView(it, file) }
                     ViewerKind.PDF -> PdfPane(file, openWith)
                     null -> Message("This file can't be shown here.", openWith)
                 }
@@ -245,7 +257,7 @@ private fun PdfPane(file: File, onOpenWith: () -> Unit) {
 }
 
 @Composable
-private fun <T : Any> LoadedPane(load: Load<T>, onOpenWith: () -> Unit, content: @Composable (T) -> Unit) {
+internal fun <T : Any> LoadedPane(load: Load<T>, onOpenWith: () -> Unit, content: @Composable (T) -> Unit) {
     val pane = when (load) {
         Load.Reading -> Pane.LOADING
         is Load.Failed -> Pane.ERROR
@@ -262,7 +274,7 @@ private fun <T : Any> LoadedPane(load: Load<T>, onOpenWith: () -> Unit, content:
     }
 }
 
-private fun describe(error: Throwable): String = when (error) {
+internal fun describe(error: Throwable): String = when (error) {
     is SecurityException -> "This PDF is protected with a password."
     is OutOfMemoryError -> "This file is too large to show here."
     else -> "This file couldn't be read. It may be damaged, or not what its name says."
@@ -270,7 +282,7 @@ private fun describe(error: Throwable): String = when (error) {
 
 /** [text] in the middle of the screen, offering [onOpenWith] when there is somewhere else to go. */
 @Composable
-private fun Message(text: String, onOpenWith: (() -> Unit)?) {
+internal fun Message(text: String, onOpenWith: (() -> Unit)?) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = OneUi.ScreenPadding),
         verticalArrangement = Arrangement.Center,
@@ -393,8 +405,26 @@ private fun DocParagraphView(paragraph: DocParagraph) {
         DocAlign.CENTER -> TextAlign.Center
         DocAlign.END -> TextAlign.End
         DocAlign.JUSTIFY -> TextAlign.Justify
+        DocAlign.LEFT -> TextAlign.Left
+        DocAlign.RIGHT -> TextAlign.Right
     }
     val above = if (paragraph.style == DocStyle.BODY) 0.dp else 12.dp
+    // Laid out the way the paragraph reads, whatever the phone's language: a
+    // Persian list item has its bullet and indent on the right.
+    val rtl = remember(paragraph) { paragraph.rtl ?: startsRightToLeft(paragraph.text) }
+    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+        ParagraphRow(paragraph, text, style, align, above)
+    }
+}
+
+@Composable
+private fun ParagraphRow(
+    paragraph: DocParagraph,
+    text: androidx.compose.ui.text.AnnotatedString,
+    style: TextStyle,
+    align: TextAlign,
+    above: Dp,
+) {
     Row(Modifier.fillMaxWidth().padding(start = 20.dp * paragraph.level, top = above, bottom = 6.dp)) {
         paragraph.marker?.let { marker ->
             Text(
@@ -493,7 +523,7 @@ private fun DocImageView(image: DocImage, file: File) {
     }
 }
 
-/** Decodes a picture from inside the .docx, scaled down to about [maxPixels] wide. */
+/** Decodes a picture from inside the .docx or .pptx, scaled down to about [maxPixels] wide. */
 private fun decodePicture(file: File, entry: String, maxPixels: Int): ImageBitmap? = ZipFile(file).use { zip ->
     val item = zip.getEntry(entry) ?: return null
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -503,4 +533,69 @@ private fun decodePicture(file: File, entry: String, maxPixels: Int): ImageBitma
     while (bounds.outWidth / (sample * 2) >= maxPixels) sample *= 2
     val options = BitmapFactory.Options().apply { inSampleSize = sample }
     zip.getInputStream(item).use { BitmapFactory.decodeStream(it, null, options) }?.asImageBitmap()
+}
+
+// ---- PowerPoint ------------------------------------------------------------
+
+@Composable
+private fun PptxView(deck: PptxDeck, file: File) {
+    if (deck.slides.isEmpty()) {
+        Message("This presentation has no slides.", onOpenWith = null)
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (deck.truncated) {
+            item { CutShort("This presentation is long, so only its beginning is shown.") }
+        }
+        items(deck.slides, key = { it.number }) { slide -> SlideCard(slide, deck.total, file) }
+    }
+}
+
+/** A slide as a card: what is on it in reading order, then the speaker's notes. */
+@Composable
+private fun SlideCard(slide: PptxSlide, count: Int, file: File) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(OneUi.CardShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+    ) {
+        Text(
+            text = "Slide ${slide.number} of $count" + if (slide.hidden) " · Hidden" else "",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
+        if (slide.blocks.isEmpty()) {
+            Text(
+                text = "No text or pictures on this slide.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+        }
+        slide.blocks.forEach { DocBlockView(it, file) }
+        if (slide.notes.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            Text(
+                text = "Notes",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+            slide.notes.forEach { note ->
+                Text(
+                    text = note.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 2.dp),
+                )
+            }
+        }
+    }
 }

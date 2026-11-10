@@ -9,6 +9,22 @@ import com.filemanager.app.data.viewer.viewerKind
  */
 
 const val DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+const val XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+const val PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+/** Excel's and PowerPoint's other types for the same formats, lowercased: with macros, slide shows, templates. */
+private val XLSX_TYPES = setOf(
+    XLSX_TYPE,
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+)
+private val PPTX_TYPES = setOf(
+    PPTX_TYPE,
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+    "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
+    "application/vnd.openxmlformats-officedocument.presentationml.template",
+)
 
 /** The text types the manifest offers to show; the same list, for recognising them. */
 private val TEXT_TYPES = setOf(
@@ -26,6 +42,8 @@ internal fun viewerKindFor(mime: String?, name: String?): ViewerKind? {
     return when (type) {
         "application/pdf" -> ViewerKind.PDF
         DOCX_TYPE -> ViewerKind.DOCX
+        in XLSX_TYPES -> ViewerKind.XLSX
+        in PPTX_TYPES -> ViewerKind.PPTX
         in TEXT_TYPES -> ViewerKind.TEXT
         else -> null
     }
