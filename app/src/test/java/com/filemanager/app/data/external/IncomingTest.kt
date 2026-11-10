@@ -14,6 +14,8 @@ class IncomingTest {
         assertEquals(ViewerKind.PDF, viewerKindFor("application/octet-stream", "report.pdf"))
         assertEquals(ViewerKind.PDF, viewerKindFor("application/pdf", "12345"))
         assertEquals(ViewerKind.DOCX, viewerKindFor(DOCX_TYPE, null))
+        assertEquals(ViewerKind.DOC, viewerKindFor(DOC_TYPE, "1234"))
+        assertEquals(ViewerKind.DOC, viewerKindFor("text/rtf", null))
         assertEquals(ViewerKind.XLSX, viewerKindFor(XLSX_TYPE, null))
         assertEquals(ViewerKind.XLSX, viewerKindFor("application/vnd.ms-excel.sheet.macroEnabled.12", "1234"))
         assertEquals(ViewerKind.PPTX, viewerKindFor(PPTX_TYPE, null))

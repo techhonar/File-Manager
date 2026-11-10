@@ -9,6 +9,10 @@ import com.filemanager.app.data.viewer.viewerKind
  */
 
 const val DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+const val DOC_TYPE = "application/msword"
+
+/** Word's older documents and RTF, which the same reader takes, lowercased. */
+private val DOC_TYPES = setOf(DOC_TYPE, "application/rtf", "text/rtf", "application/x-rtf")
 const val XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const val PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
@@ -42,6 +46,7 @@ internal fun viewerKindFor(mime: String?, name: String?): ViewerKind? {
     return when (type) {
         "application/pdf" -> ViewerKind.PDF
         DOCX_TYPE -> ViewerKind.DOCX
+        in DOC_TYPES -> ViewerKind.DOC
         in XLSX_TYPES -> ViewerKind.XLSX
         in PPTX_TYPES -> ViewerKind.PPTX
         in TEXT_TYPES -> ViewerKind.TEXT
