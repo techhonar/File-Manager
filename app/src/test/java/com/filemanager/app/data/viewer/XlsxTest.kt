@@ -154,7 +154,7 @@ class XlsxTest {
         assertTrue(ws.cell(1, "A")!!.look.bold)
         assertEquals("Inline", ws.cell(1, "B")?.text)
         assertEquals("3.14159", ws.cell(2, "A")?.text)
-        assertEquals("15 Mar 2023", ws.cell(2, "B")?.text)
+        assertEquals("15 Mar 23", ws.cell(2, "B")?.text)
         assertEquals("25.6%", ws.cell(2, "C")?.text)
         assertEquals("TRUE", ws.cell(3, "A")?.text)
         assertEquals("#DIV/0!", ws.cell(3, "B")?.text)
@@ -306,7 +306,7 @@ class XlsxTest {
     fun `a 1904 workbook counts its dates from 1904`() {
         val sheet = """<sheetData><row r="1"><c r="A1" s="2"><v>0</v></c></row></sheetData>"""
         val ws = Xlsx.read(xlsx(listOf("S" to sheet), styles = styles, workbookExtra = """<workbookPr date1904="1"/>""")).sheet(0)
-        assertEquals("1 Jan 1904", ws.cell(1, "A")?.text)
+        assertEquals("1 Jan 04", ws.cell(1, "A")?.text)
     }
 
     @Test

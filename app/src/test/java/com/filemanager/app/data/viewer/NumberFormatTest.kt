@@ -97,7 +97,7 @@ class NumberFormatTest {
 
     @Test
     fun `dates count days from 1900 with Excel's leap day, or from 1904`() {
-        assertEquals("15 Mar 2023", builtIn(14, 45000.0))
+        assertEquals("15 Mar 23", builtIn(14, 45000.0))
         assertEquals("2023-03-15", shown("yyyy-mm-dd", 45000.0))
         assertEquals("15/03/2023 12:00", shown("dd/mm/yyyy hh:mm", 45000.5))
         assertEquals("Wednesday, March 15, 2023", shown("dddd, mmmm d, yyyy", 45000.0))
@@ -106,7 +106,7 @@ class NumberFormatTest {
         assertEquals("1900-01-01", shown("yyyy-mm-dd", 1.0))
         assertEquals("1900-02-28", shown("yyyy-mm-dd", 59.0))
         assertEquals("1900-03-01", shown("yyyy-mm-dd", 61.0))
-        assertEquals("1 Jan 1904", shown(NumberFormat.builtIn(14), 0.0, date1904 = true))
+        assertEquals("1 Jan 04", shown(NumberFormat.builtIn(14), 0.0, date1904 = true))
         // System long date, which the file says by a code: the pattern after it stands in.
         assertEquals("Wednesday, March 15, 2023", shown("[\$-F800]dddd, mmmm dd, yyyy", 45000.0))
     }
