@@ -169,6 +169,9 @@ class PlaceController(
     /** The screen that asked, while its sheet is open. */
     private var request: PlaceRequest? = null
 
+    /** Where the sheet has been since it opened, latest last, for Back to retrace. */
+    private val visited = ArrayList<PlaceSpot>()
+
     /** Open the sheet for [asked], on the folder the first item is in. */
     fun open(asked: PlaceRequest) {
         if (asked.paths.isEmpty()) return
@@ -183,6 +186,7 @@ class PlaceController(
             volume != null -> PlaceSpot.Phone(volume, from)
             else -> PlaceSpot.Phone(mounted.firstOrNull() ?: return, mounted.first().path)
         }
+        visited.clear()
         _sheet.value = PlaceSheet(sources = asked.paths, move = asked.move, spot = spot)
         browse(spot)
         // A look at each item on disk: off the main thread, as a selection can
@@ -243,10 +247,21 @@ class PlaceController(
         }
     }
 
+    /**
+     * Back pressed with the sheet open: to the folder it showed before, as a
+     * browser goes back, and once at the folder it opened on, closed - so
+     * Back straight away still cancels, and a wrong turn costs one press.
+     */
+    fun back() {
+        val previous = visited.removeLastOrNull() ?: return close()
+        browse(previous, remember = false)
+    }
+
     /** Close the sheet without copying anything. */
     fun close() {
         _sheet.value = null
         request = null
+        visited.clear()
     }
 
     /** Copy here, or Move here: start it, and follow it until it is over. */
@@ -312,7 +327,9 @@ class PlaceController(
         }
     }
 
-    private fun browse(spot: PlaceSpot) {
+    private fun browse(spot: PlaceSpot, remember: Boolean = true) {
+        val from = _sheet.value?.spot ?: return
+        if (remember && from != spot) visited += from
         _sheet.update { it?.copy(spot = spot, entries = emptyList(), isLoading = true, error = null, writable = true) } ?: return
         scope.launch {
             val listed = runCatching {
