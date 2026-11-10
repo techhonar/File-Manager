@@ -264,9 +264,11 @@ internal class NumberFormat private constructor(private val sections: List<List<
 
         /**
          * The code of one of Excel's own formats, which a workbook uses by
-         * number without writing out. Short dates are shown as 9 Nov 2026:
+         * number without writing out. Short dates are shown as 9 Nov 26:
          * Excel shows them as the phone's region would, and the day and
-         * month can't be told apart in 9/11/2026.
+         * month can't be told apart in 9/11/2026 - and two digits of the
+         * year keep it to the width of 11/9/2026, which a column of the
+         * usual width fits, where 9 Nov 2026 came out as ###.
          */
         fun builtIn(id: Int): String = when (id) {
             1 -> "0"
@@ -282,7 +284,7 @@ internal class NumberFormat private constructor(private val sections: List<List<
             11 -> "0.00E+00"
             12 -> "# ?/?"
             13 -> "# ??/??"
-            14, in 27..31, in 34..36, in 50..58 -> "d mmm yyyy"
+            14, in 27..31, in 34..36, in 50..58 -> "d mmm yy"
             15 -> "d-mmm-yy"
             16 -> "d-mmm"
             17 -> "mmm-yy"
@@ -290,7 +292,7 @@ internal class NumberFormat private constructor(private val sections: List<List<
             19 -> "h:mm:ss AM/PM"
             20, 32 -> "h:mm"
             21, 33 -> "h:mm:ss"
-            22 -> "d mmm yyyy h:mm"
+            22 -> "d mmm yy h:mm"
             45 -> "mm:ss"
             46 -> "[h]:mm:ss"
             47 -> "mm:ss.0"
