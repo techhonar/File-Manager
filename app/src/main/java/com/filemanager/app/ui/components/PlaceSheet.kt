@@ -122,7 +122,12 @@ fun PlaceHost(
     openSheet?.let { shown = it }
     val open = openSheet != null
 
-    BackHandler(enabled = open) { placer.close() }
+    // Composed only while the sheet is open, so it is the newest Back
+    // handler and comes first. Always there, it was older than those of the
+    // screens opened since - so Back went to the folder under the sheet,
+    // clearing its selection and then going up a level, with the sheet
+    // still open over it.
+    if (open) BackHandler { placer.back() }
     AnimatedVisibility(open, enter = fadeIn(tween(220)), exit = fadeOut(tween(200))) {
         Scrim(onClick = placer::close)
     }
