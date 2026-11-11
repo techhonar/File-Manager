@@ -90,6 +90,20 @@ class DocxTest {
     }
 
     @Test
+    fun `a list level with no number gives no marker and no indent, as headings in an outline have`() {
+        val numbering = """
+            <w:abstractNum w:abstractNumId="0">
+                <w:lvl w:ilvl="0"><w:numFmt w:val="none"/><w:lvlText w:val=""/></w:lvl>
+                <w:lvl w:ilvl="1"><w:numFmt w:val="none"/><w:lvlText w:val=""/></w:lvl>
+            </w:abstractNum>
+            <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"""
+        val body = """<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Sub-heading</w:t></w:r></w:p>"""
+        val heading = paragraphs(docx(body, numbering = numbering)).single()
+        assertEquals(null, heading.marker)
+        assertEquals(0, heading.level)
+    }
+
+    @Test
     fun `numbers list items per level and bullets unordered ones`() {
         val numbering = """
             <w:abstractNum w:abstractNumId="0">

@@ -17,8 +17,9 @@ import java.nio.charset.Charset
  * lists and tables in reading order, with bold, italic, underline and
  * strikethrough. Pictures, fonts and the page layout are left to Word.
  *
- * A file called .doc is often something else - RTF, or a .docx renamed - so
- * what is in it decides how it is read, not its name. [MS-DOC] is the format.
+ * A file called .doc is often something else - RTF, a .docx renamed, or
+ * plain text, as documentation was once named - so what is in it decides
+ * how it is read, not its name. [MS-DOC] is the format.
  */
 object Doc {
 
@@ -36,8 +37,43 @@ object Doc {
             head.startsWith(OLE) -> WordBinary(maxChars).read(file)
             head.startsWith(ZIP) -> Docx.read(file, maxChars)
             head.startsWith(RTF) -> Rtf.read(file, maxChars)
-            else -> throw IOException("Not a Word document")
+            else -> plainText(file, maxChars) ?: throw IOException("Not a Word document")
         }
+    }
+
+    /**
+     * [file] as paragraphs, a line each, if it is plain text - or null if it
+     * is anything else: bytes that aren't text, or a web page, whose markup
+     * is not what anyone opening it wants to read.
+     */
+    private fun plainText(file: File, maxChars: Int): DocxDocument? {
+        val sample = ByteArray(minOf(file.length(), 4096L).toInt())
+        file.inputStream().use { input ->
+            var read = 0
+            while (read < sample.size) {
+                val n = input.read(sample, read, sample.size - read)
+                if (n <= 0) break
+                read += n
+            }
+        }
+        if (sample.isEmpty()) return null
+        val start = TextFiles.decode(sample).trimStart()
+        val unicode = sample.size >= 2 && (sample[0].toInt() and 0xFF) >= 0xFE
+        if (start.startsWith("<") || start.startsWith("MIME-Version", ignoreCase = true)) return null
+        if (!unicode && sample.any { it.toInt() == 0 }) return null
+        // Mostly letters, not the control codes a binary file is full of.
+        if (start.count { it < ' ' && it != '\n' && it != '\r' && it != '\t' && it != '\u000C' } > start.length / 20) return null
+
+        val content = TextFiles.read(file, limit = minOf(maxChars.toLong() * 4, TextFiles.READ_LIMIT.toLong()).toInt())
+        var written = 0
+        val blocks = ArrayList<DocBlock>()
+        for (line in content.lines) {
+            if (written >= maxChars) break
+            val text = line.trimEnd()
+            written += text.length
+            blocks += DocParagraph(if (text.isEmpty()) emptyList() else listOf(DocSpan(text)))
+        }
+        return DocxDocument(blocks, truncated = content.truncated || blocks.size < content.lines.size)
     }
 
     private val OLE = byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte())
@@ -135,7 +171,7 @@ private class WordBinary(private val maxChars: Int) {
                     val size = s32(table, at + 1)
                     val count = (size - 4) / 12
                     val cps = at + 5
-                    if (count <= 0 || cps + size > table.size) throw IOException("Damaged Word document")
+                    if (count <= 0 || !fits(cps, size, table.size)) throw IOException("Damaged Word document")
                     val pcds = cps + (count + 1) * 4
                     return (0 until count).map { i ->
                         val raw = s32(table, pcds + i * 8 + 2)
@@ -156,7 +192,7 @@ private class WordBinary(private val maxChars: Int) {
      * "based on", so a house style built on Heading 1 is still one.
      */
     private fun readStyles(table: ByteArray, fc: Int, lcb: Int): Map<Int, DocStyle> {
-        if (lcb <= 4 || fc < 0 || fc + lcb > table.size) return emptyMap()
+        if (lcb <= 4 || !fits(fc, lcb, table.size)) return emptyMap()
         val count = u16(table, fc + 2)
         val builtIn = IntArray(count) { -1 }
         val basedOn = IntArray(count) { NO_STYLE }
@@ -206,24 +242,27 @@ private class WordBinary(private val maxChars: Int) {
         paragraphs: Boolean,
         parse: (ByteArray, Int, Int) -> T,
     ): List<FcRun<T>> {
-        if (lcb < 12 || fc < 0 || fc + lcb > table.size) return emptyList()
+        if (lcb < 12 || !fits(fc, lcb, table.size)) return emptyList()
         val count = (lcb - 4) / 8
         val runs = ArrayList<FcRun<T>>()
         for (i in 0 until count) {
-            val page = (s32(table, fc + (count + 1) * 4 + i * 4) and 0x3FFFFF) * PAGE
-            if (page < 0 || page + PAGE > word.size) continue
-            val crun = word[page + PAGE - 1].toInt() and 0xFF
+            val page = (s32(table, fc + (count + 1) * 4 + i * 4) and 0x3FFFFF).toLong() * PAGE
+            if (page + PAGE > word.size) continue
+            val crun = word[page.toInt() + PAGE - 1].toInt() and 0xFF
+            // A page holds only so many runs: more, and it is not one.
+            if ((crun + 1) * 4 + crun * (if (paragraphs) 13 else 1) > PAGE - 1) continue
             for (j in 0 until crun) {
-                val start = s32(word, page + j * 4)
-                val end = s32(word, page + (j + 1) * 4)
+                val base = page.toInt()
+                val start = s32(word, base + j * 4)
+                val end = s32(word, base + (j + 1) * 4)
                 // Paragraph pages give 13 bytes a run, character pages one.
                 val offset = if (paragraphs) {
-                    (word[page + (crun + 1) * 4 + j * 13].toInt() and 0xFF) * 2
+                    (word[base + (crun + 1) * 4 + j * 13].toInt() and 0xFF) * 2
                 } else {
-                    (word[page + (crun + 1) * 4 + j].toInt() and 0xFF) * 2
+                    (word[base + (crun + 1) * 4 + j].toInt() and 0xFF) * 2
                 }
                 if (offset == 0) continue
-                runs += FcRun(start, end, parse(word, page + offset, page + PAGE - 1))
+                runs += FcRun(start, end, parse(word, base + offset, base + PAGE - 1))
             }
         }
         return runs.sortedBy { it.start }
@@ -292,7 +331,9 @@ private class WordBinary(private val maxChars: Int) {
                 0x0836 -> italic = toggle(operand)
                 0x0837, 0x2A53 -> strike = toggle(operand)
                 0x2A3E -> underline = word[operand].toInt() != 0
-                0x083C -> hidden = toggle(operand)
+                // Hidden text, and text deleted with changes tracked: still
+                // in the file, not in the document.
+                0x083C, 0x0800 -> if (toggle(operand)) hidden = true
             }
         }
         return CharacterLook(bold, italic, underline, strike, hidden)
@@ -352,7 +393,7 @@ private class WordBinary(private val maxChars: Int) {
 
         init {
             runCatching {
-                if (lcbLst > 2 && fcLst >= 0 && fcLst + lcbLst <= table.size) {
+                if (lcbLst > 2 && fits(fcLst, lcbLst, table.size)) {
                     val count = u16(table, fcLst)
                     var at = fcLst + 2
                     val lists = (0 until count).map { i ->
@@ -377,8 +418,9 @@ private class WordBinary(private val maxChars: Int) {
                         byId[id] = parsed
                     }
                 }
-                if (lcbLfo > 4 && fcLfo >= 0 && fcLfo + lcbLfo <= table.size) {
-                    val count = s32(table, fcLfo)
+                if (lcbLfo > 4 && fits(fcLfo, lcbLfo, table.size)) {
+                    // No more of them than the space they are in can hold.
+                    val count = s32(table, fcLfo).coerceIn(0, (lcbLfo - 4) / 16)
                     for (i in 0 until count) listIds += s32(table, fcLfo + 4 + i * 16)
                 }
             }
@@ -481,10 +523,11 @@ private class WordBinary(private val maxChars: Int) {
         private fun decode(piece: TextPiece, from: Int, to: Int): String {
             val start = piece.fcOf(from)
             if (start < 0 || start >= word.size) return ""
+            val room = word.size - start
             return if (piece.compressed) {
-                String(word, start, minOf(to - from, word.size - start), windows1252)
+                String(word, start, minOf(to - from, room), windows1252)
             } else {
-                String(word, start, minOf((to - from) * 2, (word.size - start) and 1.inv()), Charsets.UTF_16LE)
+                String(word, start, minOf((to - from).toLong() * 2, (room and 1.inv()).toLong()).toInt(), Charsets.UTF_16LE)
             }
         }
 
@@ -562,12 +605,15 @@ internal class DocBuilder {
         marker: () -> String?,
     ) {
         flushSpan()
+        // A list level with no number - as headings in an outline have -
+        // gives no marker, and nothing to indent for one.
+        val mark = if (spans.any { it.text.isNotBlank() }) marker()?.takeIf { it.isNotBlank() } else null
         val paragraph = DocParagraph(
             spans = spans.toList(),
             style = style,
             align = align,
-            marker = if (spans.any { it.text.isNotBlank() }) marker() else null,
-            level = level,
+            marker = mark,
+            level = if (mark == null) 0 else level,
             rtl = rtl,
         )
         spans.clear()
@@ -621,6 +667,9 @@ internal class DocBuilder {
         rows.clear()
     }
 }
+
+/** Whether [length] bytes at [at] lie within [size] - worked out without the sum overflowing. */
+private fun fits(at: Int, length: Int, size: Int) = at >= 0 && length >= 0 && at.toLong() + length <= size
 
 private val PLAIN = CharacterLook()
 

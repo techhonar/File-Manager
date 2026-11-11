@@ -50,18 +50,21 @@ internal class CompoundFile(file: File) : Closeable {
             // Where the table's own sectors are: 109 in the header, the rest
             // in a chain of sectors that list them.
             val maxSectors = (length / sectorSize).toInt() + 1
+            val perSector = sectorSize / 4
+            // No more sectors of the table's own than it takes to list every
+            // sector the file has: a header that claims more is not believed.
+            val maxFatSectors = maxSectors / perSector + 2
             val fatAt = ArrayList<Int>()
             for (i in 0 until 109) s32(header, 0x4C + i * 4).takeIf { it >= 0 }?.let { fatAt += it }
             var difat = firstDifat
             var hops = 0
-            while (difat >= 0 && fatAt.size < fatSectors) {
+            while (difat >= 0 && fatAt.size < minOf(fatSectors, maxFatSectors)) {
                 if (++hops > maxSectors) throw IOException("Damaged compound file")
                 val sector = readSector(difat)
                 for (i in 0 until sectorSize / 4 - 1) s32(sector, i * 4).takeIf { it >= 0 }?.let { fatAt += it }
                 difat = s32(sector, sectorSize - 4)
             }
-            val perSector = sectorSize / 4
-            val table = IntArray(minOf(fatAt.size, maxSectors) * perSector)
+            val table = IntArray(minOf(fatAt.size, maxFatSectors) * perSector)
             for ((n, at) in fatAt.take(table.size / perSector).withIndex()) {
                 val sector = readSector(at)
                 for (i in 0 until perSector) table[n * perSector + i] = s32(sector, i * 4)

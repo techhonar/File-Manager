@@ -102,10 +102,20 @@ class DocTest {
         assertTrue(paragraphs(document).sumOf { it.text.length } <= 40)
     }
 
+    @Test
+    fun `a doc that is plain text is shown as its lines`() {
+        val file = File(temp.root, "README.doc").apply { writeText("Keymap notes\n\nUse AltGr for the third level.\n") }
+        assertEquals(listOf("Keymap notes", "", "Use AltGr for the third level."), paragraphs(Doc.read(file)).map { it.text })
+    }
+
     @Test(expected = IOException::class)
-    fun `a file that is not a Word document fails to read`() {
-        val file = File(temp.root, "notes.doc").apply { writeText("just some text") }
-        Doc.read(file)
+    fun `a doc that is a web page is not shown as its markup`() {
+        Doc.read(File(temp.root, "export.doc").apply { writeText("<html><body><p>Report</p></body></html>") })
+    }
+
+    @Test(expected = IOException::class)
+    fun `a file that is not a document at all fails to read`() {
+        Doc.read(File(temp.root, "data.doc").apply { writeBytes(ByteArray(600) { (it * 7 % 256).toByte() }) })
     }
 
     @Test(expected = IOException::class)
@@ -125,6 +135,26 @@ class DocTest {
         assertEquals(listOf("Café €5 a\u00A0b {x}"), paragraphs(document).map { it.text })
         val arabic = rtf("""{\rtf1\ansi\ansicpg1256 \'d3\'e1\'c7\'e3\par}""")
         assertEquals(listOf("سلام"), paragraphs(arabic).map { it.text })
+    }
+
+    @Test
+    fun `RTF bytes are letters of the font in use - Cyrillic, Persian - not of the document's code page`() {
+        val fonts = """{\fonttbl{\f0\fswiss\fcharset0 Arial;}{\f1\fswiss\fcharset204{\*\panose 020b0604020202020204}Arial Cyr;}{\f2\fnil\fcharset178 Tahoma;}}"""
+        val russian = rtf("""{\rtf1\ansi\ansicpg1252\deff0""" + fonts + """\f1 \'cf\'f0\'e8\'e2\'e5\'f2 \f0 hello {\f2 \'d3\'e1\'c7\'e3} caf\'e9\par}""")
+        assertEquals(listOf("Привет hello سلام café"), paragraphs(russian).map { it.text })
+        // The document's usual font decides for text that names none.
+        val usual = rtf("""{\rtf1\ansi\ansicpg1252\deff1""" + fonts + """\'cf\'f0\'e8\'e2\'e5\'f2\par\plain \'e4\'e0\par}""")
+        assertEquals(listOf("Привет", "да"), paragraphs(usual).map { it.text })
+    }
+
+    @Test
+    fun `RTF reads past a picture's raw bytes, and words deleted with changes tracked`() {
+        // Five raw bytes after \bin5, braces and a backslash among them.
+        val document = rtf("""{\rtf1 A{\pict\bin5 }{\}{}B {\deleted gone }kept\par}""")
+        assertEquals(listOf("AB kept"), paragraphs(document).map { it.text })
+        // A count far past the end of the file ends the reading, and nothing worse.
+        val cut = rtf("""{\rtf1 Shown\par{\pict\bin2147483647 lost}""")
+        assertEquals(listOf("Shown"), paragraphs(cut).map { it.text })
     }
 
     @Test
