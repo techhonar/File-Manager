@@ -11,10 +11,14 @@ import java.nio.charset.Charset
  *
  * RTF is text with control words: \par ends a paragraph, \b turns bold on,
  * braces group what a control word applies to. Groups that are not the
- * document's text - fonts, colours, pictures, a field's instructions - are
- * read past; the stylesheet is read only for which styles are headings, and
- * the marker a list paragraph carries in its \listtext is kept as its
- * bullet or number.
+ * document's text - colours, pictures, a field's instructions - are read
+ * past; the stylesheet is read only for which styles are headings, the font
+ * table for which alphabet each font writes, and the marker a list
+ * paragraph carries in its \listtext is kept as its bullet or number.
+ *
+ * Letters outside English are written either as Unicode (\u1587) or as
+ * bytes (\'d3) in the code page of the font in use - Cyrillic, Arabic,
+ * Greek - so which font is in use decides what a byte means.
  */
 object Rtf {
 
@@ -29,7 +33,7 @@ object Rtf {
 
 /** Destinations that hold no text of the document's own, read past whole. */
 private val RTF_SKIPPED = setOf(
-    "fonttbl", "colortbl", "info", "pict", "object", "objdata", "header", "footer", "headerl", "headerr",
+    "colortbl", "info", "pict", "object", "objdata", "header", "footer", "headerl", "headerr",
     "headerf", "footerl", "footerr", "footerf", "footnote", "annotation", "fldinst", "listtable",
     "listoverridetable", "rsidtbl", "generator", "xmlnstbl", "themedata", "colorschememapping",
     "latentstyles", "datastore", "pgdsctbl", "filetbl", "revtbl", "nonshppict", "bkmkstart", "bkmkend",
@@ -43,17 +47,21 @@ private class RtfGroup(
     var underline: Boolean = false,
     var strike: Boolean = false,
     var hidden: Boolean = false,
+    /** Deleted with changes tracked: still in the file, not in the document. */
+    var deleted: Boolean = false,
     /** Neither text nor a list marker: read past. */
     var skip: Boolean = false,
     /** How many characters stand in for one written as \u, for older readers. */
     var uc: Int = 1,
     var destination: String? = null,
+    /** The font in use, by its number in the font table; null for the document's usual one. */
+    var font: Int? = null,
     /** No control word or text in it yet: the first says what the group is. */
     var atStart: Boolean = true,
     /** Started with \*: a destination to read past unless known. */
     var ignorable: Boolean = false,
 ) {
-    fun child() = RtfGroup(bold, italic, underline, strike, hidden, skip, uc, destination)
+    fun child() = RtfGroup(bold, italic, underline, strike, hidden, deleted, skip, uc, destination, font)
 }
 
 private class RtfParser(private val input: ByteArray, private val maxChars: Int) {
@@ -80,6 +88,12 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
     private var stylesheetDepth = -1
     private var styleNumber = 0
     private val styleName = StringBuilder()
+
+    // The font table: the code page of each font that isn't the document's own.
+    private val fontCharsets = HashMap<Int, Charset>()
+    private var fontTableDepth = -1
+    private var fontNumber = 0
+    private var defaultFont: Int? = null
 
     fun parse(): DocxDocument {
         var i = 0
@@ -126,6 +140,9 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
             }
             // A space ends a control word, and is part of it.
             if (end < input.size && input[end] == ' '.code.toByte()) end++
+            // Raw bytes of a picture follow, as many as it says: not RTF, and
+            // any brace or backslash among them is not one.
+            if (name == "bin") return minOf(input.size.toLong(), end.toLong() + (param ?: 0).coerceAtLeast(0)).toInt()
             word(name, param)
             return end
         }
@@ -154,9 +171,10 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
                 flush()
                 emit('-')
             }
+            // A backslash at the end of a line is a \par - in the text, that is.
             '\r', '\n' -> {
                 flush()
-                endParagraph(endsCell = false)
+                if (!state.skip && stylesheetDepth < 0 && state.destination != "listtext") endParagraph(endsCell = false)
             }
         }
         return at + 2
@@ -172,6 +190,12 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
                     group.skip = true
                     group.destination = name
                     stylesheetDepth = groups.lastIndex
+                    return
+                }
+                name == "fonttbl" -> {
+                    group.skip = true
+                    group.destination = name
+                    fontTableDepth = groups.lastIndex
                     return
                 }
                 name == "listtext" -> {
@@ -190,6 +214,13 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
             if (name == "s") styleNumber = param ?: 0
             return
         }
+        if (fontTableDepth >= 0) {
+            when (name) {
+                "f" -> fontNumber = param ?: 0
+                "fcharset" -> fontCharset(param)?.let { fontCharsets[fontNumber] = it }
+            }
+            return
+        }
         if (group.skip) return
         // A list item's marker is written as a little paragraph of its own,
         // \pard and all: only its characters count, not its properties.
@@ -198,6 +229,7 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
                 emit((if (code < 0) code + 65536 else code).toChar())
                 skipFallback = group.uc
             }
+            if (name == "f") group.font = param
             return
         }
         val on = param == null || param != 0
@@ -227,23 +259,28 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
                 group.underline = false
                 group.strike = false
                 group.hidden = false
+                group.deleted = false
+                group.font = null
             }
+            "f" -> group.font = param
+            "deff" -> defaultFont = param
             "b" -> group.bold = on
             "i" -> group.italic = on
             "ul", "uld", "uldb", "ulw", "ulwave", "uldash", "ulth" -> group.underline = on
             "ulnone" -> group.underline = false
             "strike", "striked" -> group.strike = on
             "v" -> group.hidden = on
+            "deleted" -> group.deleted = on
             "uc" -> group.uc = (param ?: 1).coerceAtLeast(0)
             "u" -> {
                 val code = param ?: return
                 emit((if (code < 0) code + 65536 else code).toChar())
                 skipFallback = group.uc
             }
-            "ansicpg" -> param?.let { page ->
-                runCatching { Charset.forName("windows-$page") }.recoverCatching { Charset.forName("cp$page") }
-                    .getOrNull()?.let { charset = it }
-            }
+            "ansicpg" -> param?.let { page -> charsetNamed("windows-$page", "cp$page", "x-windows-$page")?.let { charset = it } }
+            "mac" -> charsetNamed("x-MacRoman", "MacRoman")?.let { charset = it }
+            "pc" -> charsetNamed("IBM437")?.let { charset = it }
+            "pca" -> charsetNamed("IBM850")?.let { charset = it }
             "tab" -> emit('\t')
             "line" -> emit('\n')
             "emdash" -> emit('—')
@@ -268,6 +305,7 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
                 styleNumber = 0
             }
             stylesheetDepth >= 0 && groups.size == stylesheetDepth -> stylesheetDepth = -1
+            fontTableDepth >= 0 && groups.size == fontTableDepth -> fontTableDepth = -1
             ended.destination == "listtext" && state.destination != "listtext" -> {
                 // A bullet from a symbol font comes through as a dot or a letter.
                 marker = markerText.toString().trim().let { text ->
@@ -281,12 +319,41 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
         }
     }
 
-    /** The bytes written as \'hh or as they are, decoded together: two make one character in some code pages. */
+    /**
+     * The bytes written as \'hh or as they are, decoded together - two make
+     * one character in some code pages - in the code page of the font in use.
+     */
     private fun flush() {
         if (pending.size() == 0) return
-        val text = String(pending.toByteArray(), charset)
+        val text = String(pending.toByteArray(), fontCharsets[state.font ?: defaultFont] ?: charset)
         pending.reset()
         for (char in text) emit(char)
+    }
+
+    private fun charsetNamed(vararg names: String): Charset? =
+        names.firstNotNullOfOrNull { name -> runCatching { Charset.forName(name) }.getOrNull() }
+
+    /**
+     * The code page of a font whose \fcharset is [number], or null for one
+     * that writes in the document's own: 204 is Cyrillic, 178 Arabic and
+     * Persian, 161 Greek.
+     */
+    private fun fontCharset(number: Int?): Charset? = when (number) {
+        128 -> charsetNamed("windows-31j", "Shift_JIS")
+        129 -> charsetNamed("windows-949", "x-windows-949", "EUC-KR")
+        130 -> charsetNamed("x-Johab")
+        134 -> charsetNamed("GBK", "GB2312")
+        136 -> charsetNamed("windows-950", "x-windows-950", "Big5")
+        161 -> charsetNamed("windows-1253")
+        162 -> charsetNamed("windows-1254")
+        163 -> charsetNamed("windows-1258")
+        177 -> charsetNamed("windows-1255")
+        178 -> charsetNamed("windows-1256")
+        186 -> charsetNamed("windows-1257")
+        204 -> charsetNamed("windows-1251")
+        222 -> charsetNamed("windows-874", "x-windows-874", "TIS-620")
+        238 -> charsetNamed("windows-1250")
+        else -> null
     }
 
     private fun emit(char: Char) {
@@ -295,7 +362,7 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
         when {
             stylesheetDepth >= 0 -> styleName.append(char)
             group.destination == "listtext" -> markerText.append(char)
-            group.skip || group.hidden -> Unit
+            group.skip || group.hidden || group.deleted -> Unit
             else -> {
                 written++
                 out.append(char, group.bold, group.italic, group.underline, group.strike)

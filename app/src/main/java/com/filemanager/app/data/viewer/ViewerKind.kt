@@ -17,7 +17,8 @@ private val TEXT_EXTENSIONS = setOf(
     "srt", "vtt", "tex", "gitignore",
 )
 
-/** Excel workbooks and PowerPoint presentations, with macros or not, and their templates: one format each. */
+/** Word documents, Excel workbooks and PowerPoint presentations, with macros or not, and their templates: one format each. */
+private val DOCX_EXTENSIONS = setOf("docx", "docm", "dotx", "dotm")
 private val XLSX_EXTENSIONS = setOf("xlsx", "xlsm", "xltx", "xltm")
 private val PPTX_EXTENSIONS = setOf("pptx", "pptm", "ppsx", "ppsm", "potx", "potm")
 
@@ -29,7 +30,7 @@ private val PPTX_EXTENSIONS = setOf("pptx", "pptm", "ppsx", "ppsm", "potx", "pot
 fun viewerKind(fileName: String): ViewerKind? =
     when (fileName.substringAfterLast('.', "").lowercase()) {
         "pdf" -> ViewerKind.PDF
-        "docx" -> ViewerKind.DOCX
+        in DOCX_EXTENSIONS -> ViewerKind.DOCX
         "doc", "dot", "rtf" -> ViewerKind.DOC
         in XLSX_EXTENSIONS -> ViewerKind.XLSX
         in PPTX_EXTENSIONS -> ViewerKind.PPTX

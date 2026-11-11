@@ -545,10 +545,13 @@ private class BodyHandler(
         val styled = paragraph.style?.let { styles[it] }
         val list = if (paragraph.ownList) paragraph.list else styled?.list
         val level = if (list == null) 0 else paragraph.level ?: styled?.level ?: 0
-        var marker = list?.let { numbering.next(it, level) }
+        // A level with no number - as headings in an outline have - gives no
+        // marker, and nothing to indent for one.
+        var marker = list?.let { numbering.next(it, level) }?.takeIf { it.isNotBlank() }
+        val depth = if (marker == null) 0 else level
         val spans = ArrayList<DocSpan>()
         fun flush() {
-            into += DocParagraph(spans.toList(), styled?.style ?: DocStyle.BODY, paragraph.align, marker, level)
+            into += DocParagraph(spans.toList(), styled?.style ?: DocStyle.BODY, paragraph.align, marker, depth)
             marker = null
             spans.clear()
         }

@@ -96,6 +96,8 @@ class TextFilesTest {
         assertEquals(ViewerKind.XLSX, viewerKind("macros.xlsm"))
         assertEquals(ViewerKind.PPTX, viewerKind("talk.pptx"))
         assertEquals(ViewerKind.PPTX, viewerKind("show.ppsx"))
+        assertEquals(ViewerKind.DOCX, viewerKind("macros.docm"))
+        assertEquals(ViewerKind.DOCX, viewerKind("letterhead.dotx"))
         assertEquals(ViewerKind.DOC, viewerKind("old.doc"))
         assertEquals(ViewerKind.DOC, viewerKind("Letter.RTF"))
         assertNull(viewerKind("old.xls"))
