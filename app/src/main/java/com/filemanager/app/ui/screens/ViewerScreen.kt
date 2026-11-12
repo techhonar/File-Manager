@@ -77,6 +77,7 @@ import com.filemanager.app.data.viewer.PptxDeck
 import com.filemanager.app.data.viewer.PptxSlide
 import com.filemanager.app.data.viewer.TextContent
 import com.filemanager.app.data.viewer.TextFiles
+import com.filemanager.app.data.viewer.TooLarge
 import com.filemanager.app.data.viewer.ViewerKind
 import com.filemanager.app.data.viewer.Xlsx
 import com.filemanager.app.data.viewer.startsRightToLeft
@@ -88,6 +89,7 @@ import com.filemanager.app.ui.theme.OneUi
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.zip.ZipFile
@@ -230,8 +232,10 @@ private fun <T : Any> Viewer(
     content: @Composable (T) -> Unit,
 ) {
     // Keeps showing what it has while reading again for a new [version].
+    // Interrupted when the screen goes, so a large file isn't read on for
+    // nobody: the readers stop at the next of it they take.
     val load by produceState<Load<T>>(Load.Reading, file, version) {
-        value = withContext(Dispatchers.IO) {
+        value = runInterruptible(Dispatchers.IO) {
             try {
                 Load.Read(read(file))
             } catch (e: Throwable) {
@@ -278,7 +282,7 @@ internal fun <T : Any> LoadedPane(load: Load<T>, onOpenWith: () -> Unit, content
 
 internal fun describe(error: Throwable): String = when (error) {
     is SecurityException -> "This file is protected with a password."
-    is OutOfMemoryError -> "This file is too large to show here."
+    is OutOfMemoryError, is TooLarge -> "This file is too large to show here."
     else -> "This file couldn't be read. It may be damaged, or not what its name says."
 }
 
@@ -427,7 +431,8 @@ private fun ParagraphRow(
     align: TextAlign,
     above: Dp,
 ) {
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp * paragraph.level, top = above, bottom = 6.dp)) {
+    // Never less than none, which padding refuses, whatever a file says its level is.
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp * paragraph.level.coerceIn(0, Docx.MAX_LEVEL), top = above, bottom = 6.dp)) {
         paragraph.marker?.let { marker ->
             Text(
                 text = marker,

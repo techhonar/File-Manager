@@ -91,7 +91,7 @@ import com.filemanager.app.data.viewer.columnOf
 import com.filemanager.app.data.viewer.general
 import com.filemanager.app.ui.theme.OneUi
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import kotlin.math.roundToInt
 
 /*
@@ -116,7 +116,8 @@ internal fun SpreadsheetView(book: Spreadsheet, onOpenWith: () -> Unit) {
             // than where the last one was scrolled to.
             key(index) {
                 val load by produceState<Load<Worksheet>>(Load.Reading, book) {
-                    value = withContext(Dispatchers.IO) {
+                    // Interrupted when another sheet is chosen, or the screen goes.
+                    value = runInterruptible(Dispatchers.IO) {
                         try {
                             Load.Read(book.sheet(index))
                         } catch (e: Throwable) {

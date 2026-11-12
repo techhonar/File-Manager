@@ -46,16 +46,19 @@ object Pptx {
         val budget = TextBudget(maxChars)
         val slides = ArrayList<PptxSlide>()
         for ((index, part) in slideParts.withIndex()) {
-            if (index >= MAX_SLIDES || budget.spent) break
+            if (index >= MAX_SLIDES || budget.spent || parts.cutShort) break
             val slide = readSlide(parts, part, index + 1, budget)
             // A slide cut short before anything on it was read goes with the rest left out.
-            if (budget.spent && slide.blocks.isEmpty()) break
+            if ((budget.spent || parts.cutShort) && slide.blocks.isEmpty()) break
             slides += slide
         }
-        PptxDeck(slides, total = slideParts.size, truncated = budget.spent || slides.size < slideParts.size)
+        // Read as far as a file is, with nothing to show for it: not a presentation with no slides.
+        if (parts.cutShort && slides.isEmpty()) throw TooLarge()
+        PptxDeck(slides, total = slideParts.size, truncated = budget.spent || budget.leftOut || parts.cutShort || slides.size < slideParts.size)
     }
 
     private fun readSlide(parts: OoxmlParts, part: String, number: Int, budget: TextBudget): PptxSlide {
+        budget.nextSlide()
         val links = parts.links(part)
         val slide = SlideHandler(links, budget, notes = false)
         parse(parts, part, slide, budget)
@@ -88,10 +91,19 @@ object Pptx {
     }
 }
 
-/** The characters still to be read, shared by every part of the file. */
+/**
+ * The characters still to be read, and the paragraphs, pictures and table
+ * cells still to be kept, shared by every part of the file.
+ */
 private class TextBudget(private val max: Int) {
     private var used = 0
+    private var pieces = 0
+    private var onSlide = 0
     var spent = false
+        private set
+
+    /** Something on a slide was left out: it held more than is shown at once. */
+    var leftOut = false
         private set
 
     fun spend(chars: Int) {
@@ -101,14 +113,44 @@ private class TextBudget(private val max: Int) {
             throw ReadEnough()
         }
     }
+
+    /**
+     * One more paragraph, stretch of text, picture, row or cell kept -
+     * [laidOut] with its slide, unless it is only text in a paragraph that is.
+     */
+    fun piece(laidOut: Boolean = true) {
+        if (++pieces > Docx.MAX_PIECES) {
+            spent = true
+            throw ReadEnough()
+        }
+        if (laidOut) onSlide++
+    }
+
+    fun nextSlide() {
+        onSlide = 0
+    }
+
+    /** The slide being read holds as much as is shown at once. */
+    val crowded: Boolean get() = onSlide >= Docx.MAX_TOGETHER
+
+    /** Says that something was [leftOut]. */
+    fun leaveOut() {
+        leftOut = true
+    }
 }
+
+/** Slides counted, ten times as many as are read. */
+private const val MAX_SLIDE_IDS = Pptx.MAX_SLIDES * 10
+
+/** More columns than any table on a slide has. */
+private const val MAX_TABLE_COLUMNS = 256
 
 private class PresentationHandler : OoxmlHandler() {
     /** The slides' relationship ids, in the presentation's order. */
     val slides = ArrayList<String>()
 
     override fun startElement(uri: String, localName: String, qName: String, attributes: Attributes) {
-        if (localName == "sldId") attributes.relationship("id")?.let { slides += it }
+        if (localName == "sldId" && slides.size < MAX_SLIDE_IDS) attributes.relationship("id")?.let { slides += it }
     }
 }
 
@@ -142,12 +184,13 @@ private class TextRun {
 }
 
 /** Adds [text] to [spans], joining it to the last span when the formatting is the same. */
-private fun addText(spans: MutableList<DocSpan>, text: String, run: TextRun) {
+private fun addText(spans: MutableList<DocSpan>, text: String, run: TextRun, budget: TextBudget) {
     val last = spans.lastOrNull()
     val span = run.span(text)
     if (last != null && last.copy(text = "") == span.copy(text = "")) {
         spans[spans.size - 1] = last.copy(text = last.text + text)
     } else {
+        budget.piece(laidOut = false)
         spans += span
     }
 }
@@ -231,6 +274,19 @@ private class SlideHandler(
         }
         val parent = path.lastOrNull()
         val grandparent = path.getOrNull(path.size - 2)
+        // A slide is laid out all at once: past what that can be, the rest
+        // of its paragraphs and table rows are left out, whole.
+        val tooMany = when (localName) {
+            "tr" -> table != null && budget.crowded
+            "tc" -> table != null && (table?.rows?.lastOrNull()?.size ?: 0) >= MAX_TABLE_COLUMNS
+            "p" -> parent == "txBody" && budget.crowded
+            else -> false
+        }
+        if (tooMany) {
+            budget.leaveOut()
+            skipDepth = 1
+            return
+        }
         path += localName
         val shape = shapes.lastOrNull()
         when (localName) {
@@ -248,10 +304,13 @@ private class SlideHandler(
             "graphicData" -> if (attributes.attr("uri")?.endsWith("/chart") == true) shape?.chart = true
             "relIds" -> attributes.relationship("dm")?.let { links[it]?.target }?.let { shape?.diagram = it }
             "tbl" -> table = Table()
-            "gridCol" -> table?.columns?.add(attributes.attr("w")?.toFloatOrNull() ?: 0f)
-            "tr" -> table?.rows?.add(ArrayList())
+            "gridCol" -> table?.columns?.let { if (it.size < MAX_TABLE_COLUMNS) it.add(attributes.attr("w")?.toFloatOrNull() ?: 0f) }
+            "tr" -> table?.rows?.let { rows ->
+                budget.piece()
+                rows.add(ArrayList())
+            }
             "tc" -> cell = Cell(
-                span = attributes.attr("gridSpan")?.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                span = attributes.attr("gridSpan")?.toIntOrNull()?.coerceIn(1, MAX_TABLE_COLUMNS) ?: 1,
                 kind = when {
                     attributes.attr("hMerge").isTrue() -> CellKind.SKIPPED
                     attributes.attr("vMerge").isTrue() -> CellKind.EMPTY
@@ -321,7 +380,7 @@ private class SlideHandler(
     private fun text(text: String) {
         val p = paragraph ?: return
         budget.spend(text.length)
-        addText(p.spans, text, run)
+        addText(p.spans, text, run, budget)
     }
 
     /** A bullet set on the paragraph itself, or by the shape's list style for one level. */
@@ -385,6 +444,7 @@ private class SlideHandler(
         val rtl = p.rtl ?: shape?.levelRtl?.get(p.level)
         val block = DocParagraph(p.spans.toList(), style, p.align, marker, p.level, rtl)
         val into = cell?.blocks ?: shape?.blocks ?: return
+        budget.piece()
         into += block
     }
 
@@ -393,11 +453,9 @@ private class SlideHandler(
         cell = null
         val t = table ?: return
         if (t.rows.isEmpty()) t.rows.add(ArrayList())
-        when (c.kind) {
-            CellKind.SKIPPED -> Unit
-            CellKind.EMPTY -> t.rows.last() += DocCell(emptyList(), c.span)
-            CellKind.NORMAL -> t.rows.last() += DocCell(c.blocks.toList(), c.span)
-        }
+        if (c.kind == CellKind.SKIPPED) return
+        budget.piece()
+        t.rows.last() += DocCell(if (c.kind == CellKind.EMPTY) emptyList() else c.blocks.toList(), c.span)
     }
 
     private fun finishTable() {
@@ -422,9 +480,18 @@ private class SlideHandler(
         }
         if (placeholder in FURNITURE) return
         val blocks = ArrayList<DocBlock>()
-        shape.picture?.let { blocks += DocImage(it, shape.width, shape.height) }
+        // A picture or a chart past what a slide shows at once goes with the rest left out.
+        val room = !budget.crowded
+        if (!room && (shape.picture != null || shape.chart)) budget.leaveOut()
+        shape.picture?.takeIf { room }?.let {
+            budget.piece()
+            blocks += DocImage(it, shape.width, shape.height)
+        }
         blocks += shape.blocks
-        if (shape.chart) blocks += DocParagraph(listOf(DocSpan("[Chart that can't be shown here]", italic = true)))
+        if (shape.chart && room) {
+            budget.piece()
+            blocks += DocParagraph(listOf(DocSpan("[Chart that can't be shown here]", italic = true)))
+        }
         if (blocks.isEmpty() && shape.diagram == null) return
         pieces += Piece(title = placeholder == "title" || placeholder == "ctrTitle", blocks = blocks, diagram = shape.diagram)
     }
@@ -478,7 +545,14 @@ private class DiagramHandler(private val budget: TextBudget) : OoxmlHandler() {
             "t" -> inText = false
             "p" -> spans?.let { text ->
                 spans = null
-                if (text.any { it.text.isNotBlank() }) paragraphs += DocParagraph(text.toList(), marker = BULLETS[0])
+                if (text.any { it.text.isNotBlank() }) {
+                    if (budget.crowded) {
+                        budget.leaveOut()
+                    } else {
+                        budget.piece()
+                        paragraphs += DocParagraph(text.toList(), marker = BULLETS[0])
+                    }
+                }
             }
         }
     }
@@ -487,6 +561,6 @@ private class DiagramHandler(private val budget: TextBudget) : OoxmlHandler() {
         val into = spans ?: return
         if (!inText) return
         budget.spend(length)
-        addText(into, String(ch, start, length), run)
+        addText(into, String(ch, start, length), run, budget)
     }
 }

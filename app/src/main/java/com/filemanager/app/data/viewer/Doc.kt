@@ -68,7 +68,7 @@ object Doc {
         var written = 0
         val blocks = ArrayList<DocBlock>()
         for (line in content.lines) {
-            if (written >= maxChars) break
+            if (written >= maxChars || blocks.size >= Docx.MAX_PIECES) break
             val text = line.trimEnd()
             written += text.length
             blocks += DocParagraph(if (text.isEmpty()) emptyList() else listOf(DocSpan(text)))
@@ -152,11 +152,12 @@ private class WordBinary(private val maxChars: Int) {
         val from = s32(word, 0x18).coerceIn(0, word.size)
         val to = s32(word, 0x1C).coerceIn(from, word.size)
         val text = String(word, from, minOf(to - from, maxChars), windows1252)
-        val blocks = text.split('\r').map { line ->
+        val lines = text.splitToSequence('\r').take(Docx.MAX_PIECES + 1).toList()
+        val blocks = lines.take(Docx.MAX_PIECES).map { line ->
             val clean = line.filter { it == '\t' || it >= ' ' }
             DocParagraph(if (clean.isEmpty()) emptyList() else listOf(DocSpan(clean)))
         }
-        return DocxDocument(blocks, truncated = to - from > maxChars)
+        return DocxDocument(blocks, truncated = to - from > maxChars || lines.size > Docx.MAX_PIECES)
     }
 
     /** The piece table, from the CLX in the table stream. */
@@ -486,13 +487,13 @@ private class WordBinary(private val maxChars: Int) {
                 if (from >= to) continue
                 val chars = decode(piece, from, to)
                 for ((i, char) in chars.withIndex()) {
-                    if (written >= maxChars) {
+                    if (written >= maxChars || out.full) {
                         truncated = true
                         break
                     }
                     val fc = piece.fcOf(from + i)
                     when (char.code) {
-                        0x13 -> { fields += true; continue }
+                        0x13 -> { if (fields.size < MAX_FIELD_DEPTH) fields += true; continue }
                         0x14 -> { if (fields.isNotEmpty()) fields[fields.lastIndex] = false; continue }
                         0x15 -> { if (fields.isNotEmpty()) fields.removeAt(fields.lastIndex); continue }
                     }
@@ -580,6 +581,16 @@ internal class DocBuilder {
     private val spans = ArrayList<DocSpan>()
     private val text = StringBuilder()
     private var format = DocSpan("")
+    private var pieces = 0
+
+    /** Paragraphs and cells in the table row being read, which is shown all at once. */
+    private var together = 0
+
+    /**
+     * Holding as many paragraphs, stretches of text and cells as a document
+     * is read to: whoever is filling it stops, and says it was cut short.
+     */
+    val full: Boolean get() = pieces >= Docx.MAX_PIECES
 
     /** [char], in the formatting given; a change of formatting starts a new span. */
     fun append(char: Char, bold: Boolean = false, italic: Boolean = false, underline: Boolean = false, strike: Boolean = false) {
@@ -613,31 +624,41 @@ internal class DocBuilder {
             style = style,
             align = align,
             marker = mark,
-            level = if (mark == null) 0 else level,
+            // As deep as lists go: a level from a damaged file is not an indent.
+            level = if (mark == null) 0 else level.coerceIn(0, Docx.MAX_LEVEL),
             rtl = rtl,
         )
         spans.clear()
+        pieces++
         if (!inTable) {
             endTable()
             blocks += paragraph
             return
         }
-        cell += paragraph
-        if (endsCell) {
-            row += DocCell(cell.toList(), span = 1)
-            cell = ArrayList()
-        }
+        // A row holding more than is shown at once keeps no more.
+        if (together++ < Docx.MAX_TOGETHER) cell += paragraph
+        if (endsCell) endCell()
     }
 
     fun hasText() = text.isNotEmpty() || spans.isNotEmpty()
 
     fun endRow() {
-        if (cell.isNotEmpty()) {
-            row += DocCell(cell.toList(), span = 1)
-            cell = ArrayList()
+        if (cell.isNotEmpty()) endCell()
+        if (row.isNotEmpty()) {
+            rows += row.toList()
+            pieces++
         }
-        if (row.isNotEmpty()) rows += row.toList()
         row = ArrayList()
+        together = 0
+    }
+
+    private fun endCell() {
+        if (row.size < Docx.MAX_COLUMNS) {
+            row += DocCell(cell.toList(), span = 1)
+            pieces++
+            together++
+        }
+        cell = ArrayList()
     }
 
     fun build(truncated: Boolean): DocxDocument {
@@ -655,6 +676,7 @@ internal class DocBuilder {
             spans[spans.lastIndex] = last.copy(text = last.text + span.text)
         } else {
             spans += span
+            pieces++
         }
         text.setLength(0)
     }
@@ -667,6 +689,9 @@ internal class DocBuilder {
         rows.clear()
     }
 }
+
+/** Fields inside fields: a few deep in any real document. */
+private const val MAX_FIELD_DEPTH = 64
 
 /** Whether [length] bytes at [at] lie within [size] - worked out without the sum overflowing. */
 private fun fits(at: Int, length: Int, size: Int) = at >= 0 && length >= 0 && at.toLong() + length <= size

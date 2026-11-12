@@ -31,6 +31,9 @@ object Rtf {
     }
 }
 
+/** Groups in groups: a few dozen in a real document, millions in one made to fill the memory. */
+private const val MAX_GROUP_DEPTH = 1_000
+
 /** Destinations that hold no text of the document's own, read past whole. */
 private val RTF_SKIPPED = setOf(
     "colortbl", "info", "pict", "object", "objdata", "header", "footer", "headerl", "headerr",
@@ -95,18 +98,23 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
     private var fontNumber = 0
     private var defaultFont: Int? = null
 
+    /** Groups open past [MAX_GROUP_DEPTH], which are counted, not kept. */
+    private var tooDeep = 0
+
     fun parse(): DocxDocument {
         var i = 0
-        while (i < input.size && written < maxChars) {
+        while (i < input.size && written < maxChars && !out.full) {
             when (val byte = input[i].toInt() and 0xFF) {
+                // A group inside more groups than any document nests is read
+                // as part of the one it is in, rather than kept one more deep.
                 '{'.code -> {
                     flush()
-                    groups += state.child()
+                    if (groups.size < MAX_GROUP_DEPTH) groups += state.child() else tooDeep++
                     i++
                 }
                 '}'.code -> {
                     flush()
-                    endGroup()
+                    if (tooDeep > 0) tooDeep-- else endGroup()
                     i++
                 }
                 '\\'.code -> i = control(i)
@@ -120,7 +128,7 @@ private class RtfParser(private val input: ByteArray, private val maxChars: Int)
         }
         flush()
         if (out.hasText()) endParagraph(endsCell = false)
-        return out.build(truncated = written >= maxChars)
+        return out.build(truncated = written >= maxChars || out.full)
     }
 
     /** A control word or symbol at [at], acted on; where reading goes on. */

@@ -227,6 +227,144 @@ class DocxTest {
         assertFalse(Docx.read(docx(body)).truncated)
     }
 
+    // ---- Files made to break a reader ------------------------------------
+
+    @Test
+    fun `a list level below none or past the deepest is brought within what lists have`() {
+        val numbering = """
+            <w:abstractNum w:abstractNumId="0">
+                <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+                <w:lvl w:ilvl="2000000000"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+            </w:abstractNum>
+            <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"""
+        fun item(level: String) =
+            """<w:p><w:pPr><w:numPr><w:ilvl w:val="$level"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"""
+        val levels = paragraphs(docx(item("-5") + item("99") + item("2000000000"), numbering = numbering)).map { it.level }
+        // A negative indent is one the screen refuses to lay out at all.
+        assertEquals(listOf(0, 8, 8), levels)
+    }
+
+    @Test
+    fun `a cell said to span two thousand million columns spans what a table has`() {
+        val body = """<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2000000000"/></w:tcPr><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc>""" +
+            """<w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"""
+        val table = Docx.read(docx(body)).blocks.single() as DocTable
+        assertEquals(listOf(Docx.MAX_COLUMNS, 1), table.rows.single().map { it.span })
+        assertEquals(Docx.MAX_COLUMNS + 1, table.columns.size)
+    }
+
+    @Test
+    fun `tables nested deeper than is shown are read as the text of the cell they are in`() {
+        val deep = 9
+        val body = (1..deep).joinToString("") { "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>level $it</w:t></w:r></w:p>" } +
+            "</w:tc></w:tr></w:tbl>".repeat(deep) + "<w:p><w:r><w:t>after</w:t></w:r></w:p>"
+        val blocks = Docx.read(docx(body)).blocks
+        var depth = 0
+        val texts = ArrayList<String>()
+        fun walk(list: List<DocBlock>, at: Int) {
+            for (block in list) {
+                when (block) {
+                    is DocParagraph -> texts += block.text
+                    is DocTable -> {
+                        depth = maxOf(depth, at + 1)
+                        block.rows.forEach { row -> row.forEach { walk(it.blocks, at + 1) } }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        walk(blocks, 0)
+        assertEquals(Docx.MAX_TABLE_DEPTH, depth)
+        // Nothing lost: only the tables around the deepest text.
+        assertEquals((1..deep).map { "level $it" } + "after", texts)
+    }
+
+    @Test
+    fun `a table row holding more than is shown at once keeps that much, and what comes after it`() {
+        val body = "<w:tbl><w:tr><w:tc>" + "<w:p><w:r><w:t>a</w:t></w:r></w:p>".repeat(Docx.MAX_TOGETHER + 200) +
+            "</w:tc>" + "<w:tc><w:p/></w:tc>".repeat(100) + "</w:tr><w:tr><w:tc><w:p><w:r><w:t>next row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>"
+        val document = Docx.read(docx(body))
+        val table = document.blocks[0] as DocTable
+        assertTrue(document.truncated)
+        assertTrue(table.rows[0].sumOf { it.blocks.size + 1 } <= Docx.MAX_TOGETHER)
+        assertEquals("next row", (table.rows[1].single().blocks.single() as DocParagraph).text)
+        assertEquals("after", (document.blocks[1] as DocParagraph).text)
+    }
+
+    @Test
+    fun `a row of more cells than a table has columns keeps as many as that`() {
+        val body = "<w:tbl><w:tr>" + "<w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc>".repeat(Docx.MAX_COLUMNS + 50) + "</w:tr></w:tbl>"
+        val table = Docx.read(docx(body)).blocks.single() as DocTable
+        assertEquals(Docx.MAX_COLUMNS, table.rows.single().size)
+    }
+
+    @Test
+    fun `a document of nothing but empty paragraphs is cut short`() {
+        val document = Docx.read(docx("<w:p/>".repeat(Docx.MAX_PIECES + 10)))
+        assertTrue(document.truncated)
+        assertEquals(Docx.MAX_PIECES, document.blocks.size)
+    }
+
+    /** A .docx whose main part is [xml], whole. */
+    private fun docxOf(xml: String): File {
+        val file = File(temp.root, "raw.docx")
+        ZipOutputStream(file.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("word/document.xml"))
+            zip.write(xml.toByteArray())
+            zip.closeEntry()
+        }
+        return file
+    }
+
+    @Test
+    fun `a part that declares a document type is not read`() {
+        // Each name stands for the one before it sixteen times over: a few
+        // lines that come to gigabytes where they are used.
+        val entities = (1..8).joinToString("") { n ->
+            val before = if (n == 1) "a".repeat(64) else "&e${n - 1};".repeat(16)
+            """<!ENTITY e$n "$before">"""
+        }
+        val growing = """<?xml version="1.0"?><!DOCTYPE d [$entities]><w:document $ns><w:body><w:p><w:pPr><w:pStyle w:val="&e8;"/></w:pPr></w:p></w:body></w:document>"""
+        assertTrue(runCatching { Docx.read(docxOf(growing)) }.exceptionOrNull() is org.xml.sax.SAXException)
+        // Nor one that defines nothing: it is the declaring that is refused, before anything is defined.
+        val idle = """<?xml version="1.0"?><!DOCTYPE d><w:document $ns><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>"""
+        val refused = runCatching { Docx.read(docxOf(idle)) }.exceptionOrNull()
+        assertTrue(refused is org.xml.sax.SAXException)
+        assertEquals("A document type in an Office part", refused?.message)
+    }
+
+    @Test
+    fun `a file that unpacks to more than is read is shown as far as it was read`() {
+        val file = File(temp.root, "padded.docx")
+        ZipOutputStream(file.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("word/document.xml"))
+            zip.write("""<?xml version="1.0"?><w:document $ns><w:body><w:p><w:r><w:t>before</w:t></w:r></w:p>""".toByteArray())
+            // A few kilobytes zipped, more than is read unpacked.
+            val spaces = ByteArray(1 shl 20) { ' '.code.toByte() }
+            repeat((MAX_UNPACKED_BYTES shr 20).toInt() + 1) { zip.write(spaces) }
+            zip.write("""<w:p><w:r><w:t>after</w:t></w:r></w:p></w:body></w:document>""".toByteArray())
+            zip.closeEntry()
+        }
+        assertTrue(file.length() < 1 shl 20)
+        val document = Docx.read(file)
+        assertTrue(document.truncated)
+        assertEquals(listOf("before"), document.blocks.map { (it as DocParagraph).text })
+    }
+
+    @Test(expected = org.xml.sax.SAXException::class)
+    fun `a part nested deeper than any real one is not read`() {
+        Docx.read(docx("<w:p>".repeat(1_100) + "</w:p>".repeat(1_100)))
+    }
+
+    @Test
+    fun `no more is read of a part than any real part holds`() {
+        val input = BoundedInput(ByteArray(100).inputStream(), limit = 60)
+        assertEquals(50, input.read(ByteArray(50)))
+        val failed = runCatching { input.read(ByteArray(50)) }.exceptionOrNull()
+        assertTrue(failed is java.io.IOException)
+    }
+
     @Test
     fun `formats numbers the way Word does`() {
         assertEquals("iv", formatNumber(4, "lowerRoman"))

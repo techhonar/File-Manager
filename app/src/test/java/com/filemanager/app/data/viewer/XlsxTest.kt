@@ -364,6 +364,58 @@ class XlsxTest {
         assertEquals(listOf("A"), ws.columns.map { it.name })
     }
 
+    // ---- Files made to break a reader ------------------------------------
+
+    @Test
+    fun `a cell holds no more text than Excel lets one`() {
+        val long = "a".repeat(Xlsx.MAX_CELL_TEXT + 5_000)
+        val sheet = """<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is><t>$long</t></is></c>""" +
+            """<c r="C1" t="str"><v>$long</v></c></row></sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet), strings = listOf("<t>$long</t>"))).sheet(0)
+        assertEquals(listOf(Xlsx.MAX_CELL_TEXT, Xlsx.MAX_CELL_TEXT, Xlsx.MAX_CELL_TEXT), listOf("A", "B", "C").map { ws.cell(1, it)?.text?.length })
+    }
+
+    @Test
+    fun `one long text in every cell is read only as far as a sheet's text goes`() {
+        val cells = (1..900).joinToString("") { """<row r="$it"><c r="A$it" t="s"><v>0</v></c></row>""" }
+        val ws = Xlsx.read(xlsx(listOf("S" to "<sheetData>$cells</sheetData>"), strings = listOf("<t>${"a".repeat(30_000)}</t>"))).sheet(0)
+        assertTrue(ws.truncated)
+        assertTrue(ws.rows.size < 900)
+        assertTrue(ws.rows.sumOf { row -> row.cells.sumOf { it.text.length } } <= Xlsx.MAX_SHEET_TEXT)
+    }
+
+    @Test
+    fun `merged cells said again and again are kept once`() {
+        val merges = """<mergeCell ref="A1:B2"/>""".repeat(2_000)
+        val sheet = """<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="3"><c r="A3"><v>3</v></c></row></sheetData><mergeCells>$merges</mergeCells>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        assertEquals(listOf(1, 1, 1), ws.rows.map { it.cells.size })
+        assertEquals(2, ws.rows[0].cells.single().span)
+    }
+
+    @Test
+    fun `merged cells over one another stop at as many as a row has columns`() {
+        // Each a different one, all crossing row 1.
+        val merges = (2..2_000).joinToString("") { """<mergeCell ref="A1:B$it"/>""" }
+        val sheet = """<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><mergeCells>$merges</mergeCells>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        assertTrue(ws.rows.all { it.cells.size <= Xlsx.MAX_COLUMNS })
+    }
+
+    @Test
+    fun `a row said over and over ends the reading`() {
+        val rows = """<row r="3"><c r="A3"><v>1</v></c></row>""".repeat(Xlsx.MAX_ROWS + 5)
+        val ws = Xlsx.read(xlsx(listOf("S" to "<sheetData>$rows</sheetData>"))).sheet(0)
+        assertTrue(ws.truncated)
+        assertEquals(listOf(1, 2, 3), ws.rows.map { it.number })
+    }
+
+    @Test
+    fun `sheets past the most there are tabs for are left off`() {
+        val sheets = (1..Xlsx.MAX_SHEETS + 5).map { "S$it" to "<sheetData/>" }
+        assertEquals(Xlsx.MAX_SHEETS, Xlsx.read(xlsx(sheets)).sheetNames.size)
+    }
+
     @Test
     fun `cell references convert both ways`() {
         assertEquals(1, columnOf("A1"))
