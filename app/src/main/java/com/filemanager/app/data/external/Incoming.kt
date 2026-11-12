@@ -47,7 +47,7 @@ sealed interface Incoming {
                 val primary = StorageVolumes.primaryPath()
                 when {
                     type != null && type.lowercase() in FOLDER_TYPES ->
-                        Folder(uri?.let { folderOf(it, primary) } ?: primary)
+                        Folder(uri?.let { folderOf(it, primary, StorageVolumes.list(context).map { volume -> volume.path }) } ?: primary)
                     uri == null -> null
                     else -> viewerKindFor(type, uri.lastPathSegment)?.let { View(uri, it) }
                 }
@@ -66,10 +66,10 @@ private val FOLDER_TYPES = setOf(
     "vnd.android.document/root",
 )
 
-private fun folderOf(uri: Uri, primary: String): String? = when (uri.scheme) {
+private fun folderOf(uri: Uri, primary: String, volumes: List<String>): String? = when (uri.scheme) {
     "file" -> uri.path
     "content" -> when (uri.authority) {
-        "com.android.externalstorage.documents" -> documentFolder(uri.pathSegments, primary)
+        "com.android.externalstorage.documents" -> documentFolder(uri.pathSegments, primary, volumes)
         // The Downloads provider names a folder by an id, or by its path
         // after "raw:".
         "com.android.providers.downloads.documents" ->
