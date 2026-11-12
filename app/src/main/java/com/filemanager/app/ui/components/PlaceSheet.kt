@@ -78,6 +78,7 @@ import com.filemanager.app.ui.theme.OneUi
 import com.filemanager.app.viewmodel.PlaceController
 import com.filemanager.app.viewmodel.PlaceSheet
 import com.filemanager.app.viewmodel.PlaceSpot
+import java.io.File
 
 /**
  * Copying and moving, for the whole app, over whatever screen is showing:
@@ -104,7 +105,9 @@ fun PlaceHost(
 
     LaunchedEffect(outcome) {
         val ended = outcome ?: return@LaunchedEffect
-        val folder = ended.folder?.takeUnless { it == here }
+        // As folders, not as they happen to be written: with a slash after or without.
+        val onScreen = here?.let(::File)
+        val folder = ended.folder?.takeUnless { File(it) == onScreen }
         val result = snackbarState.showSnackbar(
             message = ended.message,
             actionLabel = folder?.let { "Show in folder" },

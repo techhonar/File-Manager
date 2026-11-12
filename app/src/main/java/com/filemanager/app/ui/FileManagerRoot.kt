@@ -71,7 +71,6 @@ import androidx.navigation.compose.rememberNavController
 import com.filemanager.app.viewmodel.PlaceViewModel
 import com.filemanager.app.viewmodel.PlaceRequest
 import com.filemanager.app.ui.components.PlaceHost
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.filemanager.app.FileManagerApp
 import com.filemanager.app.MainActivity
@@ -121,6 +120,8 @@ import com.filemanager.app.viewmodel.StorageViewModel
 import com.filemanager.app.viewmodel.TrashViewModel
 import com.filemanager.app.viewmodel.ViewModelFactory
 import java.io.File
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.filemanager.app.viewmodel.Category
 import uniffi.filemanager_core.FileEntry
 
@@ -213,8 +214,13 @@ fun FileManagerRoot(
     val volumes by app.volumes.volumes.collectAsState()
     val primaryPath = remember { StorageVolumes.primaryPath() }
     val navController = rememberNavController()
-    val onScreen by navController.currentBackStackEntryAsState()
-    val currentFolder = onScreen?.takeIf { it.destination.route == Routes.BROWSE_PATTERN }?.arguments?.getString("path")
+    // Where the browser on screen is now, which it says as it goes: the
+    // folder its screen was opened at is only where it began. Moving a file
+    // up out of a folder offered no way to it, the folder moved to being
+    // the one the screen had started in; copying into the folder in view
+    // offered the way to where the user already was.
+    val shownFolder = remember { ShownFolder() }
+    val currentFolder by shownFolder.path.collectAsState()
 
     val ownerAppOf: suspend (String) -> String? = remember(context) {
         { path -> withContext(Dispatchers.IO) { MediaOwner.ownerAppLabel(context, path) } }
@@ -409,6 +415,7 @@ fun FileManagerRoot(
         volumes,
         archiveSnackbar,
         onShowFolder = { navController.navigate(Routes.browse(it)) },
+        currentFolder = currentFolder,
     )
 
     LaunchedEffect(openFolder) {
@@ -551,6 +558,12 @@ fun FileManagerRoot(
                         hasRemovableSlot = hasRemovableSlot,
                     ),
                 )
+                val folder by remember(vm) { vm.state.map { it.path }.distinctUntilChanged() }
+                    .collectAsState(vm.state.value.path)
+                DisposableEffect(entry, folder) {
+                    shownFolder.show(entry, folder)
+                    onDispose { shownFolder.leave(entry) }
+                }
                 BrowserScreen(
                     viewModel = vm,
                     onOpenFile = openFile,
