@@ -61,6 +61,19 @@ class IncomingTest {
     }
 
     @Test
+    fun `a card or drive is found where the phone has it, not always under storage`() {
+        val primary = "/storage/emulated/0"
+        val volumes = listOf(primary, "/storage/1234-ABCD", "/mnt/media_rw/5E6F-7A8B")
+        assertEquals("/storage/1234-ABCD/Music", documentFolder(listOf("document", "1234-ABCD:Music"), primary, volumes))
+        // A USB drive, which most phones keep somewhere else.
+        assertEquals("/mnt/media_rw/5E6F-7A8B/Photos/2024", documentFolder(listOf("document", "5E6F-7A8B:Photos/2024"), primary, volumes))
+        assertEquals("/mnt/media_rw/5E6F-7A8B", documentFolder(listOf("root", "5e6f-7a8b"), primary, volumes))
+        // One that isn't in now: where a card would be.
+        assertEquals("/storage/9999-0000/x", documentFolder(listOf("document", "9999-0000:x"), primary, volumes))
+        assertEquals("/storage/emulated/0/Download", documentFolder(listOf("document", "primary:Download"), primary, volumes))
+    }
+
+    @Test
     fun `makes names safe to save under`() {
         assertEquals("a_b.pdf", safeFileName("a/b.pdf"))
         assertEquals("file", safeFileName(null))

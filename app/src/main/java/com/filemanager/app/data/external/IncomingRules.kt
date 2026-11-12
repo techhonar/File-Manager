@@ -77,8 +77,13 @@ internal fun accepts(types: List<String>, mime: String?): Boolean {
 /**
  * The folder a storage document URI's path names: ".../document/primary:DCIM"
  * is DCIM on internal storage, "1234-ABCD:Music" Music on that SD card.
+ *
+ * A card or drive is named by its id, which is the last of its folder's
+ * path - but not always under /storage: a USB drive is at
+ * /mnt/media_rw/1234-ABCD on most phones. [volumes] are where the phone's
+ * storage is now, so the id is looked up among them first.
  */
-internal fun documentFolder(segments: List<String>, primary: String): String? {
+internal fun documentFolder(segments: List<String>, primary: String, volumes: List<String> = emptyList()): String? {
     val id = listOf("document", "tree", "root").firstNotNullOfOrNull { key ->
         segments.indexOf(key).takeIf { it >= 0 }?.let { segments.getOrNull(it + 1) }
     } ?: return null
@@ -89,7 +94,7 @@ internal fun documentFolder(segments: List<String>, primary: String): String? {
         "primary" -> primary
         // The Files app's own shortcut to Documents.
         "home" -> "$primary/Documents"
-        else -> "/storage/$volume"
+        else -> volumes.firstOrNull { it.substringAfterLast('/').equals(volume, ignoreCase = true) } ?: "/storage/$volume"
     }
     return if (relative.isEmpty()) base else "$base/$relative"
 }
