@@ -127,12 +127,16 @@ class Spreadsheet internal constructor(
 ) {
     fun sheet(index: Int): Worksheet = ZipFile(file).use { zip ->
         val handler = SheetHandler(strings, styles, date1904)
+        val parts = OoxmlParts(zip)
         try {
-            OoxmlParts(zip).parse(sheetParts[index], handler)
+            parts.parse(sheetParts[index], handler)
         } catch (e: SAXException) {
             if (!handler.stopped) throw e
         }
-        handler.build(strings.truncated)
+        val sheet = handler.build(strings.truncated || parts.cutShort)
+        // Read as far as a file is, with nothing to show for it: not an empty sheet.
+        if (parts.cutShort && sheet.rows.isEmpty()) throw TooLarge()
+        sheet
     }
 }
 
@@ -149,6 +153,24 @@ object Xlsx {
 
     /** The workbook's text, past which it is left out. */
     const val MAX_TEXT = 8_000_000
+
+    /** As many characters as Excel lets a cell hold. */
+    const val MAX_CELL_TEXT = 32_767
+
+    /**
+     * The text of one sheet's cells, which each hold their own: a hundred
+     * characters in every cell that is shown.
+     */
+    const val MAX_SHEET_TEXT = 24_000_000
+
+    /** Different texts in a workbook; one each for every cell that can be shown, several times over. */
+    const val MAX_STRINGS = 2_000_000
+
+    /** Fonts, fills and cell formats: Excel's own limit is 65,490 formats. */
+    const val MAX_STYLES = 100_000
+
+    /** Sheets shown as tabs; no workbook kept by hand has as many. */
+    const val MAX_SHEETS = 1_000
 
     fun read(file: File): Spreadsheet = ZipFile(file).use { zip ->
         val parts = OoxmlParts(zip)
@@ -172,8 +194,9 @@ object Xlsx {
             } catch (e: SAXException) {
                 if (!handler.stopped) throw e
             }
-            handler.strings()
+            handler.strings(cutShort = parts.cutShort)
         } ?: SharedStrings.NONE
+        if (parts.cutShort && sheets.isEmpty()) throw TooLarge()
         Spreadsheet(file, sheets.map { it.first }, sheets.map { it.second }, strings, styles, workbook.date1904)
     }
 }
@@ -187,10 +210,11 @@ internal class SharedStrings(
     private val count: Int,
     val truncated: Boolean,
 ) {
+    /** The text numbered [index], as much of it as a cell holds. */
     operator fun get(index: Int): String? {
         if (index < 0 || index >= count) return null
         val start = if (index == 0) 0 else ends[index - 1]
-        return unescape(all.substring(start, ends[index]))
+        return unescape(all.substring(start, minOf(ends[index], start + Xlsx.MAX_CELL_TEXT)))
     }
 
     companion object {
@@ -229,6 +253,10 @@ private class SharedStringsHandler(private val maxChars: Int) : OoxmlHandler() {
                 if (count == ends.size) ends = ends.copyOf(count * 2)
                 ends[count++] = all.length
                 inItem = false
+                if (count >= Xlsx.MAX_STRINGS) {
+                    stopped = true
+                    throw ReadEnough()
+                }
             }
             "rPh" -> phonetic--
             "t" -> inText = false
@@ -244,10 +272,12 @@ private class SharedStringsHandler(private val maxChars: Int) : OoxmlHandler() {
         all.appendRange(ch, start, start + length)
     }
 
-    fun strings() = SharedStrings(all.toString(), ends, count, truncated = stopped)
+    fun strings(cutShort: Boolean) = SharedStrings(all.toString(), ends, count, truncated = stopped || cutShort)
 }
 
 // ---- Workbook ----------------------------------------------------------------
+
+private const val MAX_SHEET_NAME = 100
 
 private class WorkbookHandler : OoxmlHandler() {
     /** Each sheet's name and relationship id, in the workbook's order, without the hidden ones. */
@@ -261,7 +291,9 @@ private class WorkbookHandler : OoxmlHandler() {
                 val state = attributes.attr("state")
                 if (state == "hidden" || state == "veryHidden") return
                 val id = attributes.relationship("id") ?: return
-                sheets += (attributes.attr("name") ?: "Sheet ${sheets.size + 1}") to id
+                if (sheets.size >= Xlsx.MAX_SHEETS) return
+                // Excel's names are 31 characters at most.
+                sheets += (attributes.attr("name")?.take(MAX_SHEET_NAME) ?: "Sheet ${sheets.size + 1}") to id
             }
             "workbookPr" -> date1904 = attributes.attr("date1904").isTrue()
         }
@@ -345,6 +377,9 @@ private val INDEXED_COLORS = intArrayOf(
 /** An on/off attribute such as b and i: on unless its val says off. */
 private fun Attributes.on(): Boolean = attr("val").let { it != "0" && it != "false" }
 
+private const val MAX_FORMATS = 10_000
+private const val MAX_FORMAT_CODE = 1_000
+
 private class WorkbookStylesHandler : OoxmlHandler() {
     private class Font {
         var bold = false
@@ -380,10 +415,12 @@ private class WorkbookStylesHandler : OoxmlHandler() {
         when (localName) {
             "numFmt" -> {
                 val id = attributes.attr("numFmtId")?.toIntOrNull() ?: return
-                codes[id] = attributes.attr("formatCode") ?: return
+                val code = attributes.attr("formatCode") ?: return
+                // Excel's are 255 characters at most, and a few hundred to a workbook.
+                if (code.length <= MAX_FORMAT_CODE && (codes.size < MAX_FORMATS || id in codes)) codes[id] = code
             }
             "fonts", "fills", "borders", "cellStyleXfs", "cellXfs", "cellStyles", "dxfs", "colors" -> list = localName
-            "font" -> if (list == "fonts") font = Font().also { fonts += it }
+            "font" -> if (list == "fonts" && fonts.size < Xlsx.MAX_STYLES) font = Font().also { fonts += it }
             "b" -> font?.bold = attributes.on()
             "i" -> font?.italic = attributes.on()
             "u" -> font?.underline = attributes.attr("val") != "none"
@@ -393,14 +430,14 @@ private class WorkbookStylesHandler : OoxmlHandler() {
             "color" -> font?.let { f ->
                 if (!attributes.attr("auto").isTrue() && attributes.attr("indexed") != "64") f.color = colorRef(attributes)
             }
-            "fill" -> if (list == "fills") {
+            "fill" -> if (list == "fills" && fills.size < Xlsx.MAX_STYLES) {
                 inFill = true
                 solid = false
                 fillColor = null
             }
             "patternFill" -> if (inFill) solid = attributes.attr("patternType") == "solid"
             "fgColor" -> if (inFill) fillColor = colorRef(attributes)
-            "xf" -> if (list == "cellXfs") {
+            "xf" -> if (list == "cellXfs" && xfs.size < Xlsx.MAX_STYLES) {
                 xf = Xf(
                     format = attributes.attr("numFmtId")?.toIntOrNull() ?: 0,
                     font = attributes.attr("fontId")?.toIntOrNull() ?: 0,
@@ -567,6 +604,9 @@ private class SheetHandler(
     private var inSheetData = false
     private var row = 0
     private var column = 0
+    private var rowsSeen = 0
+    private var cellsSeen = 0
+    private var textChars = 0L
     private var type: String? = null
     private var style = 0
     private var inValue = false
@@ -583,7 +623,9 @@ private class SheetHandler(
                     // Rows are numbered from 1: any other number is taken as none.
                     row = attributes.attr("r")?.toIntOrNull()?.takeIf { it > 0 } ?: (row + 1)
                     column = 0
-                    if (row > Xlsx.MAX_ROWS) stop()
+                    // A row comes once: more of them than there are rows to
+                    // show is the same few over and over, read to no end.
+                    if (row > Xlsx.MAX_ROWS || ++rowsSeen > Xlsx.MAX_ROWS) stop()
                     val height = attributes.attr("ht")?.toFloatOrNull()
                     height?.let { heights[row] = it * 4f / 3f }
                     if (height != null && attributes.attr("customHeight").isTrue()) setHeights += row
@@ -591,6 +633,7 @@ private class SheetHandler(
                     if (attributes.attr("hidden").isTrue() || height == 0f) hiddenRows += row
                 }
                 "c" -> {
+                    if (++cellsSeen > MAX_CELLS_READ) stop()
                     column = attributes.attr("r")?.let(::columnOf) ?: (column + 1)
                     type = attributes.attr("t")
                     style = attributes.attr("s")?.toIntOrNull() ?: 0
@@ -622,9 +665,10 @@ private class SheetHandler(
                 val last = attributes.attr("max")?.toIntOrNull() ?: first
                 // Characters of the font's widest digit, padding and all: 7 pixels each in Calibri.
                 val width = attributes.attr("width")?.toFloatOrNull()?.let { it * 7f }
-                columnRanges += Columns(first, last, width, attributes.attr("hidden").isTrue())
+                // No more of them than a sheet has columns.
+                if (columnRanges.size < MAX_COLUMN_RANGES) columnRanges += Columns(first, last, width, attributes.attr("hidden").isTrue())
             }
-            "mergeCell" -> attributes.attr("ref")?.let(::mergeOf)?.let { merges += it }
+            "mergeCell" -> if (merges.size < MAX_MERGES) attributes.attr("ref")?.let(::mergeOf)?.let { merges += it }
             "drawing" -> hasDrawings = true
         }
     }
@@ -642,11 +686,10 @@ private class SheetHandler(
     }
 
     override fun characters(ch: CharArray, start: Int, length: Int) {
-        if (inValue) {
-            value.appendRange(ch, start, start + length)
-        } else if (inText) {
-            inline.appendRange(ch, start, start + length)
-        }
+        // No more than a cell holds: what is past it would never be shown.
+        val into = if (inValue) value else if (inText) inline else return
+        val room = Xlsx.MAX_CELL_TEXT - into.length
+        if (room > 0) into.appendRange(ch, start, start + minOf(length, room))
     }
 
     private fun stop(): Nothing {
@@ -678,7 +721,10 @@ private class SheetHandler(
         }
         // Kept empty when it carries a fill, or is part of a title centred across it.
         if (text.isEmpty() && look.fill == null && !look.centerAcross) return
-        if (cells.size >= Xlsx.MAX_CELLS) stop()
+        // Each cell holds its text itself, so one long text in every cell
+        // of a sheet is that text a quarter of a million times.
+        textChars += text.length
+        if (cells.size >= Xlsx.MAX_CELLS || textChars > Xlsx.MAX_SHEET_TEXT) stop()
         cells += Raw(row, column, text, look, kind, number)
     }
 
@@ -767,12 +813,24 @@ private class SheetHandler(
         class Shown(val merge: Merge, val column: Int, val span: Int, val rows: List<Int>)
         val shownMerges = ArrayList<Shown>()
         val covering = HashMap<Int, ArrayList<Shown>>()
+        var mergedRows = 0
+        val begun = HashSet<Long>()
         for (merge in merges) {
+            // One merged cell to a corner: the same said again is the same.
+            if (!begun.add(key(merge.firstRow, merge.firstColumn))) continue
             val columnRange = merge.firstColumn..minOf(merge.lastColumn, lastColumn)
             val first = columnRange.firstOrNull { shownColumn[it] >= 0 } ?: continue
             val span = columnRange.count { shownColumn[it] >= 0 }
+            // Merged cells lie side by side, never over one another: a sheet
+            // with more of them down its rows than it could hold that way, or
+            // more in one row than there are columns, is damaged - or made to
+            // take all the memory there is - and the rest are left unmerged.
+            val down = minOf(merge.lastRow, lastRow) - merge.firstRow + 1
+            if (down <= 0 || mergedRows + down > MAX_MERGED_ROWS) continue
+            // Counted whether or not it is kept: looking at it is the work.
+            mergedRows += down
             val rows = (merge.firstRow..minOf(merge.lastRow, lastRow)).mapNotNull { r -> shownRow[r].takeIf { it >= 0 } }
-            if (rows.isEmpty()) continue
+            if (rows.isEmpty() || rows.any { (covering[it]?.size ?: 0) >= Xlsx.MAX_COLUMNS }) continue
             val shown = Shown(merge, shownColumn[first], span, rows)
             shownMerges += shown
             for (r in rows) covering.getOrPut(r) { ArrayList() } += shown
@@ -842,6 +900,17 @@ private class SheetHandler(
         const val DEFAULT_HEIGHT = 20f
 
         const val MAX_COLUMN_WIDTH = 1000f
+
+        /** Cells read, empty ones too, past which a sheet is cut short. */
+        const val MAX_CELLS_READ = 4_000_000
+
+        /** Excel's own most columns: no sheet says how wide its columns are more times than that. */
+        const val MAX_COLUMN_RANGES = 16_384
+
+        const val MAX_MERGES = 50_000
+
+        /** The rows all of a sheet's merged cells cover, added up. */
+        const val MAX_MERGED_ROWS = 300_000
 
         /** The widest a sheet is drawn, comfortably within what one layout can measure. */
         const val MAX_SHEET_WIDTH = 40_000f

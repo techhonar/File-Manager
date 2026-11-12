@@ -6,10 +6,8 @@ import org.xml.sax.SAXException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.File
 import java.io.IOException
-import java.io.InputStream
 import java.io.StringReader
 import java.util.zip.ZipFile
-import javax.xml.parsers.SAXParserFactory
 
 /*
  * Reading a Word document (.docx) for the viewer.
@@ -72,24 +70,46 @@ object Docx {
      */
     const val MAX_CHARS = 2_000_000
 
+    /**
+     * Paragraphs, stretches of text set one way, pictures, tables and their
+     * rows and cells, all counted together. A very long document has tens of
+     * thousands; one of a million empty paragraphs is cut short here.
+     */
+    const val MAX_PIECES = 400_000
+
+    /**
+     * The most paragraphs and cells in what is shown as one item of the list
+     * - a table's row, a slide - since all of an item is laid out at once.
+     */
+    const val MAX_TOGETHER = 5_000
+
+    /** One more than Word lets a table have. */
+    const val MAX_COLUMNS = 64
+
+    /** Tables inside tables, past which a table's text is read as the text of the cell it is in. */
+    const val MAX_TABLE_DEPTH = 4
+
+    /** Styles and lists a document defines; Word's own are a few hundred. */
+    const val MAX_DEFINITIONS = 20_000
+
+    /** The deepest a list goes, in Word and PowerPoint both. */
+    const val MAX_LEVEL = 8
+
     fun read(file: File, maxChars: Int = MAX_CHARS): DocxDocument = ZipFile(file).use { zip ->
-        fun parse(name: String, handler: DefaultHandler) {
-            val entry = zip.getEntry(name) ?: return
-            zip.getInputStream(entry).use { parseXml(it, handler) }
-        }
+        val parts = OoxmlParts(zip)
+        val images = RelsHandler().also { parts.parse("word/_rels/document.xml.rels", it) }.targets
+        val styles = StylesHandler().also { parts.parse("word/styles.xml", it) }.styles()
+        val numbering = NumberingHandler().also { parts.parse("word/numbering.xml", it) }.numbering()
 
-        val images = RelsHandler().also { parse("word/_rels/document.xml.rels", it) }.targets
-        val styles = StylesHandler().also { parse("word/styles.xml", it) }.styles()
-        val numbering = NumberingHandler().also { parse("word/numbering.xml", it) }.numbering()
-
-        val document = zip.getEntry("word/document.xml") ?: throw IOException("Not a Word document")
         val body = BodyHandler(images, styles, numbering, maxChars)
         try {
-            zip.getInputStream(document).use { parseXml(it, body) }
+            if (!parts.parse("word/document.xml", body)) throw IOException("Not a Word document")
         } catch (e: SAXException) {
             if (!body.truncated) throw e
         }
-        DocxDocument(body.blocks, body.truncated)
+        // Read as far as a file is, with nothing to show for it: not an empty document.
+        if (parts.cutShort && body.blocks.isEmpty()) throw TooLarge()
+        DocxDocument(body.blocks, body.truncated || parts.cutShort)
     }
 }
 
@@ -225,11 +245,6 @@ private fun Attributes.isOn(): Boolean = when (w("val")?.lowercase()) {
     else -> true
 }
 
-private fun parseXml(input: InputStream, handler: DefaultHandler) {
-    val factory = SAXParserFactory.newInstance().apply { isNamespaceAware = true }
-    factory.newSAXParser().parse(input, handler)
-}
-
 /** Never fetches anything a document points to outside itself. */
 private abstract class XmlHandler : DefaultHandler() {
     override fun resolveEntity(publicId: String?, systemId: String?) = InputSource(StringReader(""))
@@ -243,7 +258,7 @@ private class RelsHandler : XmlHandler() {
         if (attributes.plain("TargetMode") == "External") return
         val id = attributes.plain("Id") ?: return
         val target = attributes.plain("Target") ?: return
-        targets[id] = resolveTarget(target)
+        if (targets.size < MAX_LINKS) targets[id] = resolveTarget(target)
     }
 }
 
@@ -256,12 +271,13 @@ private class StylesHandler : XmlHandler() {
     private val lists = HashMap<String, String>()
     private val levels = HashMap<String, Int>()
     private var current: String? = null
+    private var seen = 0
 
     override fun startElement(uri: String, localName: String, qName: String, attributes: Attributes) {
         if (!isW(uri)) return
         val id = current
         when (localName) {
-            "style" -> current = attributes.w("styleId")
+            "style" -> current = if (++seen <= Docx.MAX_DEFINITIONS) attributes.w("styleId") else null
             "name" -> if (id != null) attributes.w("val")?.let { names[id] = it }
             "basedOn" -> if (id != null) attributes.w("val")?.let { basedOn[id] = it }
             // Word's own List Bullet and List Number styles number their
@@ -310,17 +326,16 @@ private class NumberingHandler : XmlHandler() {
     override fun startElement(uri: String, localName: String, qName: String, attributes: Attributes) {
         if (!isW(uri)) return
         when (localName) {
-            "abstractNum" -> definition = attributes.w("abstractNumId")
+            "abstractNum" -> definition = attributes.w("abstractNumId")?.takeIf { definitions.size < Docx.MAX_DEFINITIONS || it in definitions }
             // Only a definition's own levels: a list's overrides are ignored.
             "lvl" -> level = definition?.let { id ->
-                Level().also {
-                    definitions.getOrPut(id) { HashMap() }[attributes.w("ilvl")?.toIntOrNull() ?: 0] = it
-                }
+                val at = attributes.w("ilvl")?.toIntOrNull() ?: 0
+                if (at !in 0..Docx.MAX_LEVEL) null else Level().also { definitions.getOrPut(id) { HashMap() }[at] = it }
             }
             "numFmt" -> level?.format = attributes.w("val") ?: "decimal"
             "lvlText" -> level?.text = attributes.w("val").orEmpty()
             "start" -> level?.start = attributes.w("val")?.toIntOrNull() ?: 1
-            "num" -> list = attributes.w("numId")
+            "num" -> list = attributes.w("numId")?.takeIf { lists.size < Docx.MAX_DEFINITIONS || it in lists }
             "abstractNumId" -> list?.let { id -> attributes.w("val")?.let { lists[id] = it } }
         }
     }
@@ -406,6 +421,35 @@ private class BodyHandler(
     private var extentCx = 0L
     private var extentCy = 0L
     private var chars = 0
+    private var pieces = 0
+
+    /** Paragraphs and cells in the outermost table's row being read, which is shown all at once. */
+    private var together = 0
+
+    /** How many tables deep in ones nested too far to show as tables: their text is the cell's own. */
+    private var flattened = 0
+
+    /**
+     * One more paragraph, stretch of text, picture, table, row or cell kept -
+     * [laidOut] with the table row it is in, unless it is only text in a
+     * paragraph that is.
+     */
+    private fun piece(laidOut: Boolean = true) {
+        if (++pieces > Docx.MAX_PIECES) {
+            truncated = true
+            throw StopReading()
+        }
+        if (laidOut && tables.isNotEmpty()) together++
+    }
+
+    /** In a table row that already holds as much as is shown at once. */
+    private fun crowded() = tables.isNotEmpty() && together >= Docx.MAX_TOGETHER
+
+    /** Leaves out the element just started, and all that is in it. */
+    private fun leaveOut() {
+        skipDepth = 1
+        truncated = true
+    }
 
     override fun startElement(uri: String, localName: String, qName: String, attributes: Attributes) {
         if (skipDepth > 0) {
@@ -442,7 +486,11 @@ private class BodyHandler(
 
         val paragraph = paragraphs.lastOrNull()
         when (localName) {
-            "p" -> paragraphs += ParagraphBuilder()
+            "p" -> {
+                if (crowded()) return leaveOut()
+                piece()
+                paragraphs += ParagraphBuilder()
+            }
             "pPr" -> inParagraphProps = true
             "pStyle" -> if (inParagraphProps && paragraph != null) paragraph.style = attributes.w("val")
             "numId" -> if (inParagraphProps && paragraph != null) {
@@ -473,14 +521,31 @@ private class BodyHandler(
             "tab" -> if (!inParagraphProps) text("\t")
             "br", "cr" -> if (attributes.w("type") != "page") text("\n")
             "noBreakHyphen" -> text("-")
-            "tbl" -> tables += TableBuilder()
-            "gridCol" -> tables.lastOrNull()?.columns?.add(attributes.w("w")?.toFloatOrNull() ?: 0f)
-            "tr" -> tables.lastOrNull()?.rows?.add(ArrayList())
-            "tc" -> {
-                containers.add(ArrayList())
-                tables.lastOrNull()?.cellSpan = 1
+            "tbl" -> when {
+                tables.size >= Docx.MAX_TABLE_DEPTH -> flattened++
+                crowded() -> leaveOut()
+                else -> {
+                    piece()
+                    tables += TableBuilder()
+                }
             }
-            "gridSpan" -> tables.lastOrNull()?.cellSpan = attributes.w("val")?.toIntOrNull() ?: 1
+            "gridCol" -> if (flattened == 0) tables.lastOrNull()?.columns?.let { columns ->
+                if (columns.size < Docx.MAX_COLUMNS) columns.add(attributes.w("w")?.toFloatOrNull() ?: 0f)
+            }
+            "tr" -> if (flattened == 0 && tables.isNotEmpty()) {
+                // Each row of the outermost table is an item of its own.
+                if (tables.size == 1) together = 0 else if (crowded()) return leaveOut()
+                piece()
+                tables.last().rows.add(ArrayList())
+            }
+            "tc" -> if (flattened == 0 && tables.isNotEmpty()) {
+                val table = tables.last()
+                if (crowded() || (table.rows.lastOrNull()?.size ?: 0) >= Docx.MAX_COLUMNS) return leaveOut()
+                piece()
+                containers.add(ArrayList())
+                table.cellSpan = 1
+            }
+            "gridSpan" -> if (flattened == 0) tables.lastOrNull()?.cellSpan = attributes.w("val")?.toIntOrNull() ?: 1
         }
     }
 
@@ -495,13 +560,16 @@ private class BodyHandler(
             "pPr" -> inParagraphProps = false
             "rPr" -> inRunProps = false
             "t" -> inText = false
-            "tc" -> if (containers.size > 1) {
+            // Only a cell that was begun: one in a table read as text, or in no table, never was.
+            "tc" -> if (flattened == 0 && tables.isNotEmpty() && containers.size > 1) {
                 val cell = containers.removeAt(containers.size - 1)
-                val table = tables.lastOrNull() ?: return
+                val table = tables.last()
                 if (table.rows.isEmpty()) table.rows.add(ArrayList())
-                table.rows.last() += DocCell(cell, table.cellSpan.coerceAtLeast(1))
+                table.rows.last() += DocCell(cell, table.cellSpan.coerceIn(1, Docx.MAX_COLUMNS))
             }
-            "tbl" -> if (tables.isNotEmpty()) {
+            "tbl" -> if (flattened > 0) {
+                flattened--
+            } else if (tables.isNotEmpty()) {
                 containers.last() += tables.removeAt(tables.size - 1).build()
             }
         }
@@ -523,12 +591,15 @@ private class BodyHandler(
         if (last is SpanBuilder && last.sameFormat(run)) {
             last.text.append(text)
         } else {
+            piece(laidOut = false)
             paragraph.parts += SpanBuilder(run).also { it.text.append(text) }
         }
     }
 
     private fun addImage(id: String) {
         val entry = images[id] ?: return
+        if (crowded()) return
+        piece()
         val image = DocImage(entry, extentCx, extentCy)
         extentCx = 0
         extentCy = 0
@@ -544,7 +615,8 @@ private class BodyHandler(
         val into = containers.last()
         val styled = paragraph.style?.let { styles[it] }
         val list = if (paragraph.ownList) paragraph.list else styled?.list
-        val level = if (list == null) 0 else paragraph.level ?: styled?.level ?: 0
+        // As deep as lists go: a level from a damaged file is not an indent.
+        val level = if (list == null) 0 else (paragraph.level ?: styled?.level ?: 0).coerceIn(0, Docx.MAX_LEVEL)
         // A level with no number - as headings in an outline have - gives no
         // marker, and nothing to indent for one.
         var marker = list?.let { numbering.next(it, level) }?.takeIf { it.isNotBlank() }

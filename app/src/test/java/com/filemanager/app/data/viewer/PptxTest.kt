@@ -238,6 +238,39 @@ class PptxTest {
         assertTrue(deck.slides.size < 5)
     }
 
+    // ---- Files made to break a reader ------------------------------------
+
+    private fun table(rows: String) =
+        """<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="5" name="Table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm/>""" +
+            """<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl>$rows</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"""
+
+    @Test
+    fun `a table cell said to span two thousand million columns spans what a table has`() {
+        val rows = """<a:tr h="10"><a:tc gridSpan="2000000000"><a:txBody><a:bodyPr/>${para("A")}</a:txBody></a:tc></a:tr>"""
+        val grid = Pptx.read(pptx(listOf("slide1.xml" to slide(table(rows))))).slides.single().blocks.single() as DocTable
+        assertEquals(256, grid.rows.single().single().span)
+        assertEquals(256, grid.columns.size)
+    }
+
+    @Test
+    fun `a slide holding more than is shown at once keeps that much, and the slides after it`() {
+        val row = "<a:tr h=\"10\">" + """<a:tc><a:txBody><a:bodyPr/>${para("c")}</a:txBody></a:tc>""".repeat(20) + "</a:tr>"
+        val deck = Pptx.read(
+            pptx(
+                listOf(
+                    "slide1.xml" to slide(table(row.repeat(400)) + shape(para("Under the table"))),
+                    "slide2.xml" to slide(shape(para("Next slide"))),
+                ),
+            ),
+        )
+        assertTrue(deck.truncated)
+        val grid = deck.slides[0].blocks.filterIsInstance<DocTable>().single()
+        // Each cell is one and holds one paragraph.
+        assertTrue(grid.rows.size < 400)
+        assertTrue(grid.rows.sumOf { it.size * 2 + 1 } <= Docx.MAX_TOGETHER + 41)
+        assertEquals(listOf("Next slide"), deck.slides[1].paragraphs().map { it.text })
+    }
+
     @Test
     fun `numbered bullets in each of PowerPoint's schemes`() {
         assertEquals("1.", autoNumber("arabicPeriod", 1))

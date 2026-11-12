@@ -182,4 +182,37 @@ class DocTest {
         val table = document.blocks.filterIsInstance<DocTable>().single()
         assertEquals(listOf(listOf("A", "B")), table.rows.map { row -> row.map { (it.blocks.single() as DocParagraph).text } })
     }
+    // ---- Files made to break a reader ------------------------------------
+
+    @Test
+    fun `RTF of nothing but paragraph ends is cut short`() {
+        val bs = Char(92)
+        val document = rtf("{${bs}rtf1 " + "${bs}par ".repeat(Docx.MAX_PIECES + 10) + "}")
+        assertTrue(document.truncated)
+        assertEquals(Docx.MAX_PIECES, document.blocks.size)
+    }
+
+    @Test
+    fun `RTF groups nested deeper than any document's are read as one`() {
+        val bs = Char(92)
+        val document = rtf("{${bs}rtf1 before " + "{".repeat(5_000) + "${bs}b deep" + "}".repeat(5_000) + " after${bs}par}")
+        assertEquals(listOf("before deep after"), paragraphs(document).map { it.text })
+        // Bold ended with the group it was set in, a thousand deep.
+        assertEquals(listOf(false, true, false), paragraphs(document).single().spans.map { it.bold })
+    }
+
+    @Test
+    fun `an RTF table row keeps as many cells as a table has columns, and as much as is shown at once`() {
+        val bs = Char(92)
+        val cells = rtf("{${bs}rtf1 ${bs}intbl " + "c${bs}cell ".repeat(Docx.MAX_COLUMNS + 40) + "${bs}row ${bs}pard after${bs}par}")
+        val table = cells.blocks[0] as DocTable
+        assertEquals(Docx.MAX_COLUMNS, table.rows.single().size)
+        assertEquals("after", (cells.blocks[1] as DocParagraph).text)
+
+        val crowded = rtf("{${bs}rtf1 ${bs}intbl " + "p${bs}par ".repeat(Docx.MAX_TOGETHER + 300) + "${bs}cell ${bs}row ${bs}pard after${bs}par}")
+        val cell = (crowded.blocks[0] as DocTable).rows.single().single()
+        assertEquals(Docx.MAX_TOGETHER, cell.blocks.size)
+        assertEquals("after", (crowded.blocks[1] as DocParagraph).text)
+    }
+
 }
