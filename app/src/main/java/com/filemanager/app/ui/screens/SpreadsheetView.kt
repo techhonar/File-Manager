@@ -165,9 +165,9 @@ private fun SheetGrid(read: Worksheet) {
 @Composable
 private fun SheetGrid(sheet: Worksheet, unit: Float, viewport: Float, selection: MutableState<CellPosition?>) {
     val density = LocalDensity.current
-    val grid = remember(sheet, unit) { GridLayout(sheet, unit) }
-    val horizontal = rememberScrollState()
     val measurer = rememberTextMeasurer(cacheSize = 0)
+    val grid = remember(sheet, unit, measurer) { GridLayout(sheet, unit, measurer) }
+    val horizontal = rememberScrollState()
     // Read only where it is drawn, so choosing a cell redraws the rows it is
     // in rather than measuring every row again.
     val select = remember(selection) {
@@ -267,8 +267,11 @@ private const val MAX_PADDED_COLUMN = 16_384
 
 private class GridColors(val line: Color, val header: Color, val headerText: Color, val text: Color, val selection: Color)
 
-/** Where a sheet's columns and rows are drawn, in pixels. */
-private class GridLayout(val sheet: Worksheet, val unit: Float) {
+/**
+ * Where a sheet's columns and rows are drawn, in pixels. A row that fits its
+ * text is measured with [measurer] the first time its height is asked for.
+ */
+private class GridLayout(val sheet: Worksheet, val unit: Float, private val measurer: TextMeasurer) {
     /** How many of the columns are drawn: as many as one layout can measure across. */
     val count: Int
 
@@ -297,10 +300,17 @@ private class GridLayout(val sheet: Worksheet, val unit: Float) {
 
     val padding: Float = 3f * unit
 
-    /** Each row's top, from the first, and the bottom of the last: where a cell merged down lies across its rows. */
-    val rowTops: FloatArray = FloatArray(sheet.rows.size + 1).also { tops ->
-        for ((i, row) in sheet.rows.withIndex()) tops[i + 1] = tops[i] + height(row)
-    }
+    /** Each row's height, once worked out. */
+    private val heights = FloatArray(sheet.rows.size) { Float.NaN }
+
+    /**
+     * Rows crossed by a cell merged down a great many rows. Fitting every
+     * one of them to its text at once, when the first is shown, would be a
+     * wait: they keep the height the sheet gives them.
+     */
+    private val unfitted = BooleanArray(sheet.rows.size)
+
+    private val direction = if (sheet.rightToLeft) LayoutDirection.Rtl else LayoutDirection.Ltr
 
     /** For each row of a cell merged down, by row and column: the rows it covers. */
     private val blocks = HashMap<Long, IntRange>()
@@ -317,6 +327,7 @@ private class GridLayout(val sheet: Worksheet, val unit: Float) {
                 if (!cell.continues) {
                     for (r in rows.remove(cell.column).orEmpty()) blocks[key(r, cell.column)] = first..i
                     open.remove(cell.column)
+                    if (i - first >= MAX_FITTED_BLOCK) unfitted.fill(true, first, i + 1)
                 }
             }
         }
@@ -340,10 +351,47 @@ private class GridLayout(val sheet: Worksheet, val unit: Float) {
     /** The cell's end edge: past the columns it spans, merged. */
     fun end(cell: SheetCell): Float = starts[minOf(cell.column + cell.span, count)]
 
-    /** At least as tall as its tallest text, whatever height the sheet gives it. */
-    fun height(row: SheetRow): Float {
+    /** How wide [cell]'s text can be within it. */
+    fun innerWidth(cell: SheetCell): Float = (end(cell) - starts[cell.column] - 2 * padding).coerceAtLeast(1f)
+
+    /**
+     * The height of row [index]: at least as tall as its tallest text,
+     * whatever height the sheet gives it - and, when nobody chose its height,
+     * as tall as its wrapped text takes, as Excel fits such a row, up to the
+     * tallest Excel lets a row be. A cell merged with others doesn't count,
+     * as it doesn't in Excel.
+     */
+    fun height(index: Int): Float {
+        val known = heights[index]
+        if (!known.isNaN()) return known
+        val row = sheet.rows[index]
         val tallest = row.cells.maxOfOrNull { if (it.continued) 1f else it.look.scale } ?: 1f
-        return maxOf(row.height, 16f * tallest + 4f) * unit
+        var height = maxOf(row.height, 16f * tallest + 4f) * unit
+        if (row.fits && !unfitted[index]) {
+            for (cell in row.cells) {
+                if (!cell.wraps || cell.span > 1 || cell.continues || cell.continued || cell.column >= count) continue
+                val inner = innerWidth(cell)
+                // One line for certain, however wide its letters: not measured.
+                val widest = cell.text.length * CellText.fontSize.value * cell.look.scale * unit * 1.25f
+                if (widest <= inner && '\n' !in cell.text) continue
+                val layout = measurer.measure(
+                    text = cell.text,
+                    style = styleOf(cell, sideOf(cell.align, sheet.rightToLeft)),
+                    constraints = Constraints.fixedWidth(inner.toInt()),
+                    layoutDirection = direction,
+                )
+                height = maxOf(height, minOf(layout.size.height + 4f * unit, MAX_FITTED_HEIGHT * unit))
+            }
+        }
+        heights[index] = height
+        return height
+    }
+
+    /** The height of [rows] together: what a cell merged down them covers. */
+    fun height(rows: IntRange): Float {
+        var total = 0f
+        for (index in rows) total += height(index)
+        return total
     }
 
     private fun key(row: Int, column: Int) = (row.toLong() shl 32) or column.toLong()
@@ -351,8 +399,17 @@ private class GridLayout(val sheet: Worksheet, val unit: Float) {
     companion object {
         /** Comfortably within the widest a layout can be, at any density and font size. */
         const val MAX_PIXELS = 200_000f
+
+        /** The most rows a cell can be merged down and have each still fitted to its text. */
+        const val MAX_FITTED_BLOCK = 200
+
+        /** 409.5 points, the tallest row Excel has. */
+        const val MAX_FITTED_HEIGHT = 546f
     }
 }
+
+/** Wrapped onto as many lines as it takes - which a number never is: it is rounded to fit, or shown as ###. */
+private val SheetCell.wraps: Boolean get() = look.wrap && !numeric && text.isNotEmpty()
 
 @Composable
 private fun ColumnHeaders(sheet: Worksheet, grid: GridLayout, horizontal: ScrollState, measurer: TextMeasurer, colors: GridColors) {
@@ -418,7 +475,7 @@ private fun SheetRowView(
 ) {
     val density = LocalDensity.current
     val rightToLeft = LocalLayoutDirection.current == LayoutDirection.Rtl
-    Row(Modifier.height(with(density) { grid.height(row).toDp() })) {
+    Row(Modifier.height(with(density) { grid.height(index).toDp() })) {
         Box(
             Modifier
                 .zIndex(1f)
@@ -566,7 +623,7 @@ private fun rowDrawing(
         if (cell.text.isEmpty()) continue
 
         val block = grid.blockOf(index, cell)
-        val wrap = cell.look.wrap && !cell.numeric
+        val wrap = cell.wraps
         val side = sideOf(cell.align, rightToLeft)
         // Where the text may go: its cell, and the empty ones it can run on over.
         var areaStart = start
@@ -602,7 +659,7 @@ private fun rowDrawing(
         if (areaEnd < window.start || areaStart > window.endInclusive) continue
 
         val style = styleOf(cell, side)
-        val inner = (end - start - 2 * grid.padding).coerceAtLeast(1f)
+        val inner = grid.innerWidth(cell)
         var layout = if (wrap) {
             // As wide as the cell, so the text is aligned within it.
             sizes.measure(cell.text, style, Constraints.fixedWidth(inner.toInt()))
@@ -630,8 +687,8 @@ private fun rowDrawing(
         }
         // Down a merged cell's rows, set against all of them: each row draws
         // the part of the text that falls in it.
-        val blockHeight = block?.let { grid.rowTops[it.last + 1] - grid.rowTops[it.first] } ?: height
-        val above = block?.let { grid.rowTops[index] - grid.rowTops[it.first] } ?: 0f
+        val blockHeight = block?.let { grid.height(it) } ?: height
+        val above = block?.let { grid.height(it.first until index) } ?: 0f
         val y = when (cell.look.vertical) {
             CellVertical.TOP -> grid.padding
             CellVertical.CENTER -> (blockHeight - layout.size.height) / 2

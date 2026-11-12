@@ -265,6 +265,35 @@ class XlsxTest {
     }
 
     @Test
+    fun `a row fits its text unless somebody chose its height`() {
+        val sheet = """
+            <sheetFormatPr defaultRowHeight="15"/>
+            <sheetData>
+                <row r="1"><c r="A1"><v>1</v></c></row>
+                <row r="2" ht="30"><c r="A2"><v>2</v></c></row>
+                <row r="3" ht="30" customHeight="1"><c r="A3"><v>3</v></c></row>
+                <row r="4" customHeight="1"><c r="A4"><v>4</v></c></row>
+            </sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        // A height Excel worked out and stored is still its own to work out.
+        assertEquals(listOf(true, true, false, true), ws.rows.map { it.fits })
+        assertEquals(listOf(20f, 40f, 40f, 20f), ws.rows.map { it.height })
+        // A height chosen for the whole sheet is chosen for each row that gives none.
+        val chosen = sheet.replace("""defaultRowHeight="15"""", """defaultRowHeight="30" customHeight="1"""")
+        val set = Xlsx.read(xlsx(listOf("S" to chosen))).sheet(0)
+        assertEquals(listOf(false, true, false, false), set.rows.map { it.fits })
+    }
+
+    @Test
+    fun `a row numbered below one follows on from the one before`() {
+        val sheet = """<sheetData><row r="2"><c><v>1</v></c></row><row r="-7" ht="9"><c><v>2</v></c></row><row r="0"><c><v>3</v></c></row></sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        assertEquals(listOf(1, 2, 3, 4), ws.rows.map { it.number })
+        assertEquals(listOf(null, "1", "2", "3"), (1..4).map { ws.cell(it, "A")?.text })
+        assertEquals(12f, ws.rows[2].height)
+    }
+
+    @Test
     fun `cells without references follow on from the one before`() {
         val sheet = """<sheetData><row><c><v>1</v></c><c><v>2</v></c><c r="E1"><v>5</v></c><c><v>6</v></c></row><row><c><v>7</v></c></row></sheetData>"""
         val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)

@@ -90,8 +90,17 @@ class SheetCell(
     val number: Double? = null,
 )
 
-/** A row's [height], like a column's width, is in Excel's pixels, which the viewer shows about the size of sp. */
-class SheetRow(val number: Int, val height: Float, val cells: List<SheetCell>)
+/**
+ * A row's [height], like a column's width, is in Excel's pixels, which the
+ * viewer shows about the size of sp.
+ *
+ * [fits] is set for a row whose height nobody chose: Excel makes such a row
+ * as tall as its wrapped text needs, working that out as it opens the file
+ * when the file doesn't say - as one written by a program, not by Excel,
+ * doesn't. Such a row is shown at least [height] tall, and taller if the
+ * text needs it.
+ */
+class SheetRow(val number: Int, val height: Float, val cells: List<SheetCell>, val fits: Boolean = false)
 
 /** [name] is the column's letters: A, B, ..., AA. */
 class SheetColumn(val name: String, val width: Float)
@@ -548,6 +557,9 @@ private class SheetHandler(
     private var defaultHeight = DEFAULT_HEIGHT
     private val columnRanges = ArrayList<Columns>()
     private val heights = HashMap<Int, Float>()
+    /** Rows whose height somebody set, and the sheet's own if it was set for every row. */
+    private val setHeights = HashSet<Int>()
+    private var defaultHeightSet = false
     private val hiddenRows = HashSet<Int>()
     private val cells = ArrayList<Raw>()
     private val merges = ArrayList<Merge>()
@@ -568,11 +580,13 @@ private class SheetHandler(
         if (inSheetData) {
             when (localName) {
                 "row" -> {
-                    row = attributes.attr("r")?.toIntOrNull() ?: (row + 1)
+                    // Rows are numbered from 1: any other number is taken as none.
+                    row = attributes.attr("r")?.toIntOrNull()?.takeIf { it > 0 } ?: (row + 1)
                     column = 0
                     if (row > Xlsx.MAX_ROWS) stop()
                     val height = attributes.attr("ht")?.toFloatOrNull()
                     height?.let { heights[row] = it * 4f / 3f }
+                    if (height != null && attributes.attr("customHeight").isTrue()) setHeights += row
                     // A row with no height is as good as hidden.
                     if (attributes.attr("hidden").isTrue() || height == 0f) hiddenRows += row
                 }
@@ -601,6 +615,7 @@ private class SheetHandler(
                     ?: attributes.attr("baseColWidth")?.toFloatOrNull()?.let { it * 7f + 8f }
                 width?.let { defaultWidth = it }
                 attributes.attr("defaultRowHeight")?.toFloatOrNull()?.let { defaultHeight = it * 4f / 3f }
+                defaultHeightSet = attributes.attr("customHeight").isTrue()
             }
             "col" -> {
                 val first = attributes.attr("min")?.toIntOrNull() ?: return
@@ -806,7 +821,13 @@ private class SheetHandler(
         }
 
         val rows = numbers.mapIndexed { i, number ->
-            SheetRow(number, heights[number] ?: defaultHeight, rowCells[i].sortedBy { it.column })
+            val height = heights[number]
+            SheetRow(
+                number = number,
+                height = height ?: defaultHeight,
+                cells = rowCells[i].sortedBy { it.column },
+                fits = if (height == null) !defaultHeightSet else number !in setHeights,
+            )
         }
         return Worksheet(columns, rows, rightToLeft, hasDrawings, truncated || textTruncated)
     }
