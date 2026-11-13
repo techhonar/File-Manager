@@ -9,9 +9,9 @@ use crate::types::{is_hidden_dir, FileCategory, FileEntry};
 use std::sync::Arc;
 use walkdir::WalkDir;
 
-/// Extensions per category. Kept as sorted `&str` slices rather than a HashMap
-/// because these are tiny and a linear scan over <30 short strings beats
-/// hashing, and it keeps the table readable.
+/// Extensions per category. Kept as `&str` slices rather than a HashMap
+/// because these are tiny and a linear scan over a few dozen short strings
+/// beats hashing, and it keeps the table readable.
 const IMAGE: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "tif", "svg", "avif", "dng",
 ];
@@ -24,6 +24,10 @@ const AUDIO: &[&str] = &[
 const DOCUMENT: &[&str] = &[
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp", "md",
     "csv", "epub", "html", "htm", "json", "xml",
+    // Word, Excel and PowerPoint files with macros in them, their templates
+    // and slide shows: the same formats under other names, which the app
+    // opens the same way - and so the same kind of file to list and to count.
+    "docm", "dot", "dotx", "dotm", "xlsm", "xltx", "xltm", "pptm", "ppsx", "ppsm", "potx", "potm",
 ];
 const ARCHIVE: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "tbz2", "txz", "tzst",

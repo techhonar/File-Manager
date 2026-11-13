@@ -33,8 +33,23 @@ class DocumentTypesTest {
         val rustDocuments = listOf(
             "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp", "md",
             "csv", "epub", "html", "htm", "json", "xml",
+            "docm", "dot", "dotx", "dotm", "xlsm", "xltx", "xltm", "pptm", "ppsx", "ppsm", "potx", "potm",
         )
         rustDocuments.forEach { assertNotNull(it, documentType("file.$it")) }
+    }
+
+    @Test
+    fun `a file the viewer opens as a document is drawn as one`() {
+        // A workbook with macros opened in the app, and sat in the list
+        // with the blank icon of a file nothing knows.
+        assertEquals(DocumentType(DocumentKind.SHEET, "XLSM"), documentType("Budget.xlsm"))
+        assertEquals(DocumentType(DocumentKind.SLIDES, "PPSX"), documentType("Wedding.ppsx"))
+        assertEquals(DocumentType(DocumentKind.WORD, "DOTX"), documentType("Letterhead.dotx"))
+        val opened = listOf("docx", "docm", "dotx", "dotm", "doc", "dot", "rtf", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "pdf")
+        opened.forEach { extension ->
+            assertNotNull("the viewer opens .$extension", com.filemanager.app.data.viewer.viewerKind("file.$extension"))
+            assertNotNull("so .$extension is a document", documentType("file.$extension"))
+        }
     }
 
     @Test

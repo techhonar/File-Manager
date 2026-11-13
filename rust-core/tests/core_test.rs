@@ -71,6 +71,12 @@ fn categorizes_by_extension() {
     assert_eq!(categorize("app.apkm"), FileCategory::Apk);
     assert_eq!(categorize("no-extension"), FileCategory::Other);
     assert_eq!(categorize(".bashrc"), FileCategory::Other);
+    // A workbook with macros, a slide show and a template are documents as
+    // much as the .xlsx, .pptx and .docx they are inside.
+    assert_eq!(categorize("Budget.xlsm"), FileCategory::Document);
+    assert_eq!(categorize("Wedding.PPSX"), FileCategory::Document);
+    assert_eq!(categorize("Letterhead.dotx"), FileCategory::Document);
+    assert_eq!(categorize("Old letterhead.dot"), FileCategory::Document);
 }
 
 #[test]
