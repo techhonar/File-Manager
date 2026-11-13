@@ -1979,27 +1979,65 @@ fn a_trashed_folder_whose_original_cannot_all_be_removed_stays_listed() {
     use std::os::unix::fs::PermissionsExt;
     let Some(trash) = other_filesystem("trash-remove-fails") else { return };
     let tree = TempTree::new("trash-remove-fails-src");
-    tree.file("album/a.jpg", b"one");
-    tree.file("album/locked/b.jpg", b"two");
-    let locked = tree.path().join("album/locked");
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    tree.file("holder/album/a.jpg", b"one");
+    tree.file("holder/album/sub/b.jpg", b"two");
+    // The album's files can go, the album itself can't be taken out of the
+    // folder it is in: the removal fails at its very end, with the files gone.
+    let holder = tree.path().join("holder");
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o555)).unwrap();
     // Root ignores the permission, so there is no failure to test there.
-    if fs::write(locked.join("probe"), b"").is_ok() {
-        let _ = fs::remove_file(locked.join("probe"));
+    if fs::write(holder.join("probe"), b"").is_ok() {
+        fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let album = holder.join("album");
+    let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.is_err(), "the original is not all gone, so this was not a clean move");
+    assert!(!album.join("a.jpg").exists(), "the files went before the removal failed");
+    let listed = trash_list(trash.str(), 30).unwrap();
+    assert_eq!(listed.len(), 1, "the whole copy in the trash has to stay listed");
+    let stored = trash.path().join("files").join(&listed[0].id);
+    assert_eq!(fs::read_to_string(stored.join("a.jpg")).unwrap(), "one");
+    assert_eq!(fs::read_to_string(stored.join("sub/b.jpg")).unwrap(), "two");
+}
+
+#[test]
+fn a_folder_none_of_which_could_be_removed_is_not_left_in_the_trash_as_well() {
+    // The copy reached the trash whole, and then not one file of the
+    // original could be removed. Nothing was lost, so nothing needs keeping:
+    // the copy was kept all the same, a second album listed as deleted when
+    // the first was still in place, taking the space the delete was for.
+    use std::os::unix::fs::PermissionsExt;
+    let Some(trash) = other_filesystem("trash-folder-stays") else { return };
+    let tree = TempTree::new("trash-folder-stays-src");
+    tree.file("album/locked/a.jpg", b"one");
+    tree.file("album/locked/deeper/b.jpg", b"two");
+    let locked = tree.path().join("album/locked");
+    let deeper = locked.join("deeper");
+    fs::set_permissions(&deeper, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let unlock = || {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&deeper, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // Root ignores the permission, so there is no failure to test there.
+    if fs::remove_file(locked.join("a.jpg")).is_ok() {
+        unlock();
         return;
     }
 
     let album = tree.path().join("album");
     let result = trash_move(trash.str(), album.to_string_lossy().into_owned());
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    unlock();
 
-    assert!(result.is_err(), "the original is not all gone, so this was not a clean move");
-    let listed = trash_list(trash.str(), 30).unwrap();
-    assert_eq!(listed.len(), 1, "the whole copy in the trash has to stay listed");
-    let stored = trash.path().join("files").join(&listed[0].id);
-    assert_eq!(fs::read_to_string(stored.join("a.jpg")).unwrap(), "one");
-    assert_eq!(fs::read_to_string(stored.join("locked/b.jpg")).unwrap(), "two");
+    assert!(result.is_err(), "the original could not be removed, so this was not a move");
+    assert_eq!(fs::read_to_string(locked.join("a.jpg")).unwrap(), "one");
+    assert_eq!(fs::read_to_string(deeper.join("b.jpg")).unwrap(), "two");
+    assert!(trash_list(trash.str(), 30).unwrap().is_empty(), "listed as deleted when it was not");
+    assert_eq!(fs::read_dir(trash.path().join("files")).unwrap().count(), 0, "a second copy was kept in the trash");
 }
 
 #[test]

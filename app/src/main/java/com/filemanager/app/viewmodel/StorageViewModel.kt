@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.userMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.DuplicateGroup
@@ -89,30 +91,30 @@ class StorageViewModel(
         val paths = _state.value.selected.toList()
         if (paths.isEmpty()) return
         val freed = _state.value.selectedBytes
+        // Out of selection at once, so a second tap can't delete them twice.
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(paths) }
-                .onSuccess {
-                    val gone = paths.toSet()
-                    _state.update { current ->
-                        current.copy(
-                            // Drop them from the list rather than re-running
-                            // the whole walk for a handful of removals.
-                            largest = current.largest.filterNot { it.path in gone },
-                            selected = emptySet(),
-                            selectionActive = false,
-                            // Not "freed": the trash is on the same storage,
-                            // so nothing is released until it is emptied.
-                            // Claiming otherwise sent people looking for
-                            // space that had not appeared.
-                            message = "${paths.size} moved to trash. " +
-                                "Empty the trash to free ${formatSize(freed)}.",
-                        )
-                    }
-                }
-                .onFailure { e ->
-                    _state.update { it.copy(message = e.userMessage("Could not delete")) }
-                }
+            val result = runCatching { repository.moveToTrash(paths) }
+            // From the disk rather than the result: a failure partway through
+            // leaves some trashed and some not, and the trashed ones stayed
+            // in the list as though nothing had happened to them.
+            val gone = withContext(Dispatchers.IO) { paths.filterNot { File(it).exists() } }.toSet()
+            _state.update { current ->
+                current.copy(
+                    // Drop them from the list rather than re-running the
+                    // whole walk for a handful of removals.
+                    largest = current.largest.filterNot { it.path in gone },
+                    message = result.fold(
+                        // Not "freed": the trash is on the same storage, so
+                        // nothing is released until it is emptied. Claiming
+                        // otherwise sent people looking for space that had
+                        // not appeared.
+                        onSuccess = { "${paths.size} moved to trash. Empty the trash to free ${formatSize(freed)}." },
+                        onFailure = { it.userMessage("Could not delete") },
+                    ),
+                )
+            }
         }
     }
 
@@ -259,7 +261,7 @@ class StorageViewModel(
             val result = runCatching { repository.moveToTrash(marked.toList()) }
             // From the disk rather than the result: a failure partway through
             // leaves some trashed and some not.
-            val left = group.files.filter { File(it.path).exists() }
+            val left = withContext(Dispatchers.IO) { group.files.filter { File(it.path).exists() } }
             val trashed = group.files.size - left.size
             _state.update { current ->
                 current.copy(

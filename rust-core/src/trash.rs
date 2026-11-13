@@ -91,9 +91,11 @@ pub fn trash_move(trash_dir: String, path: String) -> Result<String> {
         // have lost some of its files already, so that copy is the only place
         // they are: it keeps its record and stays listed. Anything else failed
         // with the original whole and leaves nothing behind - a failed copy
-        // has taken its part back out, and a file is removed in one step or
-        // not at all, so a copy of one that stayed is only a duplicate.
-        if meta.is_dir() && dest.exists() {
+        // has taken its part back out; a file is removed in one step or not
+        // at all; and a folder none of which could be removed is all still
+        // there. A copy of what stayed is only a duplicate, listed as deleted
+        // when it was not and taking up the space it was deleted to free.
+        if meta.is_dir() && dest.exists() && !still_whole(src, &dest) {
             return Err(error);
         }
         let _ = remove_exact(&dest);
@@ -289,6 +291,31 @@ pub fn copy_exact(src: &Path, dest: &Path) -> Result<()> {
     // A file trashed from an SD card and restored came back dated today.
     crate::scanner::keep_modified_time(src, dest);
     Ok(())
+}
+
+/// Whether everything in `copy` is still where it was copied from, under
+/// `original`: true of a folder whose removal failed before it took anything.
+///
+/// Anything that can't be looked at counts as gone. Wrongly keeping a copy
+/// costs space; wrongly dropping one would lose the only place a file is.
+fn still_whole(original: &Path, copy: &Path) -> bool {
+    let (Ok(copied), Ok(there)) = (std::fs::symlink_metadata(copy), std::fs::symlink_metadata(original)) else {
+        return false;
+    };
+    if !copied.is_dir() {
+        return !there.is_dir() && there.len() == copied.len();
+    }
+    if !there.is_dir() {
+        return false;
+    }
+    let Ok(children) = std::fs::read_dir(copy) else { return false };
+    for child in children {
+        let Ok(child) = child else { return false };
+        if !still_whole(&original.join(child.file_name()), &child.path()) {
+            return false;
+        }
+    }
+    true
 }
 
 fn remove_exact(path: &Path) -> Result<()> {
