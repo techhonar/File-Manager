@@ -238,6 +238,110 @@ class PptxTest {
         assertTrue(deck.slides.size < 5)
     }
 
+    // ---- What a slide is built on ----------------------------------------
+
+    /** A placeholder of [type] - none for one that doesn't say - numbered [idx], with its own list style if given. */
+    private fun placeholder(type: String?, idx: Int?, paragraphs: String, lists: String = ""): String {
+        val ph = "<p:ph" + (type?.let { """ type="$it"""" } ?: "") + (idx?.let { """ idx="$it"""" } ?: "") + "/>"
+        return """<p:sp><p:nvSpPr><p:cNvPr id="2" name="s"/><p:cNvSpPr/><p:nvPr>$ph</p:nvPr></p:nvSpPr><p:spPr/>""" +
+            """<p:txBody><a:bodyPr/><a:lstStyle>$lists</a:lstStyle>$paragraphs</p:txBody></p:sp>"""
+    }
+
+    /** A master whose body text is bulleted - a dot, a dash, then a square from a font of pictures - and reads [direction]. */
+    private fun master(direction: String = "") = """<?xml version="1.0"?><p:sldMaster $ns><p:cSld><p:spTree>""" +
+        placeholder("title", null, "<a:p/>") + placeholder("body", 1, "<a:p/>") +
+        """</p:spTree></p:cSld><p:txStyles><p:titleStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></p:titleStyle><p:bodyStyle>""" +
+        """<a:lvl1pPr$direction><a:buFont typeface="Arial"/><a:buChar char="•"/></a:lvl1pPr>""" +
+        """<a:lvl2pPr$direction><a:buFont typeface="Arial"/><a:buChar char="–"/></a:lvl2pPr>""" +
+        """<a:lvl3pPr$direction><a:buFont typeface="Wingdings"/><a:buChar char="§"/></a:lvl3pPr>""" +
+        """</p:bodyStyle><p:otherStyle><a:lvl1pPr/></p:otherStyle></p:txStyles></p:sldMaster>"""
+
+    /** A layout like PowerPoint's Comparison: a heading with no bullets, content with the master's, and a numbered list. */
+    private val layout = """<?xml version="1.0"?><p:sldLayout $ns><p:cSld><p:spTree>""" +
+        placeholder("title", null, "<a:p/>") +
+        placeholder("body", 1, "<a:p/>", """<a:lvl1pPr><a:buNone/></a:lvl1pPr><a:lvl2pPr><a:buNone/></a:lvl2pPr>""") +
+        placeholder(null, 2, "<a:p/>") +
+        placeholder("body", 3, "<a:p/>", """<a:lvl1pPr><a:buAutoNum type="arabicPeriod"/></a:lvl1pPr>""") +
+        """</p:spTree></p:cSld></p:sldLayout>"""
+
+    /** A deck of one slide of [shapes], built on [layout] and a [master]. */
+    private fun built(shapes: String, master: String? = master()) = Pptx.read(
+        pptx(
+            listOf("slide1.xml" to slide(shapes)),
+            listOfNotNull(
+                "ppt/slides/_rels/slide1.xml.rels" to slideRels("slideLayout" to "../slideLayouts/slideLayout1.xml"),
+                "ppt/slideLayouts/slideLayout1.xml" to layout,
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels" to slideRels("slideMaster" to "../slideMasters/slideMaster1.xml"),
+                master?.let { "ppt/slideMasters/slideMaster1.xml" to it },
+            ).toMap(),
+        ),
+    ).slides.single()
+
+    private fun levels(vararg texts: String) = texts.withIndex().joinToString("") { (level, text) -> para(text, """<a:pPr lvl="$level"/>""") }
+
+    @Test
+    fun `a layout takes the bullets off text its master would bullet`() {
+        val slide = built(
+            placeholder("title", null, para("Comparison")) +
+                placeholder("body", 1, levels("Heading", "Under it")) +
+                placeholder(null, 2, levels("Point", "Finer point", "Finest")) +
+                placeholder("body", 3, para("First") + para("Second")),
+        )
+        assertEquals(
+            listOf(
+                null to "Comparison",
+                // "• Heading" before: every line of body text had a bullet.
+                null to "Heading", null to "Under it",
+                // The master's own, a level each - the last a picture from Wingdings, shown as the square it is.
+                "•" to "Point", "–" to "Finer point", "▪" to "Finest",
+                "1." to "First", "2." to "Second",
+            ),
+            slide.paragraphs().map { it.marker to it.text },
+        )
+    }
+
+    @Test
+    fun `a paragraph's own bullet, and its shape's, come before the layout's`() {
+        val slide = built(
+            placeholder("body", 1, para("Ticked", """<a:pPr><a:buChar char="✓"/></a:pPr>""") + para("Plain")) +
+                placeholder(null, 2, para("None here") + para("Nor here"), """<a:lvl1pPr><a:buNone/></a:lvl1pPr>"""),
+        )
+        assertEquals(listOf("✓", null, null, null), slide.paragraphs().map { it.marker })
+    }
+
+    @Test
+    fun `a placeholder the layout has no counterpart for is built on the master`() {
+        // Numbered 7, which the layout has nothing at: found by what it is, then by the master.
+        val slide = built(placeholder(null, 7, para("Point")) + placeholder("pic", 9, para("Caption")) + shape(para("A text box")))
+        assertEquals(listOf("•", "•", null), slide.paragraphs().map { it.marker })
+    }
+
+    @Test
+    fun `a slide whose layout or master can't be read is read without it`() {
+        // No master: the layout still takes bullets off, and gives none.
+        val noMaster = built(placeholder("body", 1, para("Heading")) + placeholder(null, 2, para("Point")), master = null)
+        assertEquals(listOf(null, null), noMaster.paragraphs().map { it.marker })
+        // A layout that isn't there: body text is bulleted, as almost every master has it.
+        val noLayout = Pptx.read(
+            pptx(
+                listOf("slide1.xml" to slide(placeholder("body", 1, levels("Point", "Finer")))),
+                mapOf("ppt/slides/_rels/slide1.xml.rels" to slideRels("slideLayout" to "../slideLayouts/gone.xml")),
+            ),
+        ).slides.single()
+        assertEquals(listOf("•", "◦"), noLayout.paragraphs().map { it.marker })
+    }
+
+    @Test
+    fun `a master made to read right to left makes its text so, and one that says left to right leaves it to the text`() {
+        val persian = built(placeholder(null, 2, para("نکته")), master = master(""" rtl="1""""))
+        assertEquals(true, persian.paragraphs().single().rtl)
+        val english = built(placeholder(null, 2, para("نکته")), master = master(""" rtl="0""""))
+        assertNull(english.paragraphs().single().rtl)
+        // The paragraph's own word is the last one.
+        val own = built(placeholder(null, 2, para("Point", """<a:pPr rtl="0"/>""")), master = master(""" rtl="1""""))
+        assertEquals(false, own.paragraphs().single().rtl)
+    }
+
     // ---- Files made to break a reader ------------------------------------
 
     private fun table(rows: String) =
