@@ -7,11 +7,13 @@ import com.filemanager.app.data.FileRepository
 import com.filemanager.app.data.PathPrefs
 import com.filemanager.app.data.ViewScope
 import com.filemanager.app.data.userMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.filemanager_core.CancelToken
 import uniffi.filemanager_core.FileEntry
 import java.io.File
@@ -135,26 +137,30 @@ class RecentViewModel(
         }
     }
 
+    /**
+     * The selected files, to the trash - or gone for good from a USB drive,
+     * which has none; the screen asked about that first.
+     */
     fun deleteSelection() {
-        val paths = _state.value.selected.toList()
-        if (paths.isEmpty()) return
+        val selected = _state.value.selected.toList()
+        if (selected.isEmpty()) return
+        // Out of selection at once, so a second tap can't delete them twice.
+        _state.update { it.copy(selected = emptySet(), selectionActive = false) }
 
         viewModelScope.launch {
-            runCatching { repository.moveToTrash(paths) }
-                .onSuccess {
-                    val gone = paths.toSet()
-                    _state.update { current ->
-                        current.copy(
-                            entries = current.entries.filterNot { it.path in gone },
-                            selected = emptySet(),
-                            selectionActive = false,
-                            message = "${paths.size} moved to trash",
-                        )
-                    }
-                }
-                .onFailure { e ->
-                    _state.update { it.copy(message = e.userMessage("Could not delete")) }
-                }
+            val result = runCatching { repository.delete(selected) }
+            // From the disk rather than the result: a delete that fails
+            // partway has taken the files before the one it failed on, and
+            // those stayed in the list, to be opened and not found.
+            val gone = withContext(Dispatchers.IO) { selected.filterNot { File(it).exists() } }
+            // Their marks go with them, or favourites pile up pointing at nothing.
+            paths.forget(gone)
+            _state.update { current ->
+                current.copy(
+                    entries = current.entries.filterNot { it.path in gone },
+                    message = result.fold({ it.message }, { it.userMessage("Could not delete") }),
+                )
+            }
         }
     }
 

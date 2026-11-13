@@ -162,6 +162,16 @@ class BrowserViewModel(
      */
     private var listing: Job? = null
 
+    /**
+     * Being deleted: out of the list from the moment Delete is pressed. A
+     * slow delete - to the trash from a memory card, which is a copy - left
+     * them in view while it ran, to be opened or deleted a second time.
+     */
+    private var leaving: Set<String> = emptySet()
+
+    private fun staying(entries: List<FileEntry>): List<FileEntry> =
+        if (leaving.isEmpty()) entries else entries.filterNot { it.path in leaving }
+
     fun load(path: String) {
         watch(path)
         _state.update {
@@ -183,7 +193,7 @@ class BrowserViewModel(
             }.onSuccess { entries ->
                 _state.update {
                     it.copy(
-                        entries = applyPinning(entries, paths.pinned.value),
+                        entries = applyPinning(staying(entries), paths.pinned.value),
                         isLoading = false,
                     )
                 }
@@ -227,7 +237,7 @@ class BrowserViewModel(
                         if (it.path != path) {
                             it
                         } else {
-                            val next = applyPinning(entries, paths.pinned.value)
+                            val next = applyPinning(staying(entries), paths.pinned.value)
                             // Ticks for files that have since gone are dropped.
                             // This reload is not the user's doing - something
                             // changed on disk - so a selection can outlive the
@@ -405,6 +415,9 @@ class BrowserViewModel(
         // Out of selection at once: the bar stayed up while a slow delete
         // ran, and a second tap deleted the same files again.
         clearSelection()
+        // And out of the list; any that could not be deleted come back below.
+        leaving = leaving + paths
+        _state.update { it.copy(entries = staying(it.entries)) }
 
         viewModelScope.launch {
             runCatching { repository.delete(paths) }
@@ -415,6 +428,7 @@ class BrowserViewModel(
                     _messages.value = done.message
                 }
                 .onFailure { _messages.value = it.userMessage("Could not delete") }
+            leaving = leaving - paths.toSet()
             // Either way: some may have gone before one failed.
             refresh()
         }
