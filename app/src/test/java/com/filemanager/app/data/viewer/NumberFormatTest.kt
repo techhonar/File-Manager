@@ -112,6 +112,24 @@ class NumberFormatTest {
     }
 
     @Test
+    fun `a number that is no day Excel has is shown as the number, in a column of dates`() {
+        assertEquals("9999-12-31", shown("yyyy-mm-dd", 2958465.0))
+        assertEquals("2958466", shown("yyyy-mm-dd", 2958466.0))
+        // A time in milliseconds, in a column formatted as dates: working
+        // out a date that far off threw, and the sheet did not open at all.
+        assertEquals("1.7E+12", shown("yyyy-mm-dd", 1699999999999.0))
+        assertEquals("1.7E+12", shown("h:mm:ss", 1699999999999.0))
+        assertEquals("1.7977E+308", shown("d mmm yy", Double.MAX_VALUE))
+        assertEquals("1E+300", shown("[h]:mm", 1e300))
+        assertEquals("-5", shown("yyyy-mm-dd", -5.0))
+        // And as a percentage, a number a hundred times which there isn't one.
+        assertEquals("1E+308", shown("0%", 1e308))
+        assertEquals("1E+308", shown("0.00%", 1e308))
+        assertEquals("#NUM!", shown("0.00", Double.NaN))
+        assertEquals("#NUM!", shown("yyyy-mm-dd", Double.POSITIVE_INFINITY))
+    }
+
+    @Test
     fun `times, twelve hour clocks, elapsed time and fractions of a second`() {
         assertEquals("6:00 PM", shown("h:mm AM/PM", 0.75))
         assertEquals("6:00 AM", shown("h:mm AM/PM", 0.25))

@@ -575,7 +575,28 @@ private class SheetHandler(
 
     private enum class Kind { TEXT, NUMBER, LOGICAL, ERROR }
 
-    private class Raw(val row: Int, val column: Int, val text: String, val look: CellLook, val kind: Kind, val number: Double?)
+    private class Raw(
+        val row: Int,
+        val column: Int,
+        var text: String,
+        val look: CellLook,
+        var kind: Kind,
+        var number: Double?,
+        /** The number the cell holds, for a formula that reads it; NaN for a cell that holds none. */
+        var value: Double = Double.NaN,
+        /** A formula that came with no result, worked out once the sheet is read, and how its result is to be written. */
+        val formula: String? = null,
+        val format: NumberFormat? = null,
+    ) {
+        /** For such a formula, how far working it out has got. */
+        var state = WAITING
+
+        /** What it comes to; null, once [state] is [DONE], if it uses something not worked out here. */
+        var result: CellValue? = null
+
+        /** The round of working out in which it was last put off, so as not to be tried twice in one. */
+        var putOff = -1
+    }
 
     private class Columns(val first: Int, val last: Int, val width: Float?, val hidden: Boolean)
 
@@ -587,6 +608,10 @@ private class SheetHandler(
     var stopped = false
         private set
     private var truncated = false
+
+    /** The first row not all read, once reading [stopped]; and whether cells past the last column shown were left out. */
+    private var unreadFromRow = Int.MAX_VALUE
+    private var columnsCut = false
     private var rightToLeft = false
     private var sawView = false
     private var hasDrawings = false
@@ -612,6 +637,9 @@ private class SheetHandler(
     private var inValue = false
     private var inInline = false
     private var inText = false
+    private var inFormula = false
+    private var formulaKind: String? = null
+    private val formula = StringBuilder()
     private var phonetic = 0
     private val value = StringBuilder()
     private val inline = StringBuilder()
@@ -639,6 +667,12 @@ private class SheetHandler(
                     style = attributes.attr("s")?.toIntOrNull() ?: 0
                     value.setLength(0)
                     inline.setLength(0)
+                    formula.setLength(0)
+                    formulaKind = null
+                }
+                "f" -> {
+                    inFormula = true
+                    formulaKind = attributes.attr("t")
                 }
                 "v" -> inValue = true
                 "is" -> inInline = true
@@ -678,6 +712,7 @@ private class SheetHandler(
         when (localName) {
             "sheetData" -> inSheetData = false
             "c" -> finishCell()
+            "f" -> inFormula = false
             "v" -> inValue = false
             "is" -> inInline = false
             "t" -> inText = false
@@ -687,45 +722,64 @@ private class SheetHandler(
 
     override fun characters(ch: CharArray, start: Int, length: Int) {
         // No more than a cell holds: what is past it would never be shown.
-        val into = if (inValue) value else if (inText) inline else return
-        val room = Xlsx.MAX_CELL_TEXT - into.length
+        val into = if (inValue) value else if (inText) inline else if (inFormula) formula else return
+        val room = (if (inFormula) MAX_FORMULA else Xlsx.MAX_CELL_TEXT) - into.length
         if (room > 0) into.appendRange(ch, start, start + minOf(length, room))
     }
 
     private fun stop(): Nothing {
         stopped = true
         truncated = true
+        // The row being read is not all in, and nothing after it is.
+        unreadFromRow = row
         throw ReadEnough()
     }
 
     private fun finishCell() {
         if (column > Xlsx.MAX_COLUMNS) {
             truncated = true
+            columnsCut = true
             return
         }
         val look = styles.look(style)
         val format = styles.format(style)
         val raw = value.toString()
         var number: Double? = null
+        var held = Double.NaN
+        // A formula and nothing beside it: written by a program, which
+        // leaves the working out to Excel. Text that is empty is a result -
+        // a formula can come to no text at all - a number that is missing
+        // is not.
+        val unsolved = formula.isNotEmpty() && raw.isBlank() && (type == null || type == "n")
         val (text, kind) = when (type) {
             "s" -> format.text(raw.trim().toIntOrNull()?.let { strings[it] }.orEmpty()) to Kind.TEXT
             "inlineStr" -> format.text(unescape(inline.toString())) to Kind.TEXT
             "str" -> format.text(unescape(raw)) to Kind.TEXT
             "b" -> (if (raw.isBlank()) "" else if (raw.trim() == "1") "TRUE" else "FALSE") to Kind.LOGICAL
             "e" -> raw.trim() to Kind.ERROR
-            "d" -> isoDate(raw.trim())?.let { format.number(it, date1904) to Kind.NUMBER } ?: (raw.trim() to Kind.TEXT)
-            else -> raw.trim().toDoubleOrNull()?.let { value ->
+            "d" -> isoDate(raw.trim())?.let {
+                held = it
+                format.number(it, date1904) to Kind.NUMBER
+            } ?: (raw.trim() to Kind.TEXT)
+            // "1e999" and "NaN" are written as a number is, and are none.
+            else -> raw.trim().toDoubleOrNull()?.takeIf { it.isFinite() }?.let { value ->
                 if (format === NumberFormat.GENERAL) number = value
+                held = value
                 format.number(value, date1904) to Kind.NUMBER
             } ?: ("" to Kind.TEXT)
         }
         // Kept empty when it carries a fill, or is part of a title centred across it.
-        if (text.isEmpty() && look.fill == null && !look.centerAcross) return
+        if (!unsolved && text.isEmpty() && look.fill == null && !look.centerAcross) return
         // Each cell holds its text itself, so one long text in every cell
         // of a sheet is that text a quarter of a million times.
-        textChars += text.length
+        textChars += text.length + if (unsolved) formula.length else 0
         if (cells.size >= Xlsx.MAX_CELLS || textChars > Xlsx.MAX_SHEET_TEXT) stop()
-        cells += Raw(row, column, text, look, kind, number)
+        cells += when {
+            !unsolved -> Raw(row, column, text, look, kind, number, held)
+            // One formula for many cells, each with its own answer: shown as it is written.
+            formulaKind == "array" || formulaKind == "dataTable" -> Raw(row, column, "=$formula", look, Kind.TEXT, null)
+            else -> Raw(row, column, "", look, Kind.TEXT, null, formula = formula.toString(), format = format)
+        }
     }
 
     /** A date cell's ISO 8601 value as the day number Excel would have kept instead. */
@@ -765,7 +819,151 @@ private class SheetHandler(
      * The sheet as shown: from A1 to the last row and column with something
      * in them, less the hidden ones, with merged cells as one.
      */
+    /*
+     * Formulas that came with no result are worked out here, once every
+     * cell they might read is in: see Formulas. One that uses something not
+     * worked out is shown as it is written, with its = - what the file says,
+     * rather than a blank where a total should be.
+     */
+    private inner class Solver(private val unsolved: List<Raw>) : FormulaCells {
+        private val byRow = HashMap<Int, ArrayList<Raw>>()
+        private val byCell = HashMap<Long, Raw>()
+        override val lastRow: Int = cells.maxOf { it.row }
+        override val lastColumn: Int = cells.maxOf { it.column }
+
+        // A sheet cut short at the most rows or columns shown: a total that
+        // reaches past them would be the total of the part that was read.
+        override val readThroughRow: Int = if (unreadFromRow == Int.MAX_VALUE) Int.MAX_VALUE else unreadFromRow - 1
+        override val readThroughColumn: Int = if (columnsCut) Xlsx.MAX_COLUMNS else Int.MAX_VALUE
+        private val formulas = Formulas(this)
+        private var looked = 0
+        private var depth = 0
+        private var round = 0
+
+        init {
+            for (cell in cells) {
+                byRow.getOrPut(cell.row) { ArrayList() } += cell
+                byCell[key(cell.row, cell.column)] = cell
+            }
+        }
+
+        override fun at(row: Int, column: Int): CellValue {
+            look()
+            return byCell[key(row, column)]?.let(::valueOf) ?: CellValue.Empty
+        }
+
+        override fun within(firstRow: Int, firstColumn: Int, lastRow: Int, lastColumn: Int, each: (CellValue) -> Unit) {
+            for (row in firstRow..lastRow) {
+                look()
+                for (cell in byRow[row] ?: continue) {
+                    if (cell.column < firstColumn || cell.column > lastColumn) continue
+                    look()
+                    valueOf(cell).let { if (it != CellValue.Empty) each(it) }
+                }
+            }
+        }
+
+        /** One more cell looked at, of as many as are for one sheet's formulas. */
+        private fun look() {
+            if (++looked > MAX_FORMULA_CELLS) throw NotWorkedOut()
+        }
+
+        private fun valueOf(cell: Raw): CellValue = when {
+            cell.formula == null -> when {
+                !cell.value.isNaN() -> CellValue.Number(cell.value)
+                cell.text.isEmpty() -> CellValue.Empty
+                cell.kind == Kind.LOGICAL -> CellValue.Logical(cell.text == "TRUE")
+                cell.kind == Kind.ERROR -> CellValue.Error(cell.text)
+                else -> CellValue.Text(cell.text)
+            }
+            cell.state == DONE -> cell.result ?: throw NotWorkedOut()
+            // Resting on itself, by however long a way round.
+            cell.state == WORKING -> throw NotWorkedOut()
+            // A chain of formulas each resting on the next is followed only
+            // so far in one go: the far end is reached first, another time.
+            cell.putOff == round || depth >= MAX_FORMULA_DEPTH -> throw NotWorkedOut(Formulas.LATER)
+            else -> {
+                workOut(cell)
+                cell.result ?: throw NotWorkedOut()
+            }
+        }
+
+        private fun workOut(cell: Raw) {
+            cell.state = WORKING
+            depth++
+            try {
+                cell.result = formulas.evaluate(cell.formula.orEmpty())
+                cell.state = DONE
+            } catch (e: NotWorkedOut) {
+                cell.state = WAITING
+                cell.putOff = round
+                throw e
+            } finally {
+                depth--
+            }
+        }
+
+        fun solve() {
+            // Down the sheet and then back up it: a running total rests on
+            // the row before it, a list totalled at its head on the rows
+            // after - either way round, every formula finds the ones it
+            // rests on already worked out.
+            var order = unsolved
+            while (round < MAX_FORMULA_ROUNDS && order.isNotEmpty()) {
+                val later = ArrayList<Raw>()
+                for (cell in order) {
+                    if (cell.state != WAITING) continue
+                    if (cell.putOff == round) {
+                        later += cell
+                        continue
+                    }
+                    try {
+                        workOut(cell)
+                    } catch (e: NotWorkedOut) {
+                        later += cell
+                    }
+                }
+                order = later.asReversed()
+                round++
+            }
+            for (cell in unsolved) write(cell)
+        }
+
+        private fun write(cell: Raw) {
+            val format = cell.format ?: NumberFormat.GENERAL
+            fun number(value: Double) {
+                cell.text = format.number(value, date1904)
+                cell.kind = Kind.NUMBER
+                cell.value = value
+                if (format === NumberFormat.GENERAL) cell.number = value
+            }
+            when (val result = cell.result.takeIf { cell.state == DONE }) {
+                null -> cell.text = "=" + cell.formula
+                is CellValue.Number -> number(result.value)
+                CellValue.Empty -> number(0.0)
+                is CellValue.Text -> cell.text = format.text(result.text)
+                is CellValue.Logical -> {
+                    cell.text = if (result.value) "TRUE" else "FALSE"
+                    cell.kind = Kind.LOGICAL
+                }
+                is CellValue.Error -> {
+                    cell.text = result.code
+                    cell.kind = Kind.ERROR
+                }
+            }
+        }
+    }
+
     fun build(textTruncated: Boolean): Worksheet {
+        val unsolved = cells.filter { it.formula != null }
+        if (unsolved.isNotEmpty()) {
+            // With some of the workbook's text left out - too much of it to
+            // hold - cells that had it are empty, and a formula reading them
+            // would be worked out wrong: each is shown as it is written.
+            if (textTruncated) unsolved.forEach { it.text = "=" + it.formula } else Solver(unsolved).solve()
+            // One that came to no text at all is an empty cell like any other.
+            cells.removeAll { it.formula != null && it.text.isEmpty() && it.look.fill == null && !it.look.centerAcross }
+        }
         var lastRow = 0
         var lastColumn = 0
         for (cell in cells) {
@@ -900,6 +1098,22 @@ private class SheetHandler(
         const val DEFAULT_HEIGHT = 20f
 
         const val MAX_COLUMN_WIDTH = 1000f
+
+        /** As long as Excel lets a formula be. */
+        const val MAX_FORMULA = 8_192
+
+        /** Cells looked at in working out one sheet's formulas, past which the rest are shown as written. */
+        const val MAX_FORMULA_CELLS = 5_000_000
+
+        /** How many formulas, each resting on the next, are followed in one go. */
+        const val MAX_FORMULA_DEPTH = 40
+
+        /** Times round the formulas left over from the time before. */
+        const val MAX_FORMULA_ROUNDS = 6
+
+        const val WAITING = 0
+        const val WORKING = 1
+        const val DONE = 2
 
         /** Cells read, empty ones too, past which a sheet is cut short. */
         const val MAX_CELLS_READ = 4_000_000

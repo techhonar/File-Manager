@@ -33,8 +33,12 @@ internal class NumberFormat private constructor(private val sections: List<List<
         }
         val sign = if (signed) "-" else ""
         return when {
+            // Not a day Excel has - before its first or after the last of
+            // the year 9999, as a time in milliseconds put in a column of
+            // dates is - is shown as the number it is. Excel shows ####; and
+            // working out a date that far off stopped the whole sheet opening.
             section.any { it is Token.Part || it is Token.Elapsed || it is Token.Meridiem } ->
-                if (value < 0) general(value) else date(value, section, date1904)
+                if (value < 0 || value >= LAST_DAY + 1) general(value) else date(value, section, date1904)
             section.any { it == Token.General } -> sign + render(section) { general(abs(value)) }
             section.any { it is Token.Digit } -> sign + digits(abs(value), section)
             // Text only, or "@" alone, which shows a number as General does.
@@ -117,6 +121,8 @@ internal class NumberFormat private constructor(private val sections: List<List<
         var number = value
         repeat(tokens.count { it == Token.Percent }) { number *= 100 }
         repeat(thousands) { number /= 1000 }
+        // As a percentage, past the largest number there is.
+        if (number.isNaN() || number.isInfinite()) return general(value)
 
         var exponentText = ""
         if (exponentAt >= 0) {
@@ -321,6 +327,9 @@ internal class NumberFormat private constructor(private val sections: List<List<
         }
 
         private fun decimal(value: Double) = BigDecimal(value.toString())
+
+        /** 31 December 9999, the last day Excel counts to. */
+        private const val LAST_DAY = 2_958_465.0
 
         private fun group(digits: String): String {
             if (digits.length <= 3) return digits

@@ -162,8 +162,8 @@ class XlsxTest {
         assertEquals("Rich text", ws.cell(4, "A")?.text)
         // Phonetic guides are not part of what the cell shows.
         assertEquals("漢字", ws.cell(4, "B")?.text)
-        // A formula never worked out shows nothing.
-        assertNull(ws.cell(4, "C"))
+        // A formula that came with no result is worked out; see below.
+        assertEquals("#DIV/0!", ws.cell(4, "C")?.text)
 
         // Numbers to the sheet's end, text to the side it reads from, the
         // rest centred; numbers never run on.
@@ -362,6 +362,140 @@ class XlsxTest {
         val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
         assertTrue(ws.truncated)
         assertEquals(listOf("A"), ws.columns.map { it.name })
+    }
+
+    @Test
+    fun `a sheet opens whatever number is in its column of dates`() {
+        // Style 2 is a date. A time in milliseconds there is no day Excel
+        // has; one such cell used to stop the whole sheet being read.
+        val sheet = """<sheetData><row r="1"><c r="A1" s="2"><v>45000</v></c><c r="B1" s="2"><v>1699999999999</v></c>""" +
+            """<c r="C1" s="2"><v>1e999</v></c><c r="D1" s="3"><v>1e308</v></c><c r="E1"><v>NaN</v></c></row></sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet), styles = styles)).sheet(0)
+        assertEquals("15 Mar 23", ws.cell(1, "A")?.text)
+        assertEquals("1.7E+12", ws.cell(1, "B")?.text)
+        // Not numbers at all, though written as a number is: nothing to show.
+        assertNull(ws.cell(1, "C"))
+        assertEquals("1E+308", ws.cell(1, "D")?.text)
+        assertNull(ws.cell(1, "E"))
+    }
+
+    // ---- Formulas that came with no results ------------------------------
+
+    /** A formula cell as a program writes it: the formula, and an empty place where Excel would keep what it comes to. */
+    private fun formula(address: String, text: String, style: Int = 0) =
+        """<c r="$address" s="$style"><f>${text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")}</f><v></v></c>"""
+
+    @Test
+    fun `formulas that came with no results are worked out, as Excel works them out on opening`() {
+        val sheet = """<sheetData>
+            <row r="1"><c r="A1"><v>1250</v></c><c r="B1"><v>0.314</v></c><c r="C1" t="inlineStr"><is><t>North</t></is></c></row>
+            <row r="2"><c r="A2"><v>830</v></c><c r="B2"><v>0.208</v></c><c r="C2" t="inlineStr"><is><t>South</t></is></c></row>
+            <row r="3"><c r="A3"><v>1422</v></c><c r="B3"><v>0.478</v></c></row>
+            <row r="4">${formula("A4", "SUM(A1:A3)")}${formula("B4", "SUM(B1:B3)", style = 3)}${formula("C4", "C1&\" and \"&C2")}</row>
+            <row r="5">${formula("A5", "A4/3")}${formula("B5", "A1>A2")}${formula("C5", "A1/0")}${formula("D5", "IF(A4>3000,\"over\",\"under\")")}</row>
+            <row r="6">${formula("A6", "A5*2")}${formula("B6", "\"\"")}</row>
+        </sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet), styles = styles)).sheet(0)
+        // The totals of a report written by a program were blank: there was nothing beside the formula to show.
+        assertEquals("3502", ws.cell(4, "A")?.text)
+        // Written the way the cell says numbers are written.
+        assertEquals("100.0%", ws.cell(4, "B")?.text)
+        assertEquals("North and South", ws.cell(4, "C")?.text)
+        assertEquals("1167.333333", ws.cell(5, "A")?.text)
+        assertEquals("TRUE", ws.cell(5, "B")?.text)
+        assertEquals("#DIV/0!", ws.cell(5, "C")?.text)
+        assertEquals("over", ws.cell(5, "D")?.text)
+        // One formula resting on another.
+        assertEquals("2334.666667", ws.cell(6, "A")?.text)
+        // A number is a number: to the end of its cell, and rounded to fit it.
+        assertEquals(CellAlign.END, ws.cell(4, "A")?.align)
+        assertTrue(ws.cell(5, "A")!!.numeric)
+        assertEquals(1167.3333333333333, ws.cell(5, "A")!!.number!!, 1e-9)
+        assertEquals(CellAlign.CENTER, ws.cell(5, "B")?.align)
+        // One that comes to no text at all is an empty cell.
+        assertNull(ws.cell(6, "B"))
+    }
+
+    @Test
+    fun `a result that came with the formula is what is shown, whatever the formula`() {
+        val sheet = """<sheetData>
+            <row r="1"><c r="A1"><v>2</v></c><c r="B1"><f>A1*2</f><v>99</v></c><c r="C1" t="str"><f>IF(A1>5,"big","")</f><v></v></c>
+                <c r="D1" t="str"><f>A1&amp;"x"</f><v>kept</v></c><c r="E1"><f t="shared" si="0"/></c></row>
+        </sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        assertEquals("99", ws.cell(1, "B")?.text)
+        // No text is a result too: Excel worked it out, and it came to nothing.
+        assertNull(ws.cell(1, "C"))
+        assertEquals("kept", ws.cell(1, "D")?.text)
+        // One of several cells sharing a formula kept in another of them: nothing here to work out.
+        assertNull(ws.cell(1, "E"))
+    }
+
+    @Test
+    fun `a formula that uses what isn't worked out here is shown as it is written`() {
+        val sheet = """<sheetData>
+            <row r="1"><c r="A1"><v>2</v></c>${formula("B1", "VLOOKUP(A1,Prices!A:B,2,FALSE)")}${formula("C1", "B1*2")}${formula("D1", "A1*2")}
+                <c r="E1"><f t="array" ref="E1:E2">A1:A2*2</f><v></v></c></row>
+        </sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        // What the file says, rather than a number that might be wrong - or a blank.
+        assertEquals("=VLOOKUP(A1,Prices!A:B,2,FALSE)", ws.cell(1, "B")?.text)
+        assertEquals(CellAlign.LEFT, ws.cell(1, "B")?.align)
+        // And so is one that rests on it.
+        assertEquals("=B1*2", ws.cell(1, "C")?.text)
+        assertEquals("4", ws.cell(1, "D")?.text)
+        assertEquals("=A1:A2*2", ws.cell(1, "E")?.text)
+    }
+
+    @Test
+    fun `a running total, and one that rests on the rows below it, are both followed to their end`() {
+        val last = 2_000
+        val rows = (1..last).joinToString("") { r ->
+            val down = if (r == 1) "A1" else "B${r - 1}+A$r"
+            val up = if (r == last) "A$last" else "C${r + 1}+A$r"
+            """<row r="$r"><c r="A$r"><v>$r</v></c>${formula("B$r", down)}${formula("C$r", up)}</row>"""
+        }
+        val ws = Xlsx.read(xlsx(listOf("S" to "<sheetData>$rows</sheetData>"))).sheet(0)
+        val total = (last * (last + 1) / 2).toString()
+        assertEquals(total, ws.cell(last, "B")?.text)
+        assertEquals("3", ws.cell(2, "B")?.text)
+        // Each resting on the one after it: two thousand deep from the top.
+        assertEquals(total, ws.cell(1, "C")?.text)
+        assertEquals((last + last - 1).toString(), ws.cell(last - 1, "C")?.text)
+    }
+
+    @Test
+    fun `a total reaching into rows or columns that were never read is not worked out from the part that was`() {
+        // A sheet longer than is shown is read only so far. Its total, kept
+        // at the top, would have come to the total of the rows read - a
+        // number, and the wrong one.
+        val rows = (2..Xlsx.MAX_ROWS + 5).joinToString("") { """<row r="$it"><c r="A$it"><v>1</v></c></row>""" }
+        val long = """<sheetData><row r="1">${formula("B1", "SUM(A2:A${Xlsx.MAX_ROWS + 5})")}${formula("C1", "SUM(A2:A${Xlsx.MAX_ROWS})")}""" +
+            """${formula("D1", "SUM(A2:A100)")}${formula("E1", "A${Xlsx.MAX_ROWS + 1}+1")}${formula("F1", "D1*2")}${formula("G1", "B1*2")}</row>$rows</sheetData>"""
+        val cut = Xlsx.read(xlsx(listOf("S" to long))).sheet(0)
+        assertTrue(cut.truncated)
+        assertEquals("=SUM(A2:A${Xlsx.MAX_ROWS + 5})", cut.cell(1, "B")?.text)
+        // All of what it adds up was read: that one is right.
+        assertEquals((Xlsx.MAX_ROWS - 1).toString(), cut.cell(1, "C")?.text)
+        assertEquals("99", cut.cell(1, "D")?.text)
+        assertEquals("=A${Xlsx.MAX_ROWS + 1}+1", cut.cell(1, "E")?.text)
+        assertEquals("198", cut.cell(1, "F")?.text)
+        assertEquals("=B1*2", cut.cell(1, "G")?.text)
+
+        // And across: cells past the last column shown are left out too.
+        val far = columnName(Xlsx.MAX_COLUMNS + 40)
+        val wide = """<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="${far}1"><v>5</v></c></row>""" +
+            """<row r="2">${formula("A2", "SUM(A1:${far}1)")}${formula("B2", "SUM(A1:B1)")}</row></sheetData>"""
+        val across = Xlsx.read(xlsx(listOf("S" to wide))).sheet(0)
+        assertEquals("=SUM(A1:${far}1)", across.cell(2, "A")?.text)
+        assertEquals("3", across.cell(2, "B")?.text)
+    }
+
+    @Test
+    fun `formulas that rest on one another in a circle are shown as written`() {
+        val sheet = """<sheetData><row r="1">${formula("A1", "B1+1")}${formula("B1", "C1+1")}${formula("C1", "A1+1")}${formula("D1", "D1")}${formula("E1", "1+1")}</row></sheetData>"""
+        val ws = Xlsx.read(xlsx(listOf("S" to sheet))).sheet(0)
+        assertEquals(listOf("=B1+1", "=C1+1", "=A1+1", "=D1", "2"), listOf("A", "B", "C", "D", "E").map { ws.cell(1, it)?.text })
     }
 
     // ---- Files made to break a reader ------------------------------------
