@@ -473,12 +473,15 @@ enum CopyError {
     Write(FileError),
 }
 
-/// Copy one entry's contents to `out`, telling a read failure from a write one.
-fn copy_entry(job: &Job, from: &mut dyn Read, out: &Path) -> std::result::Result<(), CopyError> {
+/// Copy one entry's contents to `out`, telling a read failure from a write
+/// one. Hands back how many bytes came out, which is not always how many the
+/// archive said there were.
+fn copy_entry(job: &Job, from: &mut dyn Read, out: &Path) -> std::result::Result<u64, CopyError> {
     job.start_file(out).map_err(CopyError::Write)?;
     let file = File::create(out).map_err(|e| CopyError::Write(FileError::from_io(e, out)))?;
     let mut writer = BufWriter::new(file);
     let mut buffer = vec![0u8; 64 * 1024];
+    let mut copied = 0u64;
     loop {
         let n = match from.read(&mut buffer) {
             Ok(0) => break,
@@ -487,8 +490,21 @@ fn copy_entry(job: &Job, from: &mut dyn Read, out: &Path) -> std::result::Result
             Err(e) => return Err(CopyError::Read(e)),
         };
         writer.write_all(&buffer[..n]).map_err(|e| CopyError::Write(FileError::from_io(e, out)))?;
+        copied += n as u64;
     }
-    writer.flush().map_err(|e| CopyError::Write(FileError::from_io(e, out)))
+    writer.flush().map_err(|e| CopyError::Write(FileError::from_io(e, out)))?;
+    Ok(copied)
+}
+
+/// A file that stopped before the archive says it ends.
+///
+/// The 7z library checks what it reads against its checksum only once all of
+/// it has been read, so data that simply stops is no error to it. And with
+/// the wrong password an archive decrypts into nonsense, which about once in
+/// 256 times begins with the mark for "no more data": every file then came
+/// out empty, with nothing said, and the extraction was reported as done.
+fn cut_short() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "a file in the archive ends before it should")
 }
 
 fn damaged(err: std::io::Error) -> FileError {
@@ -559,12 +575,18 @@ fn extract_zip(archive: &Path, password: Option<String>, job: &Job) -> Result<u6
             continue;
         }
         let out_path = free_path(&out_path);
-        job.start_file(&out_path)?;
-
-        let mut out = BufWriter::new(
-            File::create(&out_path).map_err(|e| FileError::from_io(e, &out_path))?,
-        );
-        std::io::copy(&mut entry, &mut out)?;
+        let locked = entry.encrypted();
+        match copy_entry(job, &mut entry, &out_path) {
+            Ok(_) => {}
+            // A password is checked against one byte of an old-style zip,
+            // or two of a newer one, before anything is read with it: one
+            // wrong password in 256, or in 65,536, passes, and then what is
+            // read is nonsense. That is still a wrong password - said as a
+            // damaged archive, it sent people away from a file that was fine.
+            Err(CopyError::Read(_)) if locked && password.is_some() => return Err(FileError::WrongPassword),
+            Err(CopyError::Read(e)) => return Err(damaged(e)),
+            Err(CopyError::Write(e)) => return Err(e),
+        }
 
         done += 1;
         job.wrote(done, total, &out_path);
@@ -636,7 +658,9 @@ fn extract_7z(archive: &Path, password: Option<String>, job: &Job) -> Result<u64
         let Some(out) = out else {
             // Read to the end all the same. The library does not skip what is
             // left of an entry, so the next one would start with the rest of it.
-            std::io::copy(data, &mut std::io::sink())?;
+            if std::io::copy(data, &mut std::io::sink())? < entry.size {
+                return Err(cut_short().into());
+            }
             return Ok(true);
         };
         if entry.is_directory {
@@ -648,7 +672,9 @@ fn extract_7z(archive: &Path, password: Option<String>, job: &Job) -> Result<u64
         }
         let out = free_path(&out);
         match copy_entry(job, data, &out) {
-            Ok(()) => {}
+            // Less of it than there is: handed back as the bad data it is.
+            Ok(copied) if copied < entry.size => return Err(cut_short().into()),
+            Ok(_) => {}
             // Handed back to the library, which knows whether the archive is
             // encrypted and so whether bad data means a bad password.
             Err(CopyError::Read(e)) => return Err(e.into()),
@@ -849,7 +875,7 @@ fn extract_tar(reader: impl Read, job: &Job) -> Result<u64> {
         let out = if kind.is_file() {
             let Some(out) = job.file_path(&name) else { continue };
             match copy_entry(job, &mut entry, &out) {
-                Ok(()) => {}
+                Ok(_) => {}
                 Err(CopyError::Read(e)) => return Err(damaged(e)),
                 Err(CopyError::Write(e)) => return Err(e),
             }
@@ -937,7 +963,7 @@ fn extract_compressed(archive: &Path, kind: Compression, job: &Job) -> Result<u6
     let out = free_path(&job.dest.join(single_name(archive)));
     job.check()?;
     match copy_entry(job, &mut whole, &out) {
-        Ok(()) => {}
+        Ok(_) => {}
         Err(CopyError::Read(e)) => return Err(damaged(e)),
         Err(CopyError::Write(e)) => return Err(e),
     }
