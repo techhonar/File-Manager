@@ -2322,6 +2322,94 @@ fn a_protected_7z_asks_for_its_password_and_refuses_a_wrong_one() {
     }
 }
 
+/// Whether the 7z library itself lets `password` through: every file read
+/// without a word of complaint, and less of it than the archive says there is.
+fn the_library_lets_through(archive: &Path, password: &str) -> bool {
+    use sevenz_rust2::{ArchiveReader, Password};
+    let Ok(mut reader) = ArchiveReader::open(archive, Password::from(password)) else { return false };
+    let mut short = false;
+    let walked = reader.for_each_entries(|entry, data| {
+        if std::io::copy(data, &mut std::io::sink())? < entry.size {
+            short = true;
+        }
+        Ok(true)
+    });
+    walked.is_ok() && short
+}
+
+#[test]
+fn a_wrong_7z_password_is_refused_even_when_the_nonsense_it_unlocks_ends_cleanly() {
+    // With the wrong password an archive decrypts into nonsense, and about
+    // once in 256 times the nonsense begins with the mark for "no more
+    // data". The library checks a file against its checksum only once it
+    // has read all of it, so to the library that was a file that had ended:
+    // both files were written out empty and the extraction reported as done.
+    // The test above met it by chance, building a release; this one goes
+    // looking for a password it happens with.
+    let tree = TempTree::new("7z-lucky");
+    let archive = tree.path().join("album.7z");
+    sample_7z(&archive, Some("secret"), false);
+    let lucky = (0..20_000)
+        .map(|n| format!("wrong-{n}"))
+        .find(|password| the_library_lets_through(&archive, password))
+        .expect("no wrong password is let through any more: the library checks for itself now, and this test can go");
+
+    let result = unpack(&tree, &archive, Some(&lucky));
+    assert!(matches!(result, Err(FileError::WrongPassword)), "{lucky}: {result:?}");
+    assert!(
+        !tree.path().join("out/album/one.txt").exists(),
+        "an empty file was left where the real one should be",
+    );
+    // And the right one still opens it.
+    unpack(&tree, &archive, Some("secret")).unwrap();
+    assert_7z_unpacked(&tree);
+}
+
+#[test]
+fn nonsense_read_out_of_a_locked_zip_is_a_wrong_password_not_a_damaged_archive() {
+    // A zip checks a password against a byte or two before it reads
+    // anything with it, so now and then a wrong one passes, and what is read
+    // is nonsense. Here the same is had without waiting on chance: the right
+    // password, and a byte of the locked data changed.
+    let tree = TempTree::new("zip-nonsense");
+    let locked = tree.path().join("locked.zip");
+    let mut contents = Vec::new();
+    let mut seed = 12345u32;
+    for _ in 0..4096 {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        contents.push((seed >> 16) as u8);
+    }
+    encrypted_zip(&locked, "hunter2", &contents);
+    let mut bytes = fs::read(&locked).unwrap();
+    // Past the entry's header, its name and extra field, and the salt and
+    // check bytes the locked data begins with.
+    let name = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
+    let extra = u16::from_le_bytes([bytes[28], bytes[29]]) as usize;
+    bytes[30 + name + extra + 18 + 100] ^= 0xFF;
+    fs::write(&locked, bytes).unwrap();
+
+    let result = unpack(&tree, &locked, Some("hunter2"));
+    assert!(matches!(result, Err(FileError::WrongPassword)), "{result:?}");
+    assert!(!tree.path().join("out/secret.txt").exists(), "half a file was left behind");
+
+    // With no lock on it, the same damage is damage.
+    let plain = tree.path().join("plain.zip");
+    {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(fs::File::create(&plain).unwrap());
+        writer.start_file("open.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&contents).unwrap();
+        writer.finish().unwrap();
+    }
+    let mut bytes = fs::read(&plain).unwrap();
+    let name = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
+    let extra = u16::from_le_bytes([bytes[28], bytes[29]]) as usize;
+    bytes[30 + name + extra + 100] ^= 0xFF;
+    fs::write(&plain, bytes).unwrap();
+    let result = unpack(&tree, &plain, Some("hunter2"));
+    assert!(matches!(result, Err(FileError::Archive { .. })), "{result:?}");
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
