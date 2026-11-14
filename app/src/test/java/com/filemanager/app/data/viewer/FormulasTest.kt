@@ -7,7 +7,10 @@ import org.junit.Test
 class FormulasTest {
 
     /** A sheet of the cells given, by address: numbers, text, TRUE and FALSE, and errors as "#...". */
-    private fun sheet(vararg cells: Pair<String, Any>): Formulas {
+    private fun sheet(vararg cells: Pair<String, Any>): Formulas = Formulas(cells(emptyMap(), *cells))
+
+    /** The same, with [others] as the workbook's other sheets, by their names in lower case. */
+    private fun cells(others: Map<String, FormulaCells>, vararg cells: Pair<String, Any>, readThrough: Int = Int.MAX_VALUE): FormulaCells {
         fun held(value: Any): CellValue = when (value) {
             is Number -> CellValue.Number(value.toDouble())
             is Boolean -> CellValue.Logical(value)
@@ -16,18 +19,18 @@ class FormulasTest {
         }
         val held: Map<Pair<Int, Int>, CellValue> =
             cells.associate { (address, value) -> (rowOf(address)!! to columnOf(address)!!) to held(value) }
-        return Formulas(
-            object : FormulaCells {
-                override val lastRow = held.keys.maxOfOrNull { it.first } ?: 0
-                override val lastColumn = held.keys.maxOfOrNull { it.second } ?: 0
-                override fun at(row: Int, column: Int): CellValue = held[row to column] ?: CellValue.Empty
-                override fun within(firstRow: Int, firstColumn: Int, lastRow: Int, lastColumn: Int, each: (CellValue) -> Unit) {
-                    for ((where, value) in held) {
-                        if (where.first in firstRow..lastRow && where.second in firstColumn..lastColumn) each(value)
-                    }
+        return object : FormulaCells {
+            override val lastRow = held.keys.maxOfOrNull { it.first } ?: 0
+            override val lastColumn = held.keys.maxOfOrNull { it.second } ?: 0
+            override val readThroughRow = readThrough
+            override fun at(row: Int, column: Int): CellValue = held[row to column] ?: CellValue.Empty
+            override fun within(firstRow: Int, firstColumn: Int, lastRow: Int, lastColumn: Int, each: (CellValue) -> Unit) {
+                for ((where, value) in held) {
+                    if (where.first in firstRow..lastRow && where.second in firstColumn..lastColumn) each(value)
                 }
-            },
-        )
+            }
+            override fun sheet(name: String): FormulaCells? = others[name.lowercase()]
+        }
     }
 
     private val numbers = sheet(
@@ -181,6 +184,109 @@ class FormulasTest {
         assertEquals(1.0, number("(".repeat(40) + "1" + ")".repeat(40)), 0.0)
         // Nor signs a thousand long refused: they cost nothing.
         assertEquals(-1.0, number("-".repeat(1_001) + "1"), 0.0)
+    }
+
+    /** A sheet of orders: who for, whether open, how much, how many - with a gap, text that spells a number, and an error. */
+    private val orders = cells(
+        emptyMap(),
+        "A1" to "north", "B1" to "open", "C1" to 120, "D1" to 3,
+        "A2" to "South", "B2" to "closed", "C2" to -40, "D2" to 5,
+        "A3" to "NORTH", "B3" to "open", "C3" to 75.5, "D3" to 3,
+        "A4" to "east", "B4" to "open", "C4" to 0, "D4" to 8,
+        "A5" to "northern", "B5" to "closed", "C5" to 9, "D5" to "5",
+        "B6" to "open", "C6" to 44,
+        "A7" to "n?rth", "B7" to "hold", "C7" to "#N/A", "D7" to 5,
+        "A8" to true, "C8" to 2,
+    )
+    private val report = Formulas(cells(mapOf("orders" to orders, "my orders" to orders), "A1" to "north", "A2" to ">0", "A3" to 5))
+
+    @Test
+    fun `counting the cells of another sheet that are what was asked for`() {
+        fun count(asked: String, range: String = "A1:A8") = number("COUNTIF(Orders!$range,$asked)", report)
+        // Whatever the case, the whole of the cell.
+        assertEquals(2.0, count("\"north\""), 0.0)
+        assertEquals(2.0, count("\"=NORTH\""), 0.0)
+        // Any letters for *, any one for ?, and either as itself after ~.
+        assertEquals(4.0, count("\"n*\""), 0.0)
+        assertEquals(2.0, count("\"?orth\""), 0.0)
+        assertEquals(1.0, count("\"n~?rth\""), 0.0)
+        assertEquals(5.0, count("\"*th*\""), 0.0)
+        // Not being it counts everything else, the empty cell and TRUE too.
+        assertEquals(6.0, count("\"<>north\""), 0.0)
+        assertEquals(1.0, count("\"\""), 0.0)
+        assertEquals(7.0, count("\"<>\""), 0.0)
+        assertEquals(1.0, count("TRUE"), 0.0)
+        // Past the last cell with anything in it, they are all empty: counted, when empty is what was asked.
+        assertEquals(93.0, count("\"\"", "A1:A100"), 0.0)
+        assertEquals(98.0, count("\"<>north\"", "A1:A100"), 0.0)
+        assertEquals(2.0, count("\"north\"", "A1:A100"), 0.0)
+        // Numbers: more and less are for numbers only, and an error is no number.
+        assertEquals(5.0, count("\">0\"", "C1:C8"), 0.0)
+        assertEquals(1.0, count("\"<0\"", "C1:C8"), 0.0)
+        assertEquals(2.0, count("\">=75.5\"", "C1:C8"), 0.0)
+        assertEquals(1.0, count("0", "C1:C8"), 0.0)
+        // Everything that is not 0, the error with it.
+        assertEquals(7.0, count("\"<>0\"", "C1:C8"), 0.0)
+        // Text that spells the number is taken for it.
+        assertEquals(3.0, count("5", "D1:D8"), 0.0)
+        assertEquals(3.0, count("\"5\"", "D1:D8"), 0.0)
+        // Asked for by a cell of the formula's own sheet.
+        assertEquals(2.0, count("A1"), 0.0)
+        assertEquals(5.0, count("A2", "C1:C8"), 0.0)
+        assertEquals(3.0, count("A3", "D1:D8"), 0.0)
+        // An empty cell asks for 0.
+        assertEquals(1.0, count("Z9", "C1:C8"), 0.0)
+        // An error is counted by its name, and is not whatever else was asked not to be.
+        assertEquals(1.0, count("\"#N/A\"", "C1:C8"), 0.0)
+        assertEquals(7.0, count("\"<>#N/A\"", "C1:C8"), 0.0)
+        assertEquals(1.0, count("Orders!C7", "C1:C8"), 0.0)
+        // Over a block, not only down a column.
+        assertEquals(4.0, count("\"open\"", "A1:D8"), 0.0)
+    }
+
+    @Test
+    fun `counting, adding up and averaging by several conditions at once`() {
+        assertEquals(2.0, number("COUNTIFS('Orders'!\$A\$1:\$A\$8,\"north\",'Orders'!\$C\$1:\$C\$8,\">0\")", report), 0.0)
+        assertEquals(1.0, number("COUNTIFS(Orders!B1:B8,\"open\",Orders!D1:D8,\">=4\")", report), 0.0)
+        assertEquals(195.5, number("SUMIFS('My orders'!C1:C8,'My orders'!A1:A8,\"north\",'My orders'!B1:B8,\"open\")", report), 0.0)
+        assertEquals(31.0, number("ABS(SUMIFS(Orders!C1:C8,Orders!B1:B8,\"closed\"))", report), 0.0)
+        assertEquals(195.5, number("SUMIF(Orders!A1:A8,\"north\",Orders!C1:C8)", report), 0.0)
+        // Only where it begins counts, of what is added up.
+        assertEquals(195.5, number("SUMIF(Orders!A1:A8,\"north\",Orders!C1)", report), 0.0)
+        // With nothing else said, what is looked through is what is added up.
+        assertEquals(248.5, number("SUMIF(Orders!C1:C6,\">0\")", report), 0.0)
+        assertEquals(0.0, number("SUMIF(Orders!A1:A8,\"nobody\",Orders!C1:C8)", report), 0.0)
+        assertEquals(97.75, number("AVERAGEIF(Orders!A1:A8,\"north\",Orders!C1:C8)", report), 0.0)
+        assertEquals(79.83333333333333, number("AVERAGEIFS(Orders!C1:C8,Orders!B1:B8,\"open\",Orders!C1:C8,\">0\")", report), 1e-9)
+        assertEquals("#DIV/0!", error("AVERAGEIF(Orders!A1:A8,\"nobody\",Orders!C1:C8)", report))
+        // An error among what is added up is what the sum comes to; one that isn't, is passed by.
+        assertEquals("#N/A", error("SUMIF(Orders!B1:B8,\"hold\",Orders!C1:C8)", report))
+        assertEquals(239.5, number("SUMIF(Orders!B1:B8,\"open\",Orders!C1:C8)", report), 0.0)
+        // Ranges that are not the same shape answer place to place for nothing.
+        assertEquals("#VALUE!", error("COUNTIFS(Orders!A1:A8,\"north\",Orders!C1:C5,\">0\")", report))
+        assertEquals("#VALUE!", error("SUMIFS(Orders!C1:C8,Orders!A1:A4,\"north\")", report))
+    }
+
+    @Test
+    fun `cells of another sheet, by its name with or without quotes`() {
+        assertEquals(121.0, number("Orders!C1+1", report), 0.0)
+        assertEquals(121.0, number("'Orders'!\$C\$1+1", report), 0.0)
+        assertEquals(121.0, number("ORDERS!C1+1", report), 0.0)
+        assertEquals(75.5, number("'My orders'!C3", report), 0.0)
+        assertEquals(210.5, number("SUM(Orders!C1:C8)-C9", Formulas(cells(mapOf("orders" to cells(emptyMap(), "C1" to 120, "C2" to 90.5))))), 0.0)
+        assertEquals("north open", text("Orders!A1&\" \"&Orders!B1", report))
+        // A sheet that isn't there, another workbook's, several at once, a whole column: not made up.
+        listOf(
+            "Nowhere!A1", "'No such'!A1", "[1]Orders!A1", "'[Book.xlsx]Orders'!A1", "Orders:Other!A1", "'Orders:Other'!A1",
+            "Orders!A:A", "COUNTIF(Orders!A:A,\"north\")", "Orders!", "'Orders'", "'Orders!A1", "Orders!A1:Orders!A3",
+            "COUNTIF(Orders!A1:A8)", "COUNTIF(1,1)", "COUNTIFS(Orders!A1:A8,1,Orders!B1:B8)", "SUMIFS(Orders!C1:C8,Orders!A1:A8)", "SUMIF(Orders!A1:A8)",
+        ).forEach { assertNull(it, report.evaluate(it)) }
+        // Nor what reaches into rows of it that were never read.
+        val cut = Formulas(cells(mapOf("long" to cells(emptyMap(), "A1" to 1, "A2" to 2, readThrough = 2))))
+        assertEquals(3.0, number("SUM(Long!A1:A2)", cut), 0.0)
+        assertNull(cut.evaluate("SUM(Long!A1:A3)"))
+        assertNull(cut.evaluate("COUNTIF(Long!A1:A3,1)"))
+        assertNull(cut.evaluate("SUMIF(Long!A1:A2,1,Long!A2)"))
     }
 
     @Test
