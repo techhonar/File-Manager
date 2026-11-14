@@ -4,6 +4,7 @@ import org.xml.sax.Attributes
 import org.xml.sax.SAXException
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
@@ -124,6 +125,12 @@ class Spreadsheet internal constructor(
     private val strings: SharedStrings,
     private val styles: Styles,
     private val date1904: Boolean,
+    /**
+     * Every worksheet's part by its name in lower case - the hidden ones
+     * too: a report's formulas count and add up a sheet of data that is
+     * often kept out of sight.
+     */
+    private val everySheet: Map<String, String> = emptyMap(),
 ) {
     fun sheet(index: Int): Worksheet = ZipFile(file).use { zip ->
         val handler = SheetHandler(strings, styles, date1904)
@@ -133,10 +140,38 @@ class Spreadsheet internal constructor(
         } catch (e: SAXException) {
             if (!handler.stopped) throw e
         }
-        val sheet = handler.build(strings.truncated || parts.cutShort)
+        val cutShort = strings.truncated || parts.cutShort
+        // With some of the workbook left out, cells that had something are
+        // empty, and a formula reading them would be worked out wrong.
+        if (!cutShort) {
+            var sheetsRead = 0
+            var cellsRead = 0
+            lateinit var solving: Solving
+            solving = Solving { name ->
+                val part = everySheet[name]
+                if (part == null || ++sheetsRead > MAX_OTHER_SHEETS) return@Solving null
+                val other = SheetHandler(strings, styles, date1904)
+                try {
+                    parts.parse(part, other)
+                } catch (e: SAXException) {
+                    if (!other.stopped) return@Solving null
+                }
+                cellsRead += other.cellCount
+                // Not all of it read, or more than is held for the sake of
+                // another sheet's formulas: what it holds is not known.
+                if (parts.cutShort || cellsRead > Xlsx.MAX_CELLS) null else other.formulaCells(solving)
+            }
+            handler.solve(solving, sheetNames[index])
+        }
+        val sheet = handler.build(cutShort)
         // Read as far as a file is, with nothing to show for it: not an empty sheet.
         if (parts.cutShort && sheet.rows.isEmpty()) throw TooLarge()
         sheet
+    }
+
+    private companion object {
+        /** Other sheets read for the sake of one sheet's formulas. */
+        const val MAX_OTHER_SHEETS = 8
     }
 }
 
@@ -197,7 +232,11 @@ object Xlsx {
             handler.strings(cutShort = parts.cutShort)
         } ?: SharedStrings.NONE
         if (parts.cutShort && sheets.isEmpty()) throw TooLarge()
-        Spreadsheet(file, sheets.map { it.first }, sheets.map { it.second }, strings, styles, workbook.date1904)
+        val everySheet = HashMap<String, String>()
+        for ((name, id) in workbook.every) {
+            links[id]?.takeIf { it.kind == "worksheet" }?.let { everySheet.putIfAbsent(name.lowercase(), it.target) }
+        }
+        Spreadsheet(file, sheets.map { it.first }, sheets.map { it.second }, strings, styles, workbook.date1904, everySheet)
     }
 }
 
@@ -282,6 +321,9 @@ private const val MAX_SHEET_NAME = 100
 private class WorkbookHandler : OoxmlHandler() {
     /** Each sheet's name and relationship id, in the workbook's order, without the hidden ones. */
     val sheets = ArrayList<Pair<String, String>>()
+
+    /** The same of every sheet, hidden or not: a formula can read a sheet that isn't shown. */
+    val every = ArrayList<Pair<String, String>>()
     var date1904 = false
         private set
 
@@ -289,11 +331,13 @@ private class WorkbookHandler : OoxmlHandler() {
         when (localName) {
             "sheet" -> {
                 val state = attributes.attr("state")
-                if (state == "hidden" || state == "veryHidden") return
                 val id = attributes.relationship("id") ?: return
-                if (sheets.size >= Xlsx.MAX_SHEETS) return
                 // Excel's names are 31 characters at most.
-                sheets += (attributes.attr("name")?.take(MAX_SHEET_NAME) ?: "Sheet ${sheets.size + 1}") to id
+                val name = attributes.attr("name")?.take(MAX_SHEET_NAME)
+                if (name != null && every.size < Xlsx.MAX_SHEETS * 2) every += name to id
+                if (state == "hidden" || state == "veryHidden") return
+                if (sheets.size >= Xlsx.MAX_SHEETS) return
+                sheets += (name ?: "Sheet ${sheets.size + 1}") to id
             }
             "workbookPr" -> date1904 = attributes.attr("date1904").isTrue()
         }
@@ -567,6 +611,31 @@ internal fun columnName(number: Int): String {
     return letters.reverse().toString()
 }
 
+/**
+ * What working out one sheet's formulas shares with the other sheets they
+ * read: how many cells have been looked at, how far one formula resting on
+ * another has been followed, and which time round the formulas it is.
+ * [read] gets another sheet by its name in lower case, or null if it can't
+ * be had; each is asked for once.
+ */
+private class Solving(private val read: (String) -> FormulaCells?) {
+    var looked = 0
+    var depth = 0
+    var round = 0
+    private val sheets = HashMap<String, FormulaCells?>()
+
+    fun sheet(name: String): FormulaCells? {
+        val key = name.lowercase()
+        if (key !in sheets) sheets[key] = read(key)
+        return sheets[key]
+    }
+
+    /** The sheet being worked out, under its own name: already read, and not to be read again. */
+    fun known(name: String, cells: FormulaCells) {
+        sheets[name.lowercase()] = cells
+    }
+}
+
 private class SheetHandler(
     private val strings: SharedStrings,
     private val styles: Styles,
@@ -825,20 +894,19 @@ private class SheetHandler(
      * worked out is shown as it is written, with its = - what the file says,
      * rather than a blank where a total should be.
      */
-    private inner class Solver(private val unsolved: List<Raw>) : FormulaCells {
+    private inner class Solver(private val solving: Solving) : FormulaCells {
         private val byRow = HashMap<Int, ArrayList<Raw>>()
         private val byCell = HashMap<Long, Raw>()
-        override val lastRow: Int = cells.maxOf { it.row }
-        override val lastColumn: Int = cells.maxOf { it.column }
+        override val lastRow: Int = cells.maxOfOrNull { it.row } ?: 0
+        override val lastColumn: Int = cells.maxOfOrNull { it.column } ?: 0
 
         // A sheet cut short at the most rows or columns shown: a total that
         // reaches past them would be the total of the part that was read.
         override val readThroughRow: Int = if (unreadFromRow == Int.MAX_VALUE) Int.MAX_VALUE else unreadFromRow - 1
         override val readThroughColumn: Int = if (columnsCut) Xlsx.MAX_COLUMNS else Int.MAX_VALUE
         private val formulas = Formulas(this)
-        private var looked = 0
-        private var depth = 0
-        private var round = 0
+
+        override fun sheet(name: String): FormulaCells? = solving.sheet(name)
 
         init {
             for (cell in cells) {
@@ -865,7 +933,9 @@ private class SheetHandler(
 
         /** One more cell looked at, of as many as are for one sheet's formulas. */
         private fun look() {
-            if (++looked > MAX_FORMULA_CELLS) throw NotWorkedOut()
+            if (++solving.looked > MAX_FORMULA_CELLS) throw NotWorkedOut()
+            // The screen that asked for the sheet has gone: nobody is waiting for this.
+            if (solving.looked and 0xFFFF == 0 && Thread.currentThread().isInterrupted) throw InterruptedIOException()
         }
 
         private fun valueOf(cell: Raw): CellValue = when {
@@ -881,7 +951,7 @@ private class SheetHandler(
             cell.state == WORKING -> throw NotWorkedOut()
             // A chain of formulas each resting on the next is followed only
             // so far in one go: the far end is reached first, another time.
-            cell.putOff == round || depth >= MAX_FORMULA_DEPTH -> throw NotWorkedOut(Formulas.LATER)
+            cell.putOff == solving.round || solving.depth >= MAX_FORMULA_DEPTH -> throw NotWorkedOut(Formulas.LATER)
             else -> {
                 workOut(cell)
                 cell.result ?: throw NotWorkedOut()
@@ -890,30 +960,30 @@ private class SheetHandler(
 
         private fun workOut(cell: Raw) {
             cell.state = WORKING
-            depth++
+            solving.depth++
             try {
                 cell.result = formulas.evaluate(cell.formula.orEmpty())
                 cell.state = DONE
             } catch (e: NotWorkedOut) {
                 cell.state = WAITING
-                cell.putOff = round
+                cell.putOff = solving.round
                 throw e
             } finally {
-                depth--
+                solving.depth--
             }
         }
 
-        fun solve() {
+        fun solve(unsolved: List<Raw>) {
             // Down the sheet and then back up it: a running total rests on
             // the row before it, a list totalled at its head on the rows
             // after - either way round, every formula finds the ones it
             // rests on already worked out.
             var order = unsolved
-            while (round < MAX_FORMULA_ROUNDS && order.isNotEmpty()) {
+            while (solving.round < MAX_FORMULA_ROUNDS && order.isNotEmpty()) {
                 val later = ArrayList<Raw>()
                 for (cell in order) {
                     if (cell.state != WAITING) continue
-                    if (cell.putOff == round) {
+                    if (cell.putOff == solving.round) {
                         later += cell
                         continue
                     }
@@ -924,7 +994,7 @@ private class SheetHandler(
                     }
                 }
                 order = later.asReversed()
-                round++
+                solving.round++
             }
             for (cell in unsolved) write(cell)
         }
@@ -938,7 +1008,8 @@ private class SheetHandler(
                 if (format === NumberFormat.GENERAL) cell.number = value
             }
             when (val result = cell.result.takeIf { cell.state == DONE }) {
-                null -> cell.text = "=" + cell.formula
+                // Shown as it is written: see build.
+                null -> Unit
                 is CellValue.Number -> number(result.value)
                 CellValue.Empty -> number(0.0)
                 is CellValue.Text -> cell.text = format.text(result.text)
@@ -954,13 +1025,30 @@ private class SheetHandler(
         }
     }
 
+    /** How many cells were kept: what it costs to hold this sheet for the sake of another's formulas. */
+    val cellCount: Int get() = cells.size
+
+    /** This sheet's cells as a formula on another sheet sees them. */
+    fun formulaCells(solving: Solving): FormulaCells = Solver(solving)
+
+    /**
+     * Works out the formulas that came with no result. [name] is the
+     * sheet's own, by which its formulas may call it as they call another.
+     */
+    fun solve(solving: Solving, name: String) {
+        val unsolved = cells.filter { it.formula != null }
+        if (unsolved.isEmpty()) return
+        val solver = Solver(solving)
+        solving.known(name, solver)
+        solver.solve(unsolved)
+    }
+
     fun build(textTruncated: Boolean): Worksheet {
         val unsolved = cells.filter { it.formula != null }
         if (unsolved.isNotEmpty()) {
-            // With some of the workbook's text left out - too much of it to
-            // hold - cells that had it are empty, and a formula reading them
-            // would be worked out wrong: each is shown as it is written.
-            if (textTruncated) unsolved.forEach { it.text = "=" + it.formula } else Solver(unsolved).solve()
+            // One not worked out - none are, when some of the workbook was
+            // left out - is shown as it is written.
+            for (cell in unsolved) if (cell.state != DONE || cell.result == null) cell.text = "=" + cell.formula
             // One that came to no text at all is an empty cell like any other.
             cells.removeAll { it.formula != null && it.text.isEmpty() && it.look.fill == null && !it.look.centerAcross }
         }

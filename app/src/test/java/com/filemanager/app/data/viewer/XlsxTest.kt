@@ -30,6 +30,8 @@ class XlsxTest {
         workbookExtra: String = "",
         hiddenSheet: Boolean = false,
         chartSheet: Boolean = false,
+        /** What the hidden sheet, "Secret", holds. */
+        hidden: String = "<sheetData/>",
     ): File {
         val file = File(temp.root, "book${System.nanoTime()}.xlsx")
         ZipOutputStream(file.outputStream()).use { zip ->
@@ -52,7 +54,7 @@ class XlsxTest {
             if (hiddenSheet) {
                 sheetList.append("""<sheet name="Secret" sheetId="90" state="hidden" r:id="rId90"/>""")
                 rels.append("""<Relationship Id="rId90" Type="$types/worksheet" Target="worksheets/secret.xml"/>""")
-                put("xl/worksheets/secret.xml", """<worksheet xmlns="$main"><sheetData/></worksheet>""")
+                put("xl/worksheets/secret.xml", """<worksheet xmlns="$main">$hidden</worksheet>""")
             }
             if (chartSheet) {
                 sheetList.append("""<sheet name="Chart1" sheetId="91" r:id="rId91"/>""")
@@ -489,6 +491,73 @@ class XlsxTest {
         val across = Xlsx.read(xlsx(listOf("S" to wide))).sheet(0)
         assertEquals("=SUM(A1:${far}1)", across.cell(2, "A")?.text)
         assertEquals("3", across.cell(2, "B")?.text)
+    }
+
+    // ---- Formulas that read another sheet --------------------------------
+
+    /** A sheet of data: a region, whether its order is open, and an amount, on each of six rows. */
+    private val data = """<sheetData>""" + listOf(
+        Triple("north", "open", 120), Triple("South", "closed", -40), Triple("NORTH", "open", 75),
+        Triple("east", "open", 0), Triple("north", "closed", -12), Triple("west", "open", 55),
+    ).withIndex().joinToString("") { (i, row) ->
+        val r = i + 1
+        """<row r="$r"><c r="A$r" t="inlineStr"><is><t>${row.first}</t></is></c><c r="B$r" t="inlineStr"><is><t>${row.second}</t></is></c>""" +
+            """<c r="C$r"><v>${row.third}</v></c>${formula("D$r", "C$r*2")}</row>"""
+    } + "</sheetData>"
+
+    private fun report(vararg formulas: String) =
+        "<sheetData>" + formulas.withIndex().joinToString("") { (i, text) -> """<row r="${i + 1}">${formula("A${i + 1}", text)}</row>""" } + "</sheetData>"
+
+    @Test
+    fun `a report's formulas count and add up its sheet of data`() {
+        val sheet = report(
+            """COUNTIFS('Data'!${'$'}A${'$'}1:${'$'}A${'$'}6,"north",'Data'!${'$'}C${'$'}1:${'$'}C${'$'}6,">0")""",
+            """SUMIFS('Data'!${'$'}C${'$'}1:${'$'}C${'$'}6,'Data'!${'$'}A${'$'}1:${'$'}A${'$'}6,"north",'Data'!${'$'}B${'$'}1:${'$'}B${'$'}6,"open")""",
+            """ABS(SUMIFS('Data'!${'$'}C${'$'}1:${'$'}C${'$'}6,'Data'!${'$'}B${'$'}1:${'$'}B${'$'}6,"closed"))""",
+            """SUMIF('Data'!${'$'}A${'$'}1:${'$'}A${'$'}6,"north",'Data'!${'$'}C${'$'}1:${'$'}C${'$'}6)""",
+            """IF(A1>0,A2/A1,"none")""",
+            "Data!C1+1",
+            // What it reads is itself a formula with no result, on the other sheet.
+            "SUM(Data!D1:D6)",
+            // Called by its own name, as another sheet would be - and whatever the case.
+            "'Report'!A1*10",
+            "data!C3",
+            "COUNTIF(Data!A1:A6,\"n*\")",
+        )
+        val ws = Xlsx.read(xlsx(listOf("Report" to sheet, "Data" to data))).sheet(0)
+        // These cells were blank: the figures of a report written by a program.
+        assertEquals(listOf("2", "195", "52", "183", "97.5", "121", "396", "20", "75", "3"), (1..10).map { ws.cell(it, "A")?.text })
+    }
+
+    @Test
+    fun `a sheet that is kept out of sight is read all the same, and one that isn't there is not made up`() {
+        val sheet = report("SUM(Secret!C1:C6)", "COUNTIF('Secret'!B1:B6,\"open\")", "Nowhere!A1+1", "SUM(Nowhere!A1:A3)", "[1]Data!A1", "Secret:Report!A1")
+        val ws = Xlsx.read(xlsx(listOf("Report" to sheet), hiddenSheet = true, hidden = data)).sheet(0)
+        assertEquals(listOf("198", "4"), (1..2).map { ws.cell(it, "A")?.text })
+        assertEquals(
+            listOf("=Nowhere!A1+1", "=SUM(Nowhere!A1:A3)", "=[1]Data!A1", "=Secret:Report!A1"),
+            (3..6).map { ws.cell(it, "A")?.text },
+        )
+    }
+
+    @Test
+    fun `a total of another sheet that was not all read is not worked out from the part that was`() {
+        val rows = (1..Xlsx.MAX_ROWS + 5).joinToString("") { """<row r="$it"><c r="A$it"><v>1</v></c></row>""" }
+        val sheet = report("SUM(Long!A1:A${Xlsx.MAX_ROWS + 5})", "SUM(Long!A1:A${Xlsx.MAX_ROWS})", "COUNTIF(Long!A1:A${Xlsx.MAX_ROWS + 5},1)", "COUNTIF(Long!A1:A500,1)")
+        val ws = Xlsx.read(xlsx(listOf("Report" to sheet, "Long" to "<sheetData>$rows</sheetData>"))).sheet(0)
+        assertEquals(
+            listOf("=SUM(Long!A1:A${Xlsx.MAX_ROWS + 5})", Xlsx.MAX_ROWS.toString(), "=COUNTIF(Long!A1:A${Xlsx.MAX_ROWS + 5},1)", "500"),
+            (1..4).map { ws.cell(it, "A")?.text },
+        )
+    }
+
+    @Test
+    fun `sheets whose formulas rest on each other in a circle are shown as written, and those that don't are worked out`() {
+        val one = report("Two!A1+1", "Two!A2+1", "5")
+        val two = report("One!A1+1", "One!A3*2")
+        val book = Xlsx.read(xlsx(listOf("One" to one, "Two" to two)))
+        assertEquals(listOf("=Two!A1+1", "11", "5"), (1..3).map { book.sheet(0).cell(it, "A")?.text })
+        assertEquals(listOf("=One!A1+1", "10"), (1..2).map { book.sheet(1).cell(it, "A")?.text })
     }
 
     @Test
