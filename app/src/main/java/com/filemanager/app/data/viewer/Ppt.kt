@@ -31,6 +31,70 @@ internal object PowerPointBinary {
 
     private const val DOCUMENT_STREAM = "PowerPoint Document"
     private const val CURRENT_USER_STREAM = "Current User"
+    private const val PICTURES_STREAM = "Pictures"
+
+    /** What a picture's name begins with, followed by where in the "Pictures" stream it is. */
+    const val PICTURE_PREFIX = "ppt-picture:"
+
+    /**
+     * The picture called [entry] in [file], as bytes the platform can decode:
+     * a JPEG or PNG as it is, a DIB made a .bmp. Null for anything else - the
+     * metafiles clip art is kept as - and for what is not a picture.
+     */
+    fun picture(file: File, entry: String): ByteArray? {
+        if (!entry.startsWith(PICTURE_PREFIX)) return null
+        val offset = entry.removePrefix(PICTURE_PREFIX).toLongOrNull() ?: return null
+        return CompoundFile(file).use { container ->
+            val size = container.size(PICTURES_STREAM) ?: return@use null
+            if (offset < 0 || offset + 8 > size) return@use null
+            val head = container.read(PICTURES_STREAM, offset, 8) ?: return@use null
+            val length = if (head.size == 8) s32(head, 4) else -1
+            if (length < 0 || length > MAX_PICTURE || offset + 8 + length > size) return@use null
+            val body = container.read(PICTURES_STREAM, offset + 8, length) ?: return@use null
+            blipImage(u16(head, 2), u16(head, 0) ushr 4, body)
+        }
+    }
+
+    /**
+     * The image in a blip - a picture's record in the "Pictures" stream: one
+     * or two ids of its own, a tag, and then the image, which is only a
+     * JPEG or a PNG as it is, or a DIB without the header of a .bmp.
+     */
+    fun blipImage(type: Int, instance: Int, body: ByteArray): ByteArray? {
+        // A second id when the instance is odd.
+        val start = if (instance and 1 == 1) 33 else 17
+        if (body.size <= start) return null
+        return when (type) {
+            0xF01D, 0xF02A -> body.copyOfRange(start, body.size).takeIf { it.size > 4 && it[0] == 0xFF.toByte() && it[1] == 0xD8.toByte() }
+            0xF01E -> body.copyOfRange(start, body.size).takeIf { it.size > 8 && it[0] == 0x89.toByte() && it[1] == 'P'.code.toByte() }
+            0xF01F -> bitmapOf(body.copyOfRange(start, body.size))
+            else -> null
+        }
+    }
+
+    /** A DIB - the header and the pixels - as a .bmp: with the file header in front, saying where the pixels begin. */
+    private fun bitmapOf(dib: ByteArray): ByteArray? {
+        if (dib.size < 40) return null
+        val headerSize = s32(dib, 0)
+        if (headerSize < 12 || headerSize > dib.size) return null
+        val bits = u16(dib, 14)
+        val compression = s32(dib, 16)
+        var colours = s32(dib, 32)
+        if (colours <= 0 && bits <= 8) colours = 1 shl bits
+        colours = colours.coerceIn(0, 256)
+        val masks = if (compression == 3 && headerSize == 40) 12 else 0
+        val pixels = 14 + headerSize + colours * 4 + masks
+        if (pixels > 14 + dib.size) return null
+        val file = ByteArray(14 + dib.size)
+        file[0] = 'B'.code.toByte()
+        file[1] = 'M'.code.toByte()
+        for (i in 0 until 4) {
+            file[2 + i] = (file.size ushr (8 * i)).toByte()
+            file[10 + i] = (pixels ushr (8 * i)).toByte()
+        }
+        dib.copyInto(file, 14)
+        return file
+    }
 
     /** The presentation's stream is held whole to be read: not one of more than this. */
     private const val MAX_STREAM = 64L * 1024 * 1024
@@ -56,6 +120,7 @@ private const val ENVIRONMENT = 0x03F2
 private const val SLIDE_PERSIST = 0x03F3
 private const val MAIN_MASTER = 0x03F8
 private const val SLIDE_SHOW_INFO = 0x03F9
+private const val PP_DRAWING_GROUP = 0x040B
 private const val PP_DRAWING = 0x040C
 private const val FONT_COLLECTION = 0x07D5
 private const val OE_PLACEHOLDER = 0x0BC3
@@ -75,9 +140,23 @@ private const val PERSIST_DIRECTORY = 0x1772
 private const val DG_CONTAINER = 0xF002
 private const val SPGR_CONTAINER = 0xF003
 private const val SP_CONTAINER = 0xF004
+private const val DGG_CONTAINER = 0xF000
+private const val BSTORE_CONTAINER = 0xF001
+private const val BSE = 0xF007
 private const val SP_ATOM = 0xF00A
+private const val OPT = 0xF00B
 private const val CLIENT_TEXTBOX = 0xF00D
+private const val CLIENT_ANCHOR = 0xF010
 private const val CLIENT_DATA = 0xF011
+
+/** The property of a shape that says which picture it shows, by number, from 1. */
+private const val PIB = 0x0104
+
+private const val MAX_BLIPS = 100_000
+private const val MAX_PICTURE = 32 * 1024 * 1024
+
+/** An EMU - the unit a picture is sized in - to a unit of the 576 a page inch is in. */
+private const val EMU_PER_UNIT = 914_400.0 / 576
 
 /** In a "Current User" stream, what says the presentation is password protected. */
 private val ENCRYPTED_TOKEN = 0xF3D1C4DF.toInt()
@@ -192,15 +271,21 @@ private sealed interface PptPiece {
     class Listed(val index: Int) : PptPiece
 }
 
-private class PptShape(val placeholder: Int, val pieces: List<PptPiece>)
+/** A picture a shape shows: where in the "Pictures" stream it is, and the size it is drawn, in EMUs. */
+private class PptPicture(val offset: Long, val widthEmu: Long, val heightEmu: Long)
+
+private class PptShape(val placeholder: Int, val pieces: List<PptPiece>, val picture: PptPicture?)
 
 /** One slide - or master, or page of notes - in a slide list: where it is kept, what it is called, and the text the list holds for it. */
 private class PptEntry(val persistId: Int, val id: Long) {
     val texts = ArrayList<PptText>()
 }
 
-/** A run of text, and whose it is. */
-private class PptResolved(val run: PptText, val placeholder: Int)
+/** What a page shows, in order: a run of text, and whose it is, or a picture. */
+private sealed interface PptContent {
+    class Text(val run: PptText, val placeholder: Int) : PptContent
+    class Picture(val picture: PptPicture) : PptContent
+}
 
 /**
  * The bytes of one "PowerPoint Document" stream, read for the text of its
@@ -216,6 +301,9 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
     private val persist = HashMap<Int, Int>()
     private var documentId = 0
     private val fonts = ArrayList<String>()
+
+    /** Where each picture is in the "Pictures" stream, by its number less one; -1 for one that isn't there. */
+    private val blips = ArrayList<Long>()
     private val masterStyles = HashMap<Long, Map<Int, List<PptParagraphProps>>>()
     private var visits = 0
     private var listed = 0
@@ -337,6 +425,7 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
                 child.type == SLIDE_LIST && child.instance == 1 && masters == null -> masters = readList(child)
                 child.type == SLIDE_LIST && child.instance == 2 && notes == null -> notes = readList(child)
                 child.type == ENVIRONMENT -> readFonts(child)
+                child.type == PP_DRAWING_GROUP -> readBlips(child)
             }
         }
 
@@ -409,6 +498,22 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         return String(d, atom.data, length, Charsets.ISO_8859_1)
     }
 
+    /** Where each of the presentation's pictures is kept, in the order a shape numbers them. */
+    private fun readBlips(group: Rec) {
+        forEachChild(group) { dgg ->
+            if (dgg.type != DGG_CONTAINER) return@forEachChild
+            forEachChild(dgg) { store ->
+                if (store.type != BSTORE_CONTAINER) return@forEachChild
+                forEachChild(store) { entry ->
+                    if (entry.type == BSE && entry.length >= 36 && blips.size < MAX_BLIPS) {
+                        // An entry with no size is one that is no longer used.
+                        blips += if (u32(entry.data + 20) == 0L) -1L else u32(entry.data + 28)
+                    }
+                }
+            }
+        }
+    }
+
     /** The names of the fonts the presentation uses, in the order a bullet's font is numbered. */
     private fun readFonts(environment: Rec) {
         forEachChild(environment) { collection ->
@@ -442,15 +547,22 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         }
 
         val styles = stylesOf(masterId, masters)
-        val texts = resolve(drawing, entry)
+        val contents = resolve(drawing, entry)
         val blocks = ArrayList<DocBlock>()
         // The title first, wherever the slide keeps it; the rest as it comes.
-        for (text in texts.sortedByDescending { isTitle(it) }) {
+        for (content in contents.sortedByDescending { isTitle(it) }) {
             if (blocks.size >= Docx.MAX_TOGETHER) {
                 cut = true
                 break
             }
-            paragraphs(text, notes = false, styles[text.run.type]).forEach { if (room(it)) blocks += it }
+            when (content) {
+                is PptContent.Text -> paragraphs(content, notes = false, styles[content.run.type]).forEach { if (room(it)) blocks += it }
+                is PptContent.Picture -> if (++pieces <= Docx.MAX_PIECES) {
+                    blocks += DocImage(PowerPointBinary.PICTURE_PREFIX + content.picture.offset, content.picture.widthEmu, content.picture.heightEmu)
+                } else {
+                    spent = true
+                }
+            }
             if (spent) break
         }
 
@@ -463,16 +575,18 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
             persisted(page.persistId, NOTES)?.let { container ->
                 forEachChild(container) { if (it.type == PP_DRAWING && notesDrawing == null) notesDrawing = it }
             }
-            for (text in resolve(notesDrawing, page)) {
-                paragraphs(text, notes = true, null).forEach { if (notes.size < Docx.MAX_TOGETHER && room(it)) notes += it }
+            for (content in resolve(notesDrawing, page)) {
+                // Notes are text: a picture on a page of notes is not one of the notes.
+                if (content !is PptContent.Text) continue
+                paragraphs(content, notes = true, null).forEach { if (notes.size < Docx.MAX_TOGETHER && room(it)) notes += it }
                 if (spent) break
             }
         }
         return PptxSlide(number, blocks, notes, hidden)
     }
 
-    private fun isTitle(text: PptResolved) =
-        text.run.type == TEXT_TITLE || text.run.type == TEXT_CENTER_TITLE || text.placeholder in TITLE_PLACEHOLDERS
+    private fun isTitle(content: PptContent) = content is PptContent.Text &&
+        (content.run.type == TEXT_TITLE || content.run.type == TEXT_CENTER_TITLE || content.placeholder in TITLE_PLACEHOLDERS)
 
     /** [paragraph] counted against what is read: false, and the reading stopped, once there is more than is shown. */
     private fun room(paragraph: DocParagraph): Boolean {
@@ -492,21 +606,23 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
      * what the page's entry in the slide list holds where the shape says so.
      * A page whose drawing could not be read is shown as the list has it.
      */
-    private fun resolve(drawing: Rec?, entry: PptEntry): List<PptResolved> {
-        val out = ArrayList<PptResolved>()
+    private fun resolve(drawing: Rec?, entry: PptEntry): List<PptContent> {
+        val out = ArrayList<PptContent>()
         val shapes = drawing?.let { shapesOf(it) }.orEmpty()
         for (shape in shapes) {
             if (shape.placeholder in FURNITURE_PLACEHOLDERS) continue
+            // A picture, and then whatever text is set on it.
+            shape.picture?.let { if (out.size < Docx.MAX_TOGETHER) out += PptContent.Picture(it) }
             for (piece in shape.pieces) {
                 val run = when (piece) {
                     is PptPiece.Own -> piece.run
                     is PptPiece.Listed -> entry.texts.getOrNull(piece.index)
                 }
-                if (run != null && run.text.isNotEmpty() && out.size < Docx.MAX_TOGETHER) out += PptResolved(run, shape.placeholder)
+                if (run != null && run.text.isNotEmpty() && out.size < Docx.MAX_TOGETHER) out += PptContent.Text(run, shape.placeholder)
             }
         }
         if (out.isEmpty()) {
-            for (run in entry.texts) if (run.text.isNotEmpty()) out += PptResolved(run, 0)
+            for (run in entry.texts) if (run.text.isNotEmpty()) out += PptContent.Text(run, 0)
         }
         return out
     }
@@ -532,6 +648,9 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
     private fun shape(container: Rec): PptShape? {
         var placeholder = 0
         var deleted = false
+        var number = 0
+        var width = 0L
+        var height = 0L
         val pieces = ArrayList<PptPiece>()
         forEachChild(container) { child ->
             when (child.type) {
@@ -540,9 +659,32 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
                     if (it.type == OE_PLACEHOLDER && it.length >= 5) placeholder = d[it.data + 4].toInt() and 0xFF
                 }
                 CLIENT_TEXTBOX -> readTextbox(child, pieces)
+                OPT -> number = pictureNumber(child)
+                CLIENT_ANCHOR -> {
+                    // Its top, left, right and bottom, in 576ths of an inch: two bytes each, or four.
+                    val wide = child.length >= 16
+                    val step = if (wide) 4 else 2
+                    if (child.length >= 4 * step) {
+                        fun at(i: Int) = if (wide) s32(d, child.data + i * 4) else u16(d, child.data + i * 2).toShort().toInt()
+                        width = ((at(2) - at(1)) * EMU_PER_UNIT).toLong().coerceAtLeast(0)
+                        height = ((at(3) - at(0)) * EMU_PER_UNIT).toLong().coerceAtLeast(0)
+                    }
+                }
             }
         }
-        return if (deleted || pieces.isEmpty()) null else PptShape(placeholder, pieces)
+        val where = blips.getOrNull(number - 1)?.takeIf { it >= 0 }
+        val picture = where?.let { PptPicture(it, width, height) }
+        return if (deleted || (pieces.isEmpty() && picture == null)) null else PptShape(placeholder, pieces, picture)
+    }
+
+    /** Which picture a shape's properties say it shows, by number from 1; 0 for none. */
+    private fun pictureNumber(opt: Rec): Int {
+        // Six bytes each: an id, with a flag for a number that stands for a picture, and its value.
+        for (i in 0 until minOf(opt.instance, opt.length / 6)) {
+            val id = u16(d, opt.data + i * 6)
+            if (id and 0x3FFF == PIB && id and 0x4000 != 0) return s32(d, opt.data + i * 6 + 2).coerceIn(0, MAX_BLIPS)
+        }
+        return 0
     }
 
     private fun readTextbox(box: Rec, pieces: MutableList<PptPiece>) {
@@ -684,7 +826,7 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
     // ---- Paragraphs ---------------------------------------------------------
 
     /** The paragraphs of [text]: its characters in the spans they are formatted in, its levels and its bullets. */
-    private fun paragraphs(text: PptResolved, notes: Boolean, master: List<PptParagraphProps>?): List<DocParagraph> {
+    private fun paragraphs(text: PptContent.Text, notes: Boolean, master: List<PptParagraphProps>?): List<DocParagraph> {
         val raw = text.run.text
         val style = text.run.style?.let { readStyle(it, raw.length) }
         val out = ArrayList<DocParagraph>()
@@ -748,7 +890,7 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         return out
     }
 
-    private fun paragraph(spans: List<DocSpan>, props: PptParagraphProps?, text: PptResolved, notes: Boolean, master: List<PptParagraphProps>?): DocParagraph {
+    private fun paragraph(spans: List<DocSpan>, props: PptParagraphProps?, text: PptContent.Text, notes: Boolean, master: List<PptParagraphProps>?): DocParagraph {
         val level = (props?.level ?: 0).coerceIn(0, Docx.MAX_LEVEL)
         val inherited = master?.getOrNull(level)
         val type = text.run.type

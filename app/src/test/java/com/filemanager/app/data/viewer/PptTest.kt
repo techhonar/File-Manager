@@ -109,8 +109,26 @@ class PptTest {
 
     private fun list(instance: Int, vararg children: ByteArray) = container(0x0FF0, instance, *children)
 
-    private fun document(slides: ByteArray, masters: ByteArray? = null, notes: ByteArray? = null) =
-        container(0x03E8, 0, *listOfNotNull(record(0x03E9, body = ByteArray(40)), masters, slides, notes).toTypedArray())
+    private fun document(slides: ByteArray, masters: ByteArray? = null, notes: ByteArray? = null, pictures: ByteArray? = null) =
+        container(0x03E8, 0, *listOfNotNull(record(0x03E9, body = ByteArray(40)), pictures, masters, slides, notes).toTypedArray())
+
+    /** A picture's entry in the drawing group's list: where its blip is in the "Pictures" stream, and its size, 0 for one not in use. */
+    private fun pictureEntry(at: Int, size: Int = 100) =
+        record(0xF007, instance = 6, version = 2, body = ByteArray(2) + ByteArray(16) + le16(0xFF) + le32(size) + le32(1) + le32(at) + ByteArray(4))
+
+    private fun pictureList(vararg entries: ByteArray) =
+        container(0x040B, 0, container(0xF000, 0, container(0xF001, entries.size, *entries)))
+
+    /** A shape that shows picture [number], drawn [width] by [height] 576ths of an inch from its corner. */
+    private fun pictureShape(number: Int, width: Int = 1152, height: Int = 576, vararg text: ByteArray): ByteArray {
+        val parts = ArrayList<ByteArray>()
+        parts += record(0xF00A, instance = 75, version = 2, body = le32(1) + le32(0))
+        // One property, the picture's number, with the flag that says a number is what it is.
+        parts += record(0xF00B, instance = 1, version = 3, body = le16(0x4104) + le32(number))
+        parts += record(0xF010, body = le16(100) + le16(200) + le16(200 + width) + le16(100 + height))
+        if (text.isNotEmpty()) parts += container(0xF00D, 0, *text)
+        return container(0xF004, 0, *parts.toTypedArray())
+    }
 
     /** The stream, built up as it is by saving: what is new is added at its end, with a table of where everything is. */
     private class Presentation {
@@ -151,9 +169,16 @@ class PptTest {
         PowerPointBinary.read(presentation.stream(), presentation.user(encrypted), maxChars)
 
     /** A presentation of one slide, saved once, with [text] in the shapes [slide] gives and [list] after its entry in the slide list. */
-    private fun oneSlide(slide: ByteArray, vararg list: ByteArray, masters: ByteArray? = null, notes: ByteArray? = null, others: Map<Int, ByteArray> = emptyMap()): Presentation =
+    private fun oneSlide(
+        slide: ByteArray,
+        vararg list: ByteArray,
+        masters: ByteArray? = null,
+        notes: ByteArray? = null,
+        pictures: ByteArray? = null,
+        others: Map<Int, ByteArray> = emptyMap(),
+    ): Presentation =
         Presentation().apply {
-            save(1, mapOf(1 to document(list(0, persistAtom(3, 256), *list), masters, notes), 3 to slide) + others)
+            save(1, mapOf(1 to document(list(0, persistAtom(3, 256), *list), masters, notes, pictures), 3 to slide) + others)
         }
 
     private fun PptxSlide.paragraphs() = blocks.filterIsInstance<DocParagraph>()
@@ -412,6 +437,120 @@ class PptTest {
         }
     }
 
+    // ---- Pictures ---------------------------------------------------------------------------------
+
+    @Test
+    fun `a shape that shows a picture is that picture, at its size, in its place among the text`() {
+        val deck = read(
+            oneSlide(
+                slide(
+                    drawing(
+                        shape(null, header(4), chars("Above")),
+                        pictureShape(2, width = 1152, height = 576),
+                        shape(13, header(0), chars("Title")),
+                        shape(null, header(4), chars("Below")),
+                    ),
+                ),
+                pictures = pictureList(pictureEntry(0), pictureEntry(5000)),
+            ),
+        )
+        val blocks = deck.slides.single().blocks
+        assertEquals(listOf("Title", "Above"), blocks.take(2).map { (it as DocParagraph).text })
+        // Two inches by one.
+        assertEquals(DocImage(PowerPointBinary.PICTURE_PREFIX + "5000", 1_828_800, 914_400), blocks[2])
+        assertEquals("Below", (blocks[3] as DocParagraph).text)
+    }
+
+    @Test
+    fun `a shape pointing at a picture that is not there, or no longer used, or with none, shows no picture`() {
+        val deck = read(
+            oneSlide(
+                slide(
+                    drawing(
+                        pictureShape(0),
+                        pictureShape(3),
+                        pictureShape(2),
+                        pictureShape(1, text = arrayOf(header(4), chars("Caption"))),
+                        pictureShape(-7),
+                    ),
+                ),
+                // The second is an entry with no size: one that is not in use.
+                pictures = pictureList(pictureEntry(0), pictureEntry(40, size = 0)),
+            ),
+        )
+        val blocks = deck.slides.single().blocks
+        assertEquals(2, blocks.size)
+        assertTrue(blocks[0] is DocImage)
+        assertEquals("Caption", (blocks[1] as DocParagraph).text)
+    }
+
+    private fun blip(type: Int, instance: Int, image: ByteArray, uids: Int = if (instance and 1 == 1) 2 else 1) =
+        ByteArray(16 * uids) + byteArrayOf(0xFF.toByte()) + image
+
+    private fun encoded(format: String, type: Int = java.awt.image.BufferedImage.TYPE_INT_RGB): ByteArray {
+        val image = java.awt.image.BufferedImage(5, 3, type)
+        image.setRGB(2, 1, 0xC83C28)
+        return java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(image, format, it) }.toByteArray()
+    }
+
+    @Test
+    fun `a blip's image is a JPEG or a PNG as it is, and a DIB made a bitmap, and anything else is none`() {
+        fun decoded(bytes: ByteArray?) = bytes?.let { javax.imageio.ImageIO.read(it.inputStream()) }
+        val png = encoded("png")
+        val jpeg = encoded("jpg")
+        // With the one id of its own, or the two.
+        for ((instance, uids) in listOf(0x6E0 to 1, 0x6E1 to 2)) {
+            val image = decoded(PowerPointBinary.blipImage(0xF01E, instance, blip(0xF01E, instance, png, uids)))!!
+            assertEquals(5 to 3, image.width to image.height)
+            assertEquals(0xC83C28, image.getRGB(2, 1) and 0xFFFFFF)
+        }
+        assertEquals(5, decoded(PowerPointBinary.blipImage(0xF01D, 0x46A, blip(0xF01D, 0x46A, jpeg)))!!.width)
+        assertEquals(5, decoded(PowerPointBinary.blipImage(0xF01D, 0x46B, blip(0xF01D, 0x46B, jpeg)))!!.width)
+        // A DIB is a bitmap without the 14 bytes at its head.
+        val bitmap = encoded("bmp")
+        val dib = bitmap.copyOfRange(14, bitmap.size)
+        val made = decoded(PowerPointBinary.blipImage(0xF01F, 0x7A8, blip(0xF01F, 0x7A8, dib)))!!
+        assertEquals(5 to 3, made.width to made.height)
+        assertEquals(0xC83C28, made.getRGB(2, 1) and 0xFFFFFF)
+        // Clip art, kept as a metafile, is not drawn; nor is what only claims to be an image.
+        for (type in listOf(0xF01A, 0xF01B, 0xF01C, 0xF029, 0x1234)) assertNull(PowerPointBinary.blipImage(type, 0x3D4, blip(type, 0x3D4, png)))
+        assertNull(PowerPointBinary.blipImage(0xF01E, 0x6E0, blip(0xF01E, 0x6E0, jpeg)))
+        assertNull(PowerPointBinary.blipImage(0xF01D, 0x46A, blip(0xF01D, 0x46A, png)))
+        assertNull(PowerPointBinary.blipImage(0xF01E, 0x6E0, ByteArray(10)))
+        assertNull(PowerPointBinary.blipImage(0xF01F, 0x7A8, blip(0xF01F, 0x7A8, ByteArray(30))))
+    }
+
+    @Test
+    fun `no picture is found where there is none, or for what is not a picture's name`() {
+        val file = resource("sample.ppt")
+        val prefix = PowerPointBinary.PICTURE_PREFIX
+        // The last two are in the stream, but are not where a blip begins - or are past its end.
+        for (entry in listOf("", "x", "word/media/image1.png", prefix, prefix + "abc", prefix + "-1", prefix + "99999999", prefix + "7", prefix + "1581")) {
+            assertNull(entry, PowerPointBinary.picture(file, entry))
+        }
+        // And the first blip begins at the stream's own start.
+        assertTrue(PowerPointBinary.picture(file, prefix + "0")!!.size > 8)
+    }
+
+    @Test
+    fun `no bytes at all make a blip throw`() {
+        val random = java.util.Random(4)
+        repeat(30_000) {
+            val body = ByteArray(random.nextInt(120)).also(random::nextBytes)
+            // Often begun as the image a type says it is, for the parse to go on into.
+            if (body.size > 40 && random.nextBoolean()) {
+                val start = if (random.nextBoolean()) 17 else 33
+                when (random.nextInt(3)) {
+                    0 -> { body[start] = 0xFF.toByte(); body[start + 1] = 0xD8.toByte() }
+                    1 -> { body[start] = 0x89.toByte(); body[start + 1] = 'P'.code.toByte() }
+                    else -> { body[start] = 40; body[start + 1] = 0; body[start + 2] = 0; body[start + 3] = 0 }
+                }
+            }
+            val type = listOf(0xF01D, 0xF01E, 0xF01F, 0xF02A, 0xF01A, random.nextInt(0x10000))[random.nextInt(6)]
+            PowerPointBinary.blipImage(type, random.nextInt(0x1000), body)
+        }
+    }
+
     // ---- Files made to break a reader -----------------------------------------------------------
 
     @Test
@@ -537,10 +676,10 @@ class PptTest {
 
     @Test
     fun `a presentation LibreOffice saved is read slide by slide`() {
-        // Made from a deck of five slides: a title, bullets at two levels with notes, one hidden, one set in
-        // runs of bold, italic and underline, and one in Persian.
+        // Made from a deck of six slides: a title, bullets at two levels with notes, one hidden, one set in
+        // runs of bold, italic and underline, one in Persian, and one with a picture.
         val deck = Pptx.read(resource("sample.ppt"))
-        assertEquals(5, deck.total)
+        assertEquals(6, deck.total)
         assertFalse(deck.truncated)
         val (title, bullets, hidden, styles, persian) = deck.slides
         assertEquals(listOf("Harbour survey", "Spring report"), title.paragraphs().map { it.text })
@@ -554,7 +693,7 @@ class PptTest {
         assertEquals(listOf(0, 0, 1, 1, 0), bullets.paragraphs().map { it.level })
         assertEquals(listOf("Ask the harbour master about the crane."), bullets.notes.map { it.text })
 
-        assertEquals(listOf(false, false, true, false, false), deck.slides.map { it.hidden })
+        assertEquals(listOf(false, false, true, false, false, false), deck.slides.map { it.hidden })
         assertEquals("Not shown", hidden.paragraphs().first().text)
 
         val runs = styles.paragraphs().last { it.spans.size > 1 }
@@ -569,13 +708,48 @@ class PptTest {
     }
 
     @Test
+    fun `a picture is drawn at the size its shape is, from the stream it is kept in, and is a PNG as it was`() {
+        val file = resource("sample.ppt")
+        val slide = Pptx.read(file).slides[5]
+        assertEquals(listOf("Plan"), slide.paragraphs().map { it.text })
+        val picture = slide.blocks.filterIsInstance<DocImage>().single()
+        // Three inches wide, and half that tall: 120 by 60 pixels.
+        assertEquals(3 * 914_400L, picture.widthEmu)
+        assertEquals(1_371_600L, picture.heightEmu)
+        val image = javax.imageio.ImageIO.read(PowerPointBinary.picture(file, picture.entry)!!.inputStream())
+        assertEquals(120 to 60, image.width to image.height)
+        assertEquals(0x2878C8, image.getRGB(60, 30) and 0xFFFFFF)
+    }
+
+    @Test
+    fun `part of a stream is read without the rest, across sectors and from the small ones`() {
+        CompoundFile(resource("sample.ppt")).use { container ->
+            for (name in listOf("PowerPoint Document", "Current User", "Pictures")) {
+                val whole = container.stream(name)!!
+                assertEquals(whole.size.toLong(), container.size(name))
+                val places = listOf(0L, 1L, 63L, 64L, 511L, 512L, 513L, 4095L, 4096L, 5000L, whole.size - 10L, whole.size - 1L)
+                for (offset in places.filter { it in 0 until whole.size }) {
+                    for (length in listOf(1, 20, 511, 512, 513, 3000)) {
+                        val end = minOf(whole.size.toLong(), offset + length).toInt()
+                        assertEquals("$name at $offset for $length", whole.copyOfRange(offset.toInt(), end).toList(), container.read(name, offset, length)!!.toList())
+                    }
+                }
+                assertEquals(emptyList<Byte>(), container.read(name, whole.size.toLong(), 10)!!.toList())
+                assertEquals(emptyList<Byte>(), container.read(name, -1, 10)!!.toList())
+            }
+            assertNull(container.read("No such stream", 0, 10))
+            assertNull(container.size("No such stream"))
+        }
+    }
+
+    @Test
     fun `what is inside a file decides how it is read, not what it is called`() {
         // A .doc is not a presentation.
         val failed = runCatching { Pptx.read(resource("sample.doc")) }.exceptionOrNull()
         assertTrue("$failed", failed is IOException)
         assertEquals("Not a PowerPoint presentation", failed?.message)
         // A presentation called anything.
-        assertEquals(5, Pptx.read(resource("sample.ppt", saveAs = "talk.pptx")).total)
+        assertEquals(6, Pptx.read(resource("sample.ppt", saveAs = "talk.pptx")).total)
         // And the newer format under the older name.
         val zip = File(temp.root, "newer.ppt")
         java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->

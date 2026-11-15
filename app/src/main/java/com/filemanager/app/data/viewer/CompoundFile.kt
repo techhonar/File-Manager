@@ -113,6 +113,42 @@ internal class CompoundFile(file: File) : Closeable {
         }
     }
 
+    /**
+     * [length] bytes of the stream called [name] from [offset] - fewer if it
+     * ends first - or null if there is no such stream. A long stream's
+     * sectors before [offset] are stepped over by the table, not read.
+     */
+    fun read(name: String, offset: Long, length: Int): ByteArray? {
+        val entry = entries.firstOrNull { it.type == STREAM && it.name.equals(name, ignoreCase = true) } ?: return null
+        if (offset < 0 || length < 0 || offset >= entry.size) return ByteArray(0)
+        val wanted = minOf(length.toLong(), entry.size - offset).toInt()
+        if (entry.size < miniCutoff) {
+            val mini = miniStream ?: rootStream().also { miniStream = it }
+            val whole = readChain(entry.start, miniFat, miniSectorSize, { sector -> miniSector(mini, sector) }, entry.size)
+            return whole.copyOfRange(offset.toInt(), offset.toInt() + wanted)
+        }
+        var sector = entry.start
+        var hops = 0
+        var skip = offset / sectorSize
+        while (skip > 0) {
+            if (sector < 0 || sector >= fat.size || ++hops > fat.size) throw IOException("Damaged compound file")
+            sector = fat[sector]
+            skip--
+        }
+        val out = java.io.ByteArrayOutputStream(wanted)
+        var within = (offset % sectorSize).toInt()
+        hops = 0
+        while (out.size() < wanted && sector >= 0) {
+            if (sector >= fat.size || ++hops > fat.size) throw IOException("Damaged compound file")
+            val bytes = readSector(sector)
+            val take = minOf(sectorSize - within, wanted - out.size())
+            out.write(bytes, within, take)
+            within = 0
+            sector = fat[sector]
+        }
+        return out.toByteArray()
+    }
+
     override fun close() = input.close()
 
     /** Where the small streams are kept, together: the root entry's own stream. */
