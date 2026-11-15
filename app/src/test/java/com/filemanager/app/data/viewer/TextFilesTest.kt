@@ -96,12 +96,16 @@ class TextFilesTest {
         assertEquals(ViewerKind.XLSX, viewerKind("macros.xlsm"))
         assertEquals(ViewerKind.PPTX, viewerKind("talk.pptx"))
         assertEquals(ViewerKind.PPTX, viewerKind("show.ppsx"))
+        // PowerPoint's older format, and its slide shows and templates.
+        assertEquals(ViewerKind.PPTX, viewerKind("talk.ppt"))
+        assertEquals(ViewerKind.PPTX, viewerKind("Show.PPS"))
+        assertEquals(ViewerKind.PPTX, viewerKind("template.pot"))
         assertEquals(ViewerKind.DOCX, viewerKind("macros.docm"))
         assertEquals(ViewerKind.DOCX, viewerKind("letterhead.dotx"))
         assertEquals(ViewerKind.DOC, viewerKind("old.doc"))
         assertEquals(ViewerKind.DOC, viewerKind("Letter.RTF"))
+        // Excel's older format is the one office format still left to other apps.
         assertNull(viewerKind("old.xls"))
-        assertNull(viewerKind("old.ppt"))
         assertNull(viewerKind("page.html"))
         assertNull(viewerKind("README"))
     }

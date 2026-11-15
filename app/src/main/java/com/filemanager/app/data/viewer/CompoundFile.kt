@@ -15,6 +15,8 @@ import java.io.RandomAccessFile
  * so a damaged or hostile file fails to open rather than looping or
  * reading past its end.
  */
+private val SIGNATURE = byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte())
+
 internal class CompoundFile(file: File) : Closeable {
 
     private class Entry(val name: String, val type: Int, val start: Int, val size: Long)
@@ -95,6 +97,10 @@ internal class CompoundFile(file: File) : Closeable {
         }
     }
 
+    /** How long the stream called [name] is, or null if there is none. */
+    fun size(name: String): Long? =
+        entries.firstOrNull { it.type == STREAM && it.name.equals(name, ignoreCase = true) }?.size
+
     /** The stream called [name], whole, or null if there is none. */
     fun stream(name: String): ByteArray? {
         val entry = entries.firstOrNull { it.type == STREAM && it.name.equals(name, ignoreCase = true) } ?: return null
@@ -146,8 +152,6 @@ internal class CompoundFile(file: File) : Closeable {
         /** Far more than any document's text; past it, a file is taken as damaged. */
         const val MAX_STREAM = 256L * 1024 * 1024
 
-        val SIGNATURE = byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte())
-
         /**
          * The sectors chained from [start] through [table], joined, up to
          * [size] bytes. Fails on a chain that loops or leaves the table.
@@ -165,6 +169,17 @@ internal class CompoundFile(file: File) : Closeable {
             return out.toByteArray()
         }
     }
+}
+
+/** Whether [this] starts as a compound file does: what a .doc, .xls or .ppt is, and not what a .docx is. */
+internal fun File.isCompoundFile(): Boolean {
+    val head = ByteArray(8)
+    val read = try {
+        inputStream().use { it.read(head) }
+    } catch (e: IOException) {
+        return false
+    }
+    return read == head.size && head.startsWith(SIGNATURE)
 }
 
 internal fun ByteArray.startsWith(prefix: ByteArray): Boolean =

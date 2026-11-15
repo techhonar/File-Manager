@@ -36,7 +36,15 @@ object Pptx {
 
     const val MAX_SLIDES = 2_000
 
-    fun read(file: File, maxChars: Int = MAX_CHARS): PptxDeck = ZipFile(file).use { zip ->
+    /**
+     * What is in [file] decides how it is read, not its name: the older
+     * format is a compound file, the newer a zip - and a .ppt is often a
+     * .pptx with the wrong name, or the other way round.
+     */
+    fun read(file: File, maxChars: Int = MAX_CHARS): PptxDeck =
+        if (file.isCompoundFile()) PowerPointBinary.read(file, maxChars) else readOoxml(file, maxChars)
+
+    private fun readOoxml(file: File, maxChars: Int): PptxDeck = ZipFile(file).use { zip ->
         val parts = OoxmlParts(zip)
         val main = parts.mainPart("ppt/presentation.xml")
         val presentation = PresentationHandler()
@@ -179,7 +187,7 @@ private sealed interface Bullet {
 }
 
 /** Whether [typeface] or [charset] is a font of pictures, as a buFont names it. */
-private fun isSymbolFont(typeface: String?, charset: String?): Boolean =
+internal fun isSymbolFont(typeface: String?, charset: String?): Boolean =
     typeface.orEmpty().lowercase().let { it.startsWith("wingdings") || it in SYMBOL_FONTS } || charset == "2"
 
 /**
@@ -187,7 +195,7 @@ private fun isSymbolFont(typeface: String?, charset: String?): Boolean =
  * show as a stray letter, or a character of a font's own, which no other
  * font has.
  */
-private fun bulletGlyph(char: String, symbolFont: Boolean): String {
+internal fun bulletGlyph(char: String, symbolFont: Boolean): String {
     if (char.isEmpty() || char.any { it in '\uE000'..'\uF8FF' }) return "•"
     if (!symbolFont) return char
     return when (char) {

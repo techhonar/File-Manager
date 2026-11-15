@@ -20,6 +20,8 @@ class IncomingTest {
         assertEquals(ViewerKind.XLSX, viewerKindFor("application/vnd.ms-excel.sheet.macroEnabled.12", "1234"))
         assertEquals(ViewerKind.PPTX, viewerKindFor(PPTX_TYPE, null))
         assertEquals(ViewerKind.PPTX, viewerKindFor("application/vnd.openxmlformats-officedocument.presentationml.slideshow", null))
+        // PowerPoint's older type, which is what a .ppt, .pps and .pot are sent as.
+        assertEquals(ViewerKind.PPTX, viewerKindFor("application/vnd.ms-powerpoint", "1234"))
         assertNull(viewerKindFor("application/vnd.ms-excel", "1234"))
         assertEquals(ViewerKind.TEXT, viewerKindFor("text/plain; charset=utf-8", "msg"))
         assertEquals(ViewerKind.TEXT, viewerKindFor("application/json", null))
