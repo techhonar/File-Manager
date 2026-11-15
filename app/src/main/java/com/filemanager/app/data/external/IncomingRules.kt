@@ -16,7 +16,7 @@ private val DOC_TYPES = setOf(DOC_TYPE, "application/rtf", "text/rtf", "applicat
 const val XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const val PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
-/** Excel's and PowerPoint's other types for the same formats, lowercased: with macros, slide shows, templates. */
+/** Excel's and PowerPoint's other types for the same formats, lowercased: with macros, slide shows, templates - and PowerPoint's older. */
 private val XLSX_TYPES = setOf(
     XLSX_TYPE,
     "application/vnd.ms-excel.sheet.macroenabled.12",
@@ -24,6 +24,7 @@ private val XLSX_TYPES = setOf(
 )
 private val PPTX_TYPES = setOf(
     PPTX_TYPE,
+    "application/vnd.ms-powerpoint",
     "application/vnd.ms-powerpoint.presentation.macroenabled.12",
     "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
     "application/vnd.ms-powerpoint.slideshow.macroenabled.12",

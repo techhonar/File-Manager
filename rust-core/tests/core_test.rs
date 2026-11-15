@@ -77,6 +77,8 @@ fn categorizes_by_extension() {
     assert_eq!(categorize("Wedding.PPSX"), FileCategory::Document);
     assert_eq!(categorize("Letterhead.dotx"), FileCategory::Document);
     assert_eq!(categorize("Old letterhead.dot"), FileCategory::Document);
+    assert_eq!(categorize("Old show.PPS"), FileCategory::Document);
+    assert_eq!(categorize("Old template.pot"), FileCategory::Document);
 }
 
 #[test]

@@ -28,6 +28,8 @@ const DOCUMENT: &[&str] = &[
     // and slide shows: the same formats under other names, which the app
     // opens the same way - and so the same kind of file to list and to count.
     "docm", "dot", "dotx", "dotm", "xlsm", "xltx", "xltm", "pptm", "ppsx", "ppsm", "potx", "potm",
+    // PowerPoint's older slide shows and templates, which are .ppt files under other names.
+    "pps", "pot",
 ];
 const ARCHIVE: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "tbz2", "txz", "tzst",

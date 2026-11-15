@@ -22,7 +22,7 @@ fun documentType(fileName: String): DocumentType? {
         // With macros or without, a template or a slide show: the same kind.
         "doc", "docx", "docm", "dot", "dotx", "dotm", "odt", "rtf" -> DocumentKind.WORD
         "xls", "xlsx", "xlsm", "xltx", "xltm", "ods", "csv" -> DocumentKind.SHEET
-        "ppt", "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp" -> DocumentKind.SLIDES
+        "ppt", "pps", "pot", "pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "odp" -> DocumentKind.SLIDES
         "txt", "md" -> DocumentKind.TEXT
         "html", "htm", "json", "xml" -> DocumentKind.WEB
         "epub" -> DocumentKind.EBOOK

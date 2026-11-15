@@ -20,12 +20,14 @@ private val TEXT_EXTENSIONS = setOf(
 /** Word documents, Excel workbooks and PowerPoint presentations, with macros or not, and their templates: one format each. */
 private val DOCX_EXTENSIONS = setOf("docx", "docm", "dotx", "dotm")
 private val XLSX_EXTENSIONS = setOf("xlsx", "xlsm", "xltx", "xltm")
-private val PPTX_EXTENSIONS = setOf("pptx", "pptm", "ppsx", "ppsm", "potx", "potm")
+
+/** PowerPoint's: the newer format, and the older - .ppt, and its slide shows and templates - which the same reader takes. */
+private val PPTX_EXTENSIONS = setOf("pptx", "pptm", "ppsx", "ppsm", "potx", "potm", "ppt", "pps", "pot")
 
 /**
  * Which viewer opens [fileName], or null for anything it cannot show - that
  * goes to another app, as every file did before. Word's older .doc and .dot
- * too, and RTF; but not the older binary .xls and .ppt.
+ * too, and RTF, and PowerPoint's older .ppt; but not the older binary .xls.
  */
 fun viewerKind(fileName: String): ViewerKind? =
     when (fileName.substringAfterLast('.', "").lowercase()) {
