@@ -83,6 +83,25 @@ class PptTest {
         return container(0xF004, 0, *parts.toTypedArray())
     }
 
+    /** A rectangle with its box - left, top, right, bottom - and any [text] in it: a cell, if it is one of a grid. */
+    private fun box(left: Int, top: Int, right: Int, bottom: Int, vararg text: ByteArray): ByteArray {
+        val parts = ArrayList<ByteArray>()
+        parts += record(0xF00A, instance = 1, version = 2, body = le32(1) + le32(0xA02))
+        parts += record(0xF00F, body = le32(left) + le32(top) + le32(right) + le32(bottom))
+        if (text.isNotEmpty()) parts += container(0xF00D, 0, *text)
+        return container(0xF004, 0, *parts.toTypedArray())
+    }
+
+    /** A group of shapes, as a table is: the group's own shape first, which has no text. */
+    private fun group(vararg shapes: ByteArray) = container(
+        0xF003, 0,
+        container(0xF004, 0, record(0xF009, version = 1, body = ByteArray(16)), record(0xF00A, instance = 0, version = 2, body = le32(1) + le32(0x201))),
+        *shapes,
+    )
+
+    private fun cell(left: Int, top: Int, right: Int, bottom: Int, text: String? = null) =
+        if (text == null) box(left, top, right, bottom) else box(left, top, right, bottom, header(4), chars(text))
+
     private fun drawing(vararg shapes: ByteArray) = container(0x040C, 0, container(0xF002, 0, container(0xF003, 0, *shapes)))
 
     private fun slide(drawing: ByteArray, masterId: Long = 0, notesId: Long = 0, hidden: Boolean = false): ByteArray {
@@ -437,6 +456,132 @@ class PptTest {
         }
     }
 
+    // ---- Tables --------------------------------------------------------------------------------------
+
+    private fun tableOf(deck: PptxDeck) = deck.slides.single().blocks.filterIsInstance<DocTable>().single()
+
+    private fun DocTable.texts() = rows.map { row -> row.map { cell -> cell.blocks.joinToString("/") { (it as DocParagraph).text } to cell.span } }
+
+    @Test
+    fun `a group of boxes on a grid is a table, with merged cells, empty places and the widths of its columns`() {
+        // Three columns - 100, 300 and 100 wide - and three rows. The middle row's second box reaches across
+        // two columns; the last row's first has nothing in it.
+        val table = group(
+            cell(100, 100, 200, 150, "A"), cell(200, 100, 500, 150, "B"), cell(500, 100, 600, 150, "C"),
+            cell(100, 150, 200, 200, "D"), cell(200, 150, 600, 200, "E"),
+            cell(100, 200, 200, 250), cell(200, 200, 500, 250, "F"), cell(500, 200, 600, 250, "G"),
+        )
+        val deck = read(oneSlide(slide(drawing(shape(null, header(4), chars("Before")), table, shape(null, header(4), chars("After"))))))
+        val blocks = deck.slides.single().blocks
+        assertEquals("Before", (blocks[0] as DocParagraph).text)
+        assertEquals("After", (blocks[2] as DocParagraph).text)
+        val grid = blocks[1] as DocTable
+        assertEquals(listOf(100f, 300f, 100f), grid.columns)
+        assertEquals(
+            listOf(
+                listOf("A" to 1, "B" to 1, "C" to 1),
+                listOf("D" to 1, "E" to 2),
+                listOf("" to 1, "F" to 1, "G" to 1),
+            ),
+            grid.texts(),
+        )
+    }
+
+    @Test
+    fun `a box that reaches down two rows is shown in the first, and the second has an empty place under it`() {
+        val deck = read(
+            oneSlide(
+                slide(
+                    drawing(
+                        group(
+                            cell(0, 0, 100, 100, "Tall"), cell(100, 0, 200, 50, "B1"), cell(200, 0, 300, 50, "C1"),
+                            cell(100, 50, 200, 100, "B2"), cell(200, 50, 300, 100, "C2"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(listOf(listOf("Tall" to 1, "B1" to 1, "C1" to 1), listOf("" to 1, "B2" to 1, "C2" to 1)), tableOf(deck).texts())
+    }
+
+    @Test
+    fun `edges a unit or two apart are one line, and a table with such edges is still one`() {
+        val deck = read(
+            oneSlide(
+                slide(
+                    drawing(
+                        group(
+                            cell(100, 100, 200, 150, "A"), cell(201, 99, 300, 150, "B"),
+                            cell(99, 151, 199, 200, "C"), cell(202, 152, 301, 201, "D"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(listOf(listOf("A" to 1, "B" to 1), listOf("C" to 1, "D" to 1)), tableOf(deck).texts())
+    }
+
+    @Test
+    fun `shapes that only go together are shown as the text they hold, in order, and are not made a table`() {
+        fun flat(group: ByteArray) =
+            read(oneSlide(slide(drawing(group)))).slides.single().blocks.map { (it as DocParagraph).text }
+        // One column of boxes.
+        assertEquals(listOf("one", "two", "three", "four"), flat(group(cell(0, 0, 100, 50, "one"), cell(0, 50, 100, 100, "two"), cell(0, 100, 100, 150, "three"), cell(0, 150, 100, 200, "four"))))
+        // One row of them.
+        assertEquals(listOf("a", "b", "c", "d"), flat(group(cell(0, 0, 50, 50, "a"), cell(50, 0, 100, 50, "b"), cell(100, 0, 150, 50, "c"), cell(150, 0, 200, 50, "d"))))
+        // Too few for a grid.
+        assertEquals(listOf("a", "b", "c"), flat(group(cell(0, 0, 100, 50, "a"), cell(100, 0, 200, 50, "b"), cell(0, 50, 100, 100, "c"))))
+        // Over one another.
+        assertEquals(listOf("a", "b", "c", "d"), flat(group(cell(0, 0, 100, 100, "a"), cell(50, 50, 150, 150, "b"), cell(0, 0, 100, 100, "c"), cell(100, 100, 200, 200, "d"))))
+        // Far apart: a few boxes at the corners of a large grid are not a table.
+        assertEquals(listOf("a", "b", "c", "d"), flat(group(cell(0, 0, 10, 10, "a"), cell(900, 0, 910, 10, "b"), cell(0, 900, 10, 910, "c"), cell(900, 900, 910, 910, "d"))))
+        // Edges that do not line up.
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            flat(group(cell(0, 0, 100, 100, "a"), cell(110, 0, 200, 100, "b"), cell(0, 130, 100, 230, "c"), cell(110, 130, 200, 230, "d"))),
+        )
+    }
+
+    @Test(timeout = 30_000)
+    fun `a group of five thousand boxes is read in good time, as a table or not`() {
+        // Two columns and 2,500 rows: a table. And as many boxes in a staircase, no two sharing a line.
+        val rows = group(*Array(Docx.MAX_TOGETHER) { cell((it % 2) * 100, (it / 2) * 10, (it % 2) * 100 + 100, (it / 2) * 10 + 10, "c$it") })
+        val table = tableOf(read(oneSlide(slide(drawing(rows)))))
+        assertEquals(2_500, table.rows.size)
+        assertEquals("c4999", table.texts().last().last().first)
+        val stairs = group(*Array(Docx.MAX_TOGETHER) { cell(it * 7, it * 13, it * 7 + 5, it * 13 + 9, "s$it") })
+        val flat = read(oneSlide(slide(drawing(stairs)))).slides.single().blocks
+        assertEquals(Docx.MAX_TOGETHER, flat.size)
+        assertTrue(flat.all { it is DocParagraph })
+    }
+
+    @Test
+    fun `a table's cells keep their paragraphs, and a cell's text may be in the slide list`() {
+        val deck = read(
+            oneSlide(
+                slide(
+                    drawing(
+                        group(
+                            box(0, 0, 100, 50, header(4), chars("First\rSecond")), box(100, 0, 200, 50, header(4), outline(0)),
+                            cell(0, 50, 100, 100, "c"), cell(100, 50, 200, 100, "d"),
+                        ),
+                    ),
+                ),
+                header(4), chars("Listed"),
+            ),
+        )
+        assertEquals(listOf(listOf("First/Second" to 1, "Listed" to 1), listOf("c" to 1, "d" to 1)), tableOf(deck).texts())
+    }
+
+    @Test
+    fun `a presentation LibreOffice saved has its table as one`() {
+        val slide = Pptx.read(resource("sample.ppt")).slides[6]
+        assertEquals(listOf("Costs"), slide.paragraphs().map { it.text })
+        val table = slide.blocks.filterIsInstance<DocTable>().single()
+        assertEquals(listOf(listOf("Item" to 1, "Qty" to 1, "Cost" to 1), listOf("Seal" to 1, "2" to 1, "14.00" to 1), listOf("Bolts and nuts" to 2, "3.60" to 1)), table.texts())
+        assertEquals(3, table.columns.size)
+    }
+
     // ---- Pictures ---------------------------------------------------------------------------------
 
     @Test
@@ -676,10 +821,10 @@ class PptTest {
 
     @Test
     fun `a presentation LibreOffice saved is read slide by slide`() {
-        // Made from a deck of six slides: a title, bullets at two levels with notes, one hidden, one set in
-        // runs of bold, italic and underline, one in Persian, and one with a picture.
+        // Made from a deck of seven slides: a title, bullets at two levels with notes, one hidden, one set in
+        // runs of bold, italic and underline, one in Persian, one with a picture and one with a table.
         val deck = Pptx.read(resource("sample.ppt"))
-        assertEquals(6, deck.total)
+        assertEquals(7, deck.total)
         assertFalse(deck.truncated)
         val (title, bullets, hidden, styles, persian) = deck.slides
         assertEquals(listOf("Harbour survey", "Spring report"), title.paragraphs().map { it.text })
@@ -693,7 +838,7 @@ class PptTest {
         assertEquals(listOf(0, 0, 1, 1, 0), bullets.paragraphs().map { it.level })
         assertEquals(listOf("Ask the harbour master about the crane."), bullets.notes.map { it.text })
 
-        assertEquals(listOf(false, false, true, false, false, false), deck.slides.map { it.hidden })
+        assertEquals(listOf(false, false, true, false, false, false, false), deck.slides.map { it.hidden })
         assertEquals("Not shown", hidden.paragraphs().first().text)
 
         val runs = styles.paragraphs().last { it.spans.size > 1 }
@@ -749,7 +894,7 @@ class PptTest {
         assertTrue("$failed", failed is IOException)
         assertEquals("Not a PowerPoint presentation", failed?.message)
         // A presentation called anything.
-        assertEquals(6, Pptx.read(resource("sample.ppt", saveAs = "talk.pptx")).total)
+        assertEquals(7, Pptx.read(resource("sample.ppt", saveAs = "talk.pptx")).total)
         // And the newer format under the older name.
         val zip = File(temp.root, "newer.ppt")
         java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->

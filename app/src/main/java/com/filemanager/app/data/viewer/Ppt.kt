@@ -146,7 +146,14 @@ private const val BSE = 0xF007
 private const val SP_ATOM = 0xF00A
 private const val OPT = 0xF00B
 private const val CLIENT_TEXTBOX = 0xF00D
+private const val CHILD_ANCHOR = 0xF00F
 private const val CLIENT_ANCHOR = 0xF010
+
+/** The shape type of a plain rectangle: what the boxes of a table's cells are. */
+private const val SHAPE_RECTANGLE = 1
+
+/** Two edges this near are one line: a unit is 1/576 of an inch, and a saved edge is rounded. */
+private const val EDGE_TOLERANCE = 2
 private const val CLIENT_DATA = 0xF011
 
 /** The property of a shape that says which picture it shows, by number, from 1. */
@@ -274,7 +281,26 @@ private sealed interface PptPiece {
 /** A picture a shape shows: where in the "Pictures" stream it is, and the size it is drawn, in EMUs. */
 private class PptPicture(val offset: Long, val widthEmu: Long, val heightEmu: Long)
 
-private class PptShape(val placeholder: Int, val pieces: List<PptPiece>, val picture: PptPicture?)
+/**
+ * A table, rebuilt from the boxes of its cells: the widths of its columns, in whatever units
+ * the boxes are, and each row's cells, which [PptCell] says - a cell with no shape is an empty place.
+ */
+private class PptTable(val columns: List<Float>, val rows: List<List<PptCell>>)
+
+private class PptCell(val shape: PptShape?, val span: Int)
+
+/**
+ * A shape, with its box - left, top, right, bottom - if it has one. A table is a shape too, in the place of
+ * the group of shapes it was made of.
+ */
+private class PptShape(
+    val placeholder: Int,
+    val pieces: List<PptPiece>,
+    val picture: PptPicture?,
+    val type: Int = 0,
+    val box: IntArray? = null,
+    val table: PptTable? = null,
+)
 
 /** One slide - or master, or page of notes - in a slide list: where it is kept, what it is called, and the text the list holds for it. */
 private class PptEntry(val persistId: Int, val id: Long) {
@@ -285,6 +311,9 @@ private class PptEntry(val persistId: Int, val id: Long) {
 private sealed interface PptContent {
     class Text(val run: PptText, val placeholder: Int) : PptContent
     class Picture(val picture: PptPicture) : PptContent
+
+    /** A table: each cell's text, and how many columns it is across. */
+    class Table(val columns: List<Float>, val rows: List<List<Pair<List<Text>, Int>>>) : PptContent
 }
 
 /**
@@ -562,6 +591,16 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
                 } else {
                     spent = true
                 }
+                is PptContent.Table -> {
+                    val rows = content.rows.map { row ->
+                        row.map { (texts, span) ->
+                            val cell = ArrayList<DocBlock>()
+                            for (text in texts) paragraphs(text, notes = false, styles[text.run.type]).forEach { if (room(it)) cell += it }
+                            DocCell(cell, span)
+                        }
+                    }
+                    if (++pieces <= Docx.MAX_PIECES) blocks += DocTable(content.columns, rows) else spent = true
+                }
             }
             if (spent) break
         }
@@ -611,6 +650,11 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         val shapes = drawing?.let { shapesOf(it) }.orEmpty()
         for (shape in shapes) {
             if (shape.placeholder in FURNITURE_PLACEHOLDERS) continue
+            val table = shape.table
+            if (table != null) {
+                if (out.size < Docx.MAX_TOGETHER) out += PptContent.Table(table.columns, table.rows.map { row -> row.map { cell -> textsOf(cell.shape, entry) to cell.span } })
+                continue
+            }
             // A picture, and then whatever text is set on it.
             shape.picture?.let { if (out.size < Docx.MAX_TOGETHER) out += PptContent.Picture(it) }
             for (piece in shape.pieces) {
@@ -627,15 +671,61 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         return out
     }
 
+    /** The text a shape holds, as runs: its own, or what the list holds where it says so. */
+    private fun textsOf(shape: PptShape?, entry: PptEntry): List<PptContent.Text> {
+        val out = ArrayList<PptContent.Text>()
+        for (piece in shape?.pieces.orEmpty()) {
+            val run = when (piece) {
+                is PptPiece.Own -> piece.run
+                is PptPiece.Listed -> entry.texts.getOrNull(piece.index)
+            }
+            if (run != null && run.text.isNotEmpty() && out.size < Docx.MAX_TOGETHER) out += PptContent.Text(run, 0)
+        }
+        return out
+    }
+
+    /**
+     * The shapes of a drawing, in order, with a group that is a table as one. A group's shapes are
+     * also kept when they are a plain box with nothing in it - an empty cell - which is dropped
+     * unless the group turns out to be a table.
+     */
     private fun shapesOf(drawing: Rec): List<PptShape> {
         val out = ArrayList<PptShape>()
+
+        /** The shapes of [container] and of the groups in it, flattened, in order. */
+        fun collect(container: Rec, depth: Int, into: MutableList<PptShape>, inGroup: Boolean) {
+            if (depth > MAX_DEPTH) return
+            forEachChild(container) { child ->
+                when {
+                    child.type == SP_CONTAINER && child.version == 0xF -> shape(child, boxes = inGroup)?.let {
+                        if (into.size < Docx.MAX_TOGETHER) into += it else cut = true
+                    }
+                    (child.type == SPGR_CONTAINER || child.type == DG_CONTAINER) && child.version == 0xF -> collect(child, depth + 1, into, inGroup || depth >= 1)
+                }
+            }
+        }
+
         fun walk(container: Rec, depth: Int) {
             if (depth > MAX_DEPTH) return
             forEachChild(container) { child ->
                 when {
-                    child.type == SP_CONTAINER && child.version == 0xF -> shape(child)?.let {
+                    child.type == SP_CONTAINER && child.version == 0xF -> shape(child, boxes = false)?.let {
                         // Shapes with text: as many as a slide is shown at once.
                         if (out.size < Docx.MAX_TOGETHER) out += it else cut = true
+                    }
+                    // A group inside the slide's own: a table, or some shapes that go together.
+                    child.type == SPGR_CONTAINER && child.version == 0xF && depth >= 1 -> {
+                        val members = ArrayList<PptShape>()
+                        collect(child, depth + 1, members, inGroup = true)
+                        val table = tableOf(members)
+                        if (table != null) {
+                            if (out.size < Docx.MAX_TOGETHER) out += table else cut = true
+                        } else {
+                            for (member in members) {
+                                if (member.pieces.isEmpty() && member.picture == null) continue
+                                if (out.size < Docx.MAX_TOGETHER) out += member else cut = true
+                            }
+                        }
                     }
                     (child.type == SPGR_CONTAINER || child.type == DG_CONTAINER) && child.version == 0xF -> walk(child, depth + 1)
                 }
@@ -645,16 +735,107 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
         return out
     }
 
-    private fun shape(container: Rec): PptShape? {
+    /**
+     * [members] as a table, if their boxes are one: at least two rows and two columns, every box
+     * between lines the others share, no two over each other, and most places filled. A box that
+     * reaches across two columns or down two rows is a merged cell.
+     */
+    private fun tableOf(members: List<PptShape>): PptShape? {
+        val cells = members.filter { it.box != null && (it.pieces.isNotEmpty() || it.type == SHAPE_RECTANGLE) }
+        if (cells.size < 4 || cells.size > Docx.MAX_TOGETHER) return null
+        val xs = edges(cells.flatMap { listOf(it.box!![0], it.box[2]) })
+        val ys = edges(cells.flatMap { listOf(it.box!![1], it.box[3]) })
+        val columns = xs.size - 1
+        val rows = ys.size - 1
+        if (columns < 2 || rows < 2 || columns > Docx.MAX_COLUMNS || rows > Docx.MAX_TOGETHER) return null
+
+        // Who is in each place; a place with two is no table.
+        val grid = arrayOfNulls<PptShape>(rows * columns)
+        val first = HashMap<PptShape, Int>()
+        for (cell in cells) {
+            val box = cell.box!!
+            val c0 = nearest(xs, box[0])
+            val c1 = nearest(xs, box[2])
+            val r0 = nearest(ys, box[1])
+            val r1 = nearest(ys, box[3])
+            if (c1 <= c0 || r1 <= r0) return null
+            for (r in r0 until r1) for (c in c0 until c1) {
+                if (grid[r * columns + c] != null) return null
+                grid[r * columns + c] = cell
+            }
+            first[cell] = r0 * columns + c0
+        }
+        // Most places have a cell: a few boxes in a corner are not a table.
+        if (grid.count { it != null } * 10 < grid.size * 7) return null
+
+        val out = ArrayList<List<PptCell>>()
+        for (r in 0 until rows) {
+            val row = ArrayList<PptCell>()
+            var c = 0
+            while (c < columns) {
+                val here = grid[r * columns + c]
+                var end = c + 1
+                if (here == null) {
+                    // A place with nothing: as wide as the places like it beside it.
+                    while (end < columns && grid[r * columns + end] == null) end++
+                    row += PptCell(null, end - c)
+                } else {
+                    while (end < columns && grid[r * columns + end] === here) end++
+                    // Begun here, or come down from the row above: that one's text is shown there.
+                    row += PptCell(here.takeIf { first[here] == r * columns + c }, end - c)
+                }
+                c = end
+            }
+            out += row
+        }
+        val widths = List(columns) { (xs[it + 1] - xs[it]).toFloat().coerceAtLeast(1f) }
+        return PptShape(placeholder = 0, pieces = emptyList(), picture = null, table = PptTable(widths, out))
+    }
+
+    /**
+     * The distinct lines these edges make, ascending: edges with less than [EDGE_TOLERANCE] between one
+     * and the next are one line, as the edges that mean a column's side do when each cell's is rounded.
+     */
+    private fun edges(values: List<Int>): IntArray {
+        val sorted = values.sorted()
+        val out = ArrayList<Int>()
+        var previous = 0
+        for ((i, value) in sorted.withIndex()) {
+            if (i == 0 || value - previous > EDGE_TOLERANCE) out += value
+            previous = value
+        }
+        return out.toIntArray()
+    }
+
+    /** Which of [lines], which are ascending, [value] is on: the nearest. */
+    private fun nearest(lines: IntArray, value: Int): Int {
+        var low = 0
+        var high = lines.size - 1
+        // The first line at or after the value, then whichever of it and the one before is nearer.
+        while (low < high) {
+            val middle = (low + high) ushr 1
+            if (lines[middle] < value) low = middle + 1 else high = middle
+        }
+        return if (low > 0 && value.toLong() - lines[low - 1] <= lines[low].toLong() - value) low - 1 else low
+    }
+
+    private fun shape(container: Rec, boxes: Boolean): PptShape? {
         var placeholder = 0
         var deleted = false
         var number = 0
         var width = 0L
         var height = 0L
+        var type = 0
+        var box: IntArray? = null
         val pieces = ArrayList<PptPiece>()
         forEachChild(container) { child ->
             when (child.type) {
-                SP_ATOM -> if (child.length >= 8) deleted = s32(d, child.data + 4) and 0x8 != 0
+                SP_ATOM -> if (child.length >= 8) {
+                    deleted = s32(d, child.data + 4) and 0x8 != 0
+                    type = child.instance
+                }
+                // Left, top, right and bottom: four numbers of four bytes.
+                CHILD_ANCHOR -> if (child.length >= 16) box = intArrayOf(s32(d, child.data), s32(d, child.data + 4), s32(d, child.data + 8), s32(d, child.data + 12))
                 CLIENT_DATA -> forEachChild(child) {
                     if (it.type == OE_PLACEHOLDER && it.length >= 5) placeholder = d[it.data + 4].toInt() and 0xFF
                 }
@@ -668,13 +849,17 @@ private class PptReader(private val d: ByteArray, private val user: ByteArray?, 
                         fun at(i: Int) = if (wide) s32(d, child.data + i * 4) else u16(d, child.data + i * 2).toShort().toInt()
                         width = ((at(2) - at(1)) * EMU_PER_UNIT).toLong().coerceAtLeast(0)
                         height = ((at(3) - at(0)) * EMU_PER_UNIT).toLong().coerceAtLeast(0)
+                        if (box == null) box = intArrayOf(at(1), at(0), at(2), at(3))
                     }
                 }
             }
         }
         val where = blips.getOrNull(number - 1)?.takeIf { it >= 0 }
         val picture = where?.let { PptPicture(it, width, height) }
-        return if (deleted || (pieces.isEmpty() && picture == null)) null else PptShape(placeholder, pieces, picture)
+        // An empty box is kept only in a group, where it may be a cell with nothing in it.
+        val empty = pieces.isEmpty() && picture == null
+        if (deleted || (empty && !(boxes && type == SHAPE_RECTANGLE && box != null))) return null
+        return PptShape(placeholder, pieces, picture, type, box)
     }
 
     /** Which picture a shape's properties say it shows, by number from 1; 0 for none. */
