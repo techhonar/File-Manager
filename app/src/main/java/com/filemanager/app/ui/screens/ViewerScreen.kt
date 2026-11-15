@@ -72,6 +72,7 @@ import com.filemanager.app.data.viewer.Doc
 import com.filemanager.app.data.viewer.Docx
 import com.filemanager.app.data.viewer.DocxDocument
 import com.filemanager.app.data.viewer.PdfDocument
+import com.filemanager.app.data.viewer.PowerPointBinary
 import com.filemanager.app.data.viewer.Pptx
 import com.filemanager.app.data.viewer.PptxDeck
 import com.filemanager.app.data.viewer.PptxSlide
@@ -530,16 +531,31 @@ private fun DocImageView(image: DocImage, file: File) {
     }
 }
 
-/** Decodes a picture from inside the .docx or .pptx, scaled down to about [maxPixels] wide. */
-private fun decodePicture(file: File, entry: String, maxPixels: Int): ImageBitmap? = ZipFile(file).use { zip ->
-    val item = zip.getEntry(entry) ?: return null
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    zip.getInputStream(item).use { BitmapFactory.decodeStream(it, null, bounds) }
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-    var sample = 1
-    while (bounds.outWidth / (sample * 2) >= maxPixels) sample *= 2
-    val options = BitmapFactory.Options().apply { inSampleSize = sample }
-    zip.getInputStream(item).use { BitmapFactory.decodeStream(it, null, options) }?.asImageBitmap()
+/**
+ * Decodes a picture from inside the .docx or .pptx - or, for a .ppt, from
+ * its "Pictures" stream - scaled down to about [maxPixels] wide.
+ */
+private fun decodePicture(file: File, entry: String, maxPixels: Int): ImageBitmap? {
+    if (entry.startsWith(PowerPointBinary.PICTURE_PREFIX)) {
+        val bytes = PowerPointBinary.picture(file, entry) ?: return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPixels) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+    }
+    return ZipFile(file).use { zip ->
+        val item = zip.getEntry(entry) ?: return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        zip.getInputStream(item).use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPixels) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        zip.getInputStream(item).use { BitmapFactory.decodeStream(it, null, options) }?.asImageBitmap()
+    }
 }
 
 // ---- PowerPoint ------------------------------------------------------------
