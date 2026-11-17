@@ -632,37 +632,55 @@ class PptTest {
     private fun blip(type: Int, instance: Int, image: ByteArray, uids: Int = if (instance and 1 == 1) 2 else 1) =
         ByteArray(16 * uids) + byteArrayOf(0xFF.toByte()) + image
 
-    private fun encoded(format: String, type: Int = java.awt.image.BufferedImage.TYPE_INT_RGB): ByteArray {
-        val image = java.awt.image.BufferedImage(5, 3, type)
-        image.setRGB(2, 1, 0xC83C28)
-        return java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(image, format, it) }.toByteArray()
-    }
+    /** What a PNG begins with, and some after: the parse looks at the signature. */
+    private fun fakePng() = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 13, 10, 26, 10) + ByteArray(40) { (it * 5).toByte() }
+
+    private fun fakeJpeg() = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte()) + ByteArray(40) { (it * 3).toByte() }
+
+    /** A DIB: the 40-byte header of [width] by [height] pixels of [bits] bits, a palette of [palette] colours' room, and [pixels] bytes of pixels. */
+    private fun dib(width: Int, height: Int, bits: Int, compression: Int = 0, colours: Int = 0, palette: Int = 0, pixels: Int = 8): ByteArray =
+        le32(40) + le32(width) + le32(height) + le16(1) + le16(bits) + le32(compression) + le32(pixels) + le32(2835) + le32(2835) + le32(colours) + le32(0) +
+            ByteArray(palette * 4) + ByteArray(pixels) { (it + 1).toByte() }
+
+    private fun word(bytes: ByteArray, at: Int) = (0 until 4).sumOf { (bytes[at + it].toInt() and 0xFF) shl (8 * it) }
 
     @Test
     fun `a blip's image is a JPEG or a PNG as it is, and a DIB made a bitmap, and anything else is none`() {
-        fun decoded(bytes: ByteArray?) = bytes?.let { javax.imageio.ImageIO.read(it.inputStream()) }
-        val png = encoded("png")
-        val jpeg = encoded("jpg")
+        val png = fakePng()
+        val jpeg = fakeJpeg()
         // With the one id of its own, or the two.
         for ((instance, uids) in listOf(0x6E0 to 1, 0x6E1 to 2)) {
-            val image = decoded(PowerPointBinary.blipImage(0xF01E, instance, blip(0xF01E, instance, png, uids)))!!
-            assertEquals(5 to 3, image.width to image.height)
-            assertEquals(0xC83C28, image.getRGB(2, 1) and 0xFFFFFF)
+            assertEquals(png.toList(), PowerPointBinary.blipImage(0xF01E, instance, blip(0xF01E, instance, png, uids))!!.toList())
         }
-        assertEquals(5, decoded(PowerPointBinary.blipImage(0xF01D, 0x46A, blip(0xF01D, 0x46A, jpeg)))!!.width)
-        assertEquals(5, decoded(PowerPointBinary.blipImage(0xF01D, 0x46B, blip(0xF01D, 0x46B, jpeg)))!!.width)
-        // A DIB is a bitmap without the 14 bytes at its head.
-        val bitmap = encoded("bmp")
-        val dib = bitmap.copyOfRange(14, bitmap.size)
-        val made = decoded(PowerPointBinary.blipImage(0xF01F, 0x7A8, blip(0xF01F, 0x7A8, dib)))!!
-        assertEquals(5 to 3, made.width to made.height)
-        assertEquals(0xC83C28, made.getRGB(2, 1) and 0xFFFFFF)
+        for (instance in listOf(0x46A, 0x46B)) {
+            assertEquals(jpeg.toList(), PowerPointBinary.blipImage(0xF01D, instance, blip(0xF01D, instance, jpeg))!!.toList())
+        }
+        assertEquals(jpeg.toList(), PowerPointBinary.blipImage(0xF02A, 0x6E2, blip(0xF02A, 0x6E2, jpeg))!!.toList())
+
+        // A DIB is a bitmap without the 14 bytes at its head: they are put back - the letters, the size of the
+        // file, and where the pixels begin, which is after the header and whatever palette or masks follow it.
+        fun bitmap(dib: ByteArray): ByteArray? = PowerPointBinary.blipImage(0xF01F, 0x7A8, blip(0xF01F, 0x7A8, dib))
+        val plain = dib(width = 2, height = 1, bits = 24)
+        val made = bitmap(plain)!!
+        assertEquals("BM", String(made, 0, 2, Charsets.US_ASCII))
+        assertEquals(made.size, word(made, 2))
+        assertEquals(54, word(made, 10))
+        assertEquals(plain.toList(), made.copyOfRange(14, made.size).toList())
+        // Eight bits and no count of colours is the 256 there are, four with sixteen said, and sixteen bits with its three masks.
+        assertEquals(14 + 40 + 256 * 4, word(bitmap(dib(2, 1, 8, palette = 256))!!, 10))
+        assertEquals(14 + 40 + 16 * 4, word(bitmap(dib(2, 1, 4, colours = 16, palette = 16))!!, 10))
+        assertEquals(14 + 40 + 12, word(bitmap(dib(2, 1, 16, compression = 3, palette = 3))!!, 10))
+        // A header that says it is longer than the picture, or a picture shorter than a header: none.
+        assertNull(bitmap(le32(9999) + plain.copyOfRange(4, plain.size)))
+        assertNull(bitmap(ByteArray(30)))
+        // A palette the picture has not the room for.
+        assertNull(bitmap(dib(2, 1, 8, palette = 256).copyOf(100)))
+
         // Clip art, kept as a metafile, is not drawn; nor is what only claims to be an image.
         for (type in listOf(0xF01A, 0xF01B, 0xF01C, 0xF029, 0x1234)) assertNull(PowerPointBinary.blipImage(type, 0x3D4, blip(type, 0x3D4, png)))
         assertNull(PowerPointBinary.blipImage(0xF01E, 0x6E0, blip(0xF01E, 0x6E0, jpeg)))
         assertNull(PowerPointBinary.blipImage(0xF01D, 0x46A, blip(0xF01D, 0x46A, png)))
         assertNull(PowerPointBinary.blipImage(0xF01E, 0x6E0, ByteArray(10)))
-        assertNull(PowerPointBinary.blipImage(0xF01F, 0x7A8, blip(0xF01F, 0x7A8, ByteArray(30))))
     }
 
     @Test
@@ -861,9 +879,12 @@ class PptTest {
         // Three inches wide, and half that tall: 120 by 60 pixels.
         assertEquals(3 * 914_400L, picture.widthEmu)
         assertEquals(1_371_600L, picture.heightEmu)
-        val image = javax.imageio.ImageIO.read(PowerPointBinary.picture(file, picture.entry)!!.inputStream())
-        assertEquals(120 to 60, image.width to image.height)
-        assertEquals(0x2878C8, image.getRGB(60, 30) and 0xFFFFFF)
+        // A PNG, whole - its signature at the head and its last chunk at the tail - and its own header says 120 by 60.
+        val bytes = PowerPointBinary.picture(file, picture.entry)!!
+        fun bigEndian(at: Int) = (0 until 4).fold(0) { all, i -> (all shl 8) or (bytes[at + i].toInt() and 0xFF) }
+        assertEquals(listOf(0x89, 'P'.code, 'N'.code, 'G'.code), bytes.take(4).map { it.toInt() and 0xFF })
+        assertEquals(120 to 60, bigEndian(16) to bigEndian(20))
+        assertEquals("IEND", String(bytes, bytes.size - 8, 4, Charsets.US_ASCII))
     }
 
     @Test
